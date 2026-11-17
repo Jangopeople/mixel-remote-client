@@ -907,7 +907,36 @@ struct EncodeReply {
     left_out: bool,
 }
 
-fn start_encoder(size: (usize, usize)) -> Result<mpsc::Sender<EncodeRequest>, String> {
+/// The encoder's bit rate: what the connection carries at the moment (the pacer's rate, with room
+/// for complete pictures and repeats), at most the full rate for the picture size. On a slow or
+/// lossy line the encoder used to aim at 3 to 6 Mbit/s whatever the line carried, so the pace held
+/// big pictures back and the technician saw a few a second; smaller pictures come more often.
+fn encoder_bitrate(size: (usize, usize), pace_bytes_per_second: f64) -> u32 {
+    let ceiling: u32 = if size.0 > 1280 || size.1 > 720 { 6_000_000 } else { 3_000_000 };
+    let carried = (pace_bytes_per_second * 8.0 * 0.6).clamp(0.0, f64::from(ceiling)) as u32;
+    carried.clamp(ENCODER_MIN_BITRATE.min(ceiling), ceiling)
+}
+/// The lowest bit rate the encoder is set to.
+const ENCODER_MIN_BITRATE: u32 = 400_000;
+/// The encoder is set up again for a new bit rate at most this often, and only when the rate it
+/// would get differs by more than half.
+const BITRATE_SETTLE: Duration = Duration::from_secs(4);
+
+#[cfg(test)]
+mod bitrate_tests {
+    use super::*;
+    #[test]
+    fn the_bit_rate_follows_the_pace_within_bounds() {
+        let full_hd = (1920, 1080);
+        assert_eq!(encoder_bitrate(full_hd, 12_000_000.0), 6_000_000, "a fast line: full rate");
+        assert_eq!(encoder_bitrate((1280, 720), 12_000_000.0), 3_000_000);
+        assert_eq!(encoder_bitrate(full_hd, 500_000.0), 2_400_000, "the start pace (4 Mbit/s)");
+        assert_eq!(encoder_bitrate(full_hd, 125_000.0), 600_000, "the slowest pace (1 Mbit/s)");
+        assert_eq!(encoder_bitrate(full_hd, 10_000.0), ENCODER_MIN_BITRATE);
+    }
+}
+
+fn start_encoder(size: (usize, usize), bitrate: u32) -> Result<mpsc::Sender<EncodeRequest>, String> {
     // A rotation may briefly overlap the previous encoder's cleanup. Bound
     // owners even if a VideoToolbox driver call never returns.
     static OWNERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
@@ -919,7 +948,6 @@ fn start_encoder(size: (usize, usize)) -> Result<mpsc::Sender<EncodeRequest>, St
         .name("mixel-screen-encoder".into())
         .spawn(move || {
             let _permit = permit;
-            let bitrate = if size.0 > 1280 || size.1 > 720 { 6_000_000 } else { 3_000_000 };
             let mut encoder = ScreenH264Encoder::new(size.0, size.1, 30, bitrate);
             while let Some(request) = worker.blocking_recv() {
                 let result = match &mut encoder {
@@ -1003,7 +1031,9 @@ async fn host_media(
     // The technician's pointer is placed on the shared display.
     crate::session_guard::set_shared_source(&shown);
     let result = async {
-        let encoder = start_encoder(size)?;
+        let mut bitrate = encoder_bitrate(size, crate::video_pacing::START_RATE);
+        let mut encoder = start_encoder(size, bitrate)?;
+        let mut bitrate_set = Instant::now();
         crate::qa_timeline::mark("encoder started");
         let mut retry_encode = false;
         // The encoder left the last picture out: it is given again although the screen is unchanged.
@@ -1118,6 +1148,10 @@ async fn host_media(
                 }),
             ) {
                 Ok((next, frame)) => {
+                    #[cfg(feature = "qa-session")]
+                    if sent == 0 && recent.is_none() {
+                        crate::qa_timeline::mark("first screen picture captured");
+                    }
                     sequence = next;
                     let frame = if frame.width() == size.0 && frame.height() == size.1 {
                         frame
@@ -1179,6 +1213,10 @@ async fn host_media(
             };
             retry_encode = retry;
             encode_again = left_out;
+            #[cfg(feature = "qa-session")]
+            if sent == 0 {
+                crate::qa_timeline::mark(if encoded.is_some() { "first picture encoded" } else { "first picture left out by the encoder" });
+            }
             let Some(encoded) = encoded else {
                 if sent > 0 && last.elapsed() >= Duration::from_secs(2) {
                     control.video_idle(channel).await?;
@@ -1204,6 +1242,19 @@ async fn host_media(
             }
             mirror.send(&encoded.annex_b, duration);
             sent += 1;
+            // The encoder follows the pace (see `encoder_bitrate`); a new encoder starts with a
+            // complete picture.
+            if bitrate_set.elapsed() >= BITRATE_SETTLE {
+                let wanted = encoder_bitrate(size, pacer.rate());
+                if u64::from(wanted) * 2 > u64::from(bitrate) * 3 || u64::from(wanted) * 3 < u64::from(bitrate) * 2 {
+                    #[cfg(feature = "qa-session")]
+                    eprintln!("QA encoder bit rate {} -> {} kbit/s (pace {:.0} kB/s)", bitrate / 1000, wanted / 1000, pacer.rate() / 1000.0);
+                    encoder = start_encoder(size, wanted)?;
+                    bitrate = wanted;
+                    retry_encode = true;
+                }
+                bitrate_set = Instant::now();
+            }
             #[cfg(feature = "qa-session")]
             if sent == 1 {
                 crate::qa_timeline::mark(&format!("first picture sent ({bytes} bytes, capture ready after {} ms)", capture_ready.as_millis()));
@@ -1724,6 +1775,8 @@ async fn viewer_media(
             return Err("Remote video delivery timed out".into());
         }
     }
+    #[cfg(feature = "qa-session")]
+    eprintln!("QA picture packets: {} gaps filled by a late packet, {} given up", reorder.filled, reorder.given_up);
     #[cfg(feature = "qa-session")]
     eprintln!("QA picture stream ended after {} ms: {received} pictures, {} packets, {qa_gaps} gaps ({qa_lost} numbers missing), {} requests for a complete picture", qa_started.elapsed().as_millis(), qa_rtp.0, qa_rtp.3);
     Ok(())

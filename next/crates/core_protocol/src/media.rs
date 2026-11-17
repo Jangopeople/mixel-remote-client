@@ -421,6 +421,10 @@ pub struct PacketReorder<P> {
     held: std::collections::BTreeMap<u16, P>,
     gap_since: Option<std::time::Instant>,
     wait: std::time::Duration,
+    /// Gaps closed by a packet that came late (sent again on request, or reordered on the way).
+    pub filled: u32,
+    /// Gaps given up (the picture is lost; the assembler asks for a complete one).
+    pub given_up: u32,
 }
 
 /// Packets held behind one gap at most; beyond that the gap is given up at once.
@@ -428,7 +432,7 @@ const REORDER_MAX_HELD: usize = 1024;
 
 impl<P> PacketReorder<P> {
     pub fn new(wait: std::time::Duration) -> Self {
-        Self { expected: None, held: std::collections::BTreeMap::new(), gap_since: None, wait }
+        Self { expected: None, held: std::collections::BTreeMap::new(), gap_since: None, wait, filled: 0, given_up: 0 }
     }
 
     /// One packet arrived; returns the packets that are now in order (possibly none).
@@ -443,6 +447,9 @@ impl<P> PacketReorder<P> {
             return Vec::new();
         }
         if ahead == 0 {
+            if !self.held.is_empty() {
+                self.filled += 1;
+            }
             self.expected = Some(sequence.wrapping_add(1));
             let mut ready = vec![packet];
             self.drain(&mut ready);
@@ -496,6 +503,7 @@ impl<P> PacketReorder<P> {
     }
 
     fn give_up(&mut self) -> Vec<P> {
+        self.given_up += 1;
         let last = self.held.last_key_value().map(|(key, _)| *key);
         if let (Some(expected), Some(last)) = (self.expected, last) {
             self.expected = Some(expected.wrapping_add(last).wrapping_add(1));

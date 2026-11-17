@@ -594,18 +594,25 @@ async fn hosted(check: &mut Check<'_>, suffix: &str, mine: u64) {
     check.check(&format!("this computer online ({mine})"), ready.is_some(), check.status().await["message"].clone());
     let _ = std::fs::write(check.folder.join("host-id.txt"), mine.to_string());
     check.print("WAITING for a technician (host-id.txt)");
-    let Some(incoming) = check.wait(900, |status| status["phase"] == "incoming").await else {
+    // An unattended request (a technician the policy allows it, or unattended access by default)
+    // is accepted without a question: the session is then already running.
+    let Some(incoming) = check.wait(900, |status| status["phase"] == "incoming" || (status["phase"] == "active" && status["sharing"] == true)).await else {
         check.check("a technician asks to connect", false, check.status().await["phase"].clone());
         return;
     };
     check.check("a technician asks to connect", true, "");
-    let targets = check.call("capture_targets", json!({})).await.unwrap_or(Value::Null);
-    let source = targets.as_array().and_then(|list| list.iter().find(|target| target["full_display"] == true)).and_then(|target| target["id"].as_str()).unwrap_or_default().to_owned();
-    let control = incoming["input_access"] == true;
-    check.print(&format!("screen to share: {source}; keyboard and mouse may be allowed here: {control}"));
-    let decision = json!({ "session": incoming["session"], "accept": true, "source": source, "confirm": true, "control": control, "clipboard": true, "files": false, "chat": true, "recording": false });
-    let decided = check.call("remote_decide", json!({ "decision": decision })).await;
-    let active = check.wait(60, |status| status["phase"] == "active" && status["sharing"] == true).await;
+    let (decided, active) = if incoming["phase"] == "active" {
+        check.print("accepted without a question (unattended request)");
+        (Ok(Value::Null), Some(incoming))
+    } else {
+        let targets = check.call("capture_targets", json!({})).await.unwrap_or(Value::Null);
+        let source = targets.as_array().and_then(|list| list.iter().find(|target| target["full_display"] == true)).and_then(|target| target["id"].as_str()).unwrap_or_default().to_owned();
+        let control = incoming["input_access"] == true;
+        check.print(&format!("screen to share: {source}; keyboard and mouse may be allowed here: {control}"));
+        let decision = json!({ "session": incoming["session"], "accept": true, "source": source, "confirm": true, "control": control, "clipboard": true, "files": false, "chat": true, "recording": false });
+        let decided = check.call("remote_decide", json!({ "decision": decision })).await;
+        (decided, check.wait(60, |status| status["phase"] == "active" && status["sharing"] == true).await)
+    };
     check.check("allowed: this computer's screen is shared", decided.is_ok() && active.is_some(), format!("{decided:?} {}", check.status().await["message"]));
     let Some(active) = active else { return };
     let session = active["session"].as_str().unwrap_or_default().to_owned();

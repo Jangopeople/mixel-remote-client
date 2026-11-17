@@ -116,6 +116,11 @@ pub struct NativeTransport {
 }
 /// How long a relay-only session waits before it accepts a working relay (or peer-reflexive) pair.
 pub const RELAY_ONLY_ACCEPTANCE_WAIT: Duration = Duration::ZERO;
+/// Time between two connectivity checks of a relay-only session (the stack's default is 200 ms). Each
+/// side has about six relay candidates, so up to 36 pairs are checked one after the other: 200 ms
+/// apiece kept a relay-only session 3.5 s in ICE on a fast link (lab, 17 Nov 2026). The relay is
+/// ours and every check goes to it, so a faster pace burdens no third-party NAT.
+pub const RELAY_ONLY_CHECK_INTERVAL: Duration = Duration::from_millis(40);
 
 impl NativeTransport {
     pub async fn receive_video(&self) -> Result<(), TransportError> {
@@ -245,6 +250,7 @@ impl NativeTransport {
                     // accepting a relay pair, 1 s for a peer-reflexive one) opening a relay-only
                     // session took about 6 s from offer to the open control channel in the lab
                     // (82cb321, 14 Nov builds) even on a fast link.
+                    .with_ice_connection_attempts(Some(RELAY_ONLY_CHECK_INTERVAL), None)
                     .with_relay_acceptance_min_wait(Some(RELAY_ONLY_ACCEPTANCE_WAIT))
                     .with_prflx_acceptance_min_wait(Some(RELAY_ONLY_ACCEPTANCE_WAIT))
                     .build(),
