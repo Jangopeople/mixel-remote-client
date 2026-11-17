@@ -281,6 +281,7 @@ internal sealed class SettingsPage : PageView
         else if (Settings.Update is { } update)
         {
             status.Add(Ui.Text(L("Version %@ is available.", update.Version)));
+            if (update.WaitsForSession) status.Add(Ui.Text(L("Update ready, installs after this session"), secondary: true));
             status.Add(update.Installable && !Settings.InstallFailed
                 ? Ui.Primary(L("Update now"), () => _ = Settings.InstallUpdate())
                 : Ui.Plain(L("Download"), Settings.OpenStorePage));

@@ -262,6 +262,9 @@ struct SettingsConsoleView: View {
                         Text(verbatim: settings.update.map { L("Version %@ is available.", $0.version) } ?? (settings.updateChecked ? L("Mixel Remote is up to date") : L("Mixel Remote %@", app.info.version)))
                             .font(.system(size: 13, weight: .semibold))
                         Text(verbatim: L("Version %@", app.info.version)).font(.system(size: 12)).foregroundStyle(.secondary).monospacedDigit()
+                        if settings.update?.waitsForSession == true {
+                            Text(verbatim: L("Update ready, installs after this session")).font(.system(size: 12)).foregroundStyle(Theme.updateText)
+                        }
                         MessageLine(settings.notice, error: false)
                     }
                     Spacer()
