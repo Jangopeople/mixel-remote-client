@@ -152,10 +152,11 @@ impl WindowsInjector {
         let (flags, data) = match (button, down) {
             (1, true) => (MOUSEEVENTF_LEFTDOWN, 0),
             (1, false) => (MOUSEEVENTF_LEFTUP, 0),
-            (2, true) => (MOUSEEVENTF_RIGHTDOWN, 0),
-            (2, false) => (MOUSEEVENTF_RIGHTUP, 0),
-            (3, true) => (MOUSEEVENTF_MIDDLEDOWN, 0),
-            (3, false) => (MOUSEEVENTF_MIDDLEUP, 0),
+            // Engine numbering (the same on every platform): 1 left, 2 middle, 3 right, 4 back, 5 forward.
+            (2, true) => (MOUSEEVENTF_MIDDLEDOWN, 0),
+            (2, false) => (MOUSEEVENTF_MIDDLEUP, 0),
+            (3, true) => (MOUSEEVENTF_RIGHTDOWN, 0),
+            (3, false) => (MOUSEEVENTF_RIGHTUP, 0),
             (4 | 5, true) => (MOUSEEVENTF_XDOWN, u32::from(button - 3)),
             (4 | 5, false) => (MOUSEEVENTF_XUP, u32::from(button - 3)),
             _ => return Err(InjectionError::Unsupported),
