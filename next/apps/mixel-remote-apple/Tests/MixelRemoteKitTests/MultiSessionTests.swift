@@ -299,6 +299,20 @@ final class MultiSessionTests: XCTestCase {
         app.stop()
     }
 
+    func testPasswordAndReconnectingStateAreReadPerSession() async throws {
+        let engine = MockEngine()
+        var all = status([item(1), item(2)])
+        all.unattendedSession = true
+        all.reconnecting = true
+        Fixtures.company(engine)
+        engine.reply("remote_status", all)
+        let app = await Fixtures.app(engine)
+        XCTAssertTrue(app.remote.isReconnecting, "the reconnecting banner reads the whole status")
+        XCTAssertTrue(try XCTUnwrap(app.sessionModels[peer(1)]).remote.unattendedSession, "the oldest session carries the status flags")
+        XCTAssertFalse(try XCTUnwrap(app.sessionModels[peer(2)]).remote.unattendedSession, "another session does not borrow them")
+        app.stop()
+    }
+
     // MARK: Older engine, renewal
 
     func testAnEngineWithoutSessionsStillWorksWithOneSession() async throws {

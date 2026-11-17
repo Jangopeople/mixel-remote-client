@@ -35,3 +35,13 @@ Mock engine: `queue(frame:session:)`, `sentInputSessions`, `videoFetches`.
 - Drawing, the AI assistant and session reports follow the focused session only; per-session reports/notes
   for several sessions ending at once are not specially handled.
 - iPhone/iPad app builds not rebuilt here (phone shows one session; `isFocused` is always true there).
+
+## After the merge of feat/2.1.0 (engine make-before-break renewal)
+- Merged cleanly in the Mac app (no conflict leftovers). `RemoteStatus` keeps `sessions`/`maxSessions` and `reconnecting`.
+- The "Reconnecting… the session stays open" banner reads the whole status, so it shows in every session tab.
+- The one-time-password and unattended flags exist only once in the status (oldest running session): `describing(item)`
+  now hands them only to that session; other sessions use what this app sent itself (`requestFlags`). Test:
+  `testPasswordAndReconnectingStateAreReadPerSession`.
+- The engine now keeps `sessions[].session` stable too; the app keys by `id` and tolerates either.
+- Lab core rebuilt with `FEATURES=qa-session ARM_ONLY=1 scripts/build-core.sh macos` (needed the engine's qa trace fix d8bfc9c).
+- Results: swift build ok, swift test 90 executed / 0 failures, xcodebuild Debug MixelRemoteMac BUILD SUCCEEDED.

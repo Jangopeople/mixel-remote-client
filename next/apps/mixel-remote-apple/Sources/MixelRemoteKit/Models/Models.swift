@@ -238,6 +238,13 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
         copy.peerFeatures = item.peerFeatures
         copy.joinedSession = item.joinedSession
         copy.switched = item.switched
+        // The one-time-password and unattended flags of the status describe the oldest running session only
+        // (the engine has no per-session field for them): other sessions rely on what this app sent itself.
+        let primary = viewerSessions.first { $0.phase == "active" } ?? viewerSessions.first
+        if primary?.id != item.id {
+            copy.passwordSession = nil
+            copy.unattendedSession = false
+        }
         return copy
     }
 }
