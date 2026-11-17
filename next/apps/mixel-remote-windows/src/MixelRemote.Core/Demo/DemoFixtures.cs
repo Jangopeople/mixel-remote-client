@@ -19,6 +19,7 @@ public static class DemoFixtures
     [
         "signed-out", "second-step", "remote", "setup", "devices", "devices-manage", "deploy-link", "account", "invite",
         "settings", "consent", "hosted", "session", "session-chat", "session-files", "phone-help", "tray",
+        "connecting", "ready-notice", "session-tab", "popout", "sessions", "reports",
     ];
 
     public static void SignedOut(MockEngine engine)
@@ -54,7 +55,7 @@ public static class DemoFixtures
             new() { TenantId = TenantId, OrganizationId = TenantId, Name = "Muster Treuhand AG", Slug = "muster", Role = role, Plan = "business", Status = "trial", TrialEndsAt = "2026-11-27T10:00:00Z" },
         });
         engine.Reply("saas_tenant_overview", $$$"""
-            {"role":"{{{role}}}","status":"trial","plan":"business","trial_ends_at":"2026-11-27T10:00:00Z","features":{"groups":true},"limits":{"devices":2000,"technicians":15},"usage":{"devices":4,"technicians":2}}
+            {"role":"{{{role}}}","status":"trial","plan":"business","trial_ends_at":"2026-11-27T10:00:00Z","features":{"groups":true,"reports":true},"limits":{"devices":2000,"technicians":15},"usage":{"devices":4,"technicians":2}}
             """);
         engine.Reply("saas_members", $$"""
             [{"user_id":"{{Profile}}","name":"Anna Muster","email":"anna@muster.test","role":"owner","created_at":"2026-11-01T08:00:00Z"},
@@ -87,6 +88,13 @@ public static class DemoFixtures
              {"session_id":"e1000000-0000-4000-8000-000000000002","technician_id":"11111111-2222-4333-8444-555555555555","technician_name":"Anna Muster","technician_email":"anna@muster.test","device_id":"d1000000-0000-4000-8000-000000000002","device_name":"Accounting Mac","connection_id":268455901,"started_at":"2026-11-12T15:40:00Z","ended_at":"2026-11-12T15:52:00Z","duration_seconds":720,"kind":"unattended","colleague":false,"note":null}]
             """);
         engine.Reply("remote_draw", "true");
+        // Device administration (contract of docs/mixel-remote-device-admin-api.md, 2.1): badges, versions, notes.
+        engine.Reply("remote_admin_devices", $$"""
+            [{"device_id":"d1000000-0000-4000-8000-000000000001","connection_id":731204118,"name":"Reception PC","os":"windows","group_name":"Front office","note":"Desk 3, docked","favorite":false,"unattended_setting":"on","unattended_default":false,"unattended_allowed":true,"status":"online","last_seen":"{{DateTimeOffset.UtcNow:o}}","app_version":"2.0.18","can_admin":true,"updated_at":"2026-11-17T08:00:00Z"},
+             {"device_id":"d1000000-0000-4000-8000-000000000002","connection_id":268455901,"name":"Accounting Mac","os":"macos","note":null,"favorite":true,"unattended_setting":"default","unattended_default":false,"unattended_allowed":true,"status":"online","app_version":"2.0.18","can_admin":true,"updated_at":"2026-11-17T08:00:00Z"},
+             {"device_id":"d1000000-0000-4000-8000-000000000003","connection_id":519003442,"name":"Warehouse laptop","os":"linux","note":null,"favorite":false,"unattended_setting":"off","unattended_default":false,"unattended_allowed":false,"status":"offline","app_version":"2.0.15","can_admin":true,"updated_at":"2026-11-17T08:00:00Z"},
+             {"device_id":"d1000000-0000-4000-8000-000000000004","connection_id":482913557,"name":"This PC","os":"windows","note":null,"favorite":false,"unattended_setting":"default","unattended_default":true,"unattended_allowed":true,"status":"online","app_version":"2.0.18","can_admin":true,"updated_at":"2026-11-17T08:00:00Z"}]
+            """);
     }
 
     public static void Incoming(MockEngine engine)
@@ -155,29 +163,41 @@ public static class DemoFixtures
                 break;
             case "consent": Incoming(engine); break;
             case "hosted": Hosted(engine); break;
-            case "session" or "session-chat" or "session-files":
+            case "session" or "session-chat" or "session-files" or "session-tab" or "popout" or "ready-notice" or "sessions":
                 Viewing(engine);
                 for (ulong sequence = 1; sequence <= 3; sequence++) engine.QueueFrame(VideoFrame.Sample(1280, 800, sequence));
                 break;
             case "phone-help": Company(engine, staff: true); break;
             default: Company(engine); break;
         }
-        var app = await App(engine);
+        var preferences = new MemoryPreferences();
+        if (name == "session-tab") preferences.Set(WorkspaceModel.WhenReadyKey, "open");
+        var app = await App(engine, preferences);
+        if (name == "connecting")
+        {
+            _ = app.Workspace.Connect(731_204_118, "SRV-DC-02", "windows", unattended: true);
+            engine.ReplyValue("remote_status", new RemoteStatus { Phase = "negotiating", Host = ThisComputer, Peer = 731_204_118, Session = SessionId, Online = [731_204_118, 268_455_901] });
+            await app.RefreshRemote();
+        }
         if (name == "setup") await app.GoOnlineIfNeeded();
         app.Section = name switch
         {
             "signed-out" or "second-step" or "account" or "invite" => AppSection.Account,
-            "devices" or "devices-manage" or "deploy-link" => AppSection.Devices,
+            "devices" or "devices-manage" or "deploy-link" or "connecting" or "ready-notice" or "session-tab" => AppSection.Devices,
+            "sessions" => AppSection.Sessions,
+            "reports" => AppSection.Reports,
             "settings" => AppSection.Settings,
             _ => AppSection.Remote,
         };
-        if (name.StartsWith("session", StringComparison.Ordinal))
+        if (name is "ready-notice" or "sessions" or "popout" || name.StartsWith("session", StringComparison.Ordinal))
         {
             app.Session.ShowSample(VideoFrame.Sample(1280, 800, 1));
             await app.Session.ReadTools();
         }
         if (name == "consent") await app.Host.LoadSources();
         if (name == "account") await app.Company.LoadReport();
+        if (name == "reports") await app.Reports.Load();
+        if (name == "devices") app.Devices.View = DeviceView.All;
         if (name == "session")
         {
             app.Session.Drawing = true;

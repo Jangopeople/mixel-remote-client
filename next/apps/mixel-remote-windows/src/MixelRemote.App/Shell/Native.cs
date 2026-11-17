@@ -180,4 +180,7 @@ internal static partial class Native
 
     [DllImport("gdi32.dll")]
     public static extern int GetDIBits(nint hdc, nint bitmap, uint start, uint lines, [Out] byte[] bits, ref BITMAPINFOHEADER info, uint usage);
+
+    [DllImport("user32.dll")]
+    public static extern int ShowCursor([MarshalAs(UnmanagedType.Bool)] bool show);
 }

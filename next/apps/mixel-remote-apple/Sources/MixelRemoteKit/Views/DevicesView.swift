@@ -265,7 +265,7 @@ struct DeviceRow: View {
     }
 }
 
-private struct StaffDeviceSheet: View {
+struct StaffDeviceSheet: View {
     @ObservedObject var model: DevicesModel
     let device: Device
     @State private var settings: DevicesModel.StaffSettings?

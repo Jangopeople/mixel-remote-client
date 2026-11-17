@@ -29,11 +29,10 @@ internal sealed class AccountPage : PageView
             return Page(L("Account"), "", 860,
                 ProfileCard(profile),
                 Company.Tenant is not null ? CompanyCard() : Company.Loaded && !profile.Staff ? CreateCompanyCard(profile) : null,
-                Company.Tenant is not null ? ReportCard() : null,
                 DangerCard(),
                 Ui.Message(App.Error));
         }
-        return Page(L("Account"), L("A secure home for your devices and connections."), 860, SignInCard(account), Ui.Message(App.Error));
+        return SignInLayout(SignInCard(account));
     }
 
     private Border SignInCard(AccountStatus account)
@@ -82,38 +81,90 @@ internal sealed class AccountPage : PageView
                 {
                     providersLoaded = true;
                     _ = App.LoadProviders();
+                    _ = App.Settings.Load();
                 }
-                items.Add(Ui.Text(L("Sign in with your account. Your browser opens; come back here when it says you are signed in."), secondary: true));
+                items.Clear();
+                items.Add(Ui.PageTitle(L("Sign in to Mixel Remote")));
+                items.Add(Ui.Text(L("Use your Mixel ID. Your company decides which sign-in methods its members may use."), secondary: true));
                 if (account.Phase == "error") items.Add(Ui.Message(Translator.Shared.Translate(account.Message)));
+                var buttons = new StackPanel { Spacing = 8, MaxWidth = 380, HorizontalAlignment = HorizontalAlignment.Left };
+                foreach (var (provider, label) in App.SignInButtons.Where(item => item.Provider != "keycloak"))
+                {
+                    var button = Ui.Plain(L("Continue with %@", label), () => _ = App.SignIn(provider: provider), !App.Busy);
+                    button.HorizontalAlignment = HorizontalAlignment.Stretch;
+                    button.Padding = new Thickness(12, 9, 12, 9);
+                    Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(button, "signin-" + provider);
+                    buttons.Children.Add(button);
+                }
+                items.Add(buttons);
+                if (buttons.Children.Count > 0) items.Add(Ui.Row(10, new TextBlock { Text = L("or"), Foreground = Ui.Secondary }));
                 var email = Keep("signin-email", () =>
                 {
-                    var box = new TextBox { PlaceholderText = "name@company.ch", MinWidth = 260 };
-                    box.KeyDown += (sender, key) => { if (key.Key == Windows.System.VirtualKey.Enter) _ = App.LookUpSignIn(box.Text); };
+                    var box = new TextBox { PlaceholderText = "name@company.ch", MinWidth = 260, MaxWidth = 380, HorizontalAlignment = HorizontalAlignment.Left };
+                    box.KeyDown += (sender, key) => { if (key.Key == Windows.System.VirtualKey.Enter) _ = EmailSignIn(box.Text); };
                     return box;
                 });
-                items.Add(Ui.Field(L("Work e-mail (optional: shows your company's sign-in methods)"), Ui.Row(8, email, Ui.Plain(L("Continue"), () => _ = App.LookUpSignIn(email.Text), !App.Busy))));
+                items.Add(Ui.Field(L("Work e-mail"), email));
                 if (App.SignInOptions is { Company: { } company } options)
                 {
                     items.Add(Ui.Message(options.RequireMfa ? L("%@ asks for a second step at sign-in.", company) : L("Sign in the way %@ allows.", company), error: false));
                 }
-                var buttons = new StackPanel { Spacing = 8, MaxWidth = 360, HorizontalAlignment = HorizontalAlignment.Left };
-                var first = true;
-                foreach (var (provider, label) in App.SignInButtons)
-                {
-                    var button = first ? Ui.Primary(L("Continue with %@", label), () => _ = App.SignIn(provider: provider), !App.Busy)
-                        : Ui.Plain(L("Continue with %@", label), () => _ = App.SignIn(provider: provider), !App.Busy);
-                    button.HorizontalAlignment = HorizontalAlignment.Stretch;
-                    Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(button, "signin-" + provider);
-                    buttons.Children.Add(button);
-                    first = false;
-                }
-                items.Add(buttons);
-                items.Add(Ui.Plain(L("Use another browser"), () => _ = App.SignIn(showLink: true, provider: App.SignInButtons.Select(item => item.Provider).FirstOrDefault()), !App.Busy));
+                var continueEmail = Ui.Primary(L("Continue with e-mail"), () => _ = EmailSignIn(email.Text), !App.Busy, "\uE715");
+                continueEmail.HorizontalAlignment = HorizontalAlignment.Left;
+                continueEmail.Padding = new Thickness(14, 9, 14, 9);
+                Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(continueEmail, "signin-keycloak");
+                items.Add(continueEmail);
+                items.Add(Ui.Check(L("Stay signed in on this computer"), App.Settings.Startup?.Remembered ?? true, value => _ = App.Settings.SetStaySignedIn(value)));
+                items.Add(Ui.Link(L("Use another browser"), () => _ = App.SignIn(showLink: true, provider: App.SignInButtons.Select(item => item.Provider).FirstOrDefault())));
+                items.Add(Ui.Hairline());
+                items.Add(Ui.Split(Ui.Column(2, Ui.Text(L("Need help, no account?"), bold: true), Ui.Caption(L("Get a support ID for your technician"))),
+                    Ui.Plain(L("Quick Support"), () => App.OpenUrl("https://ism.mixel.ch/remote/support/"), true, "\uE945")));
                 if (signup is null) _ = CheckSignup();
                 if (signup == true) items.Add(Ui.Link(L("Create Mixel ID"), () => App.OpenUrl("https://auth.mixel.ch/if/flow/mixel-remote-enrollment/")));
+                items.Add(Ui.Row(4,
+                    Ui.Caption(L("By continuing you accept the")),
+                    Ui.Link(L("Terms of Service"), () => _ = App.Settings.OpenLegal("terms")),
+                    Ui.Caption(L("and the")),
+                    Ui.Link(L("Data Processing Agreement"), () => _ = App.Settings.OpenLegal("dpa")),
+                    Ui.Link(L("Privacy Policy"), () => _ = App.Settings.OpenLegal("privacy"))));
                 break;
         }
         return Ui.Card([.. items]);
+    }
+
+    /// <summary>E-mail sign-in: looks up the company's rules first, then continues with Mixel ID (or the company's single sign-on).</summary>
+    private async Task EmailSignIn(string email)
+    {
+        if (email.Trim().Length > 0) await App.LookUpSignIn(email);
+        if (App.Error.Length == 0) await App.SignIn(provider: null);
+    }
+
+    /// <summary>The sign-in screen: the product's promise on the left, the sign-in on the right.</summary>
+    private UIElement SignInLayout(Border form)
+    {
+        var mark = new Image { Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(Path.Combine(AppContext.BaseDirectory, "Assets", "mixel-mark.png"))), Width = 48, Height = 48, HorizontalAlignment = HorizontalAlignment.Left };
+        Border Point(string glyph, string text) => new() { Child = Ui.Row(10, Ui.Icon(glyph, 16, Ui.BrandBrush), Ui.Text(text)) };
+        var hero = Ui.Column(18, mark,
+            new TextBlock { Text = "Mixel Remote", FontSize = 32, FontWeight = Microsoft.UI.Text.FontWeights.Bold },
+            new TextBlock { Text = L("Remote support that feels local."), FontSize = 20, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, Foreground = Ui.BrandBrush },
+            Ui.Text(L("Reach every company device in seconds, run several sessions side by side, and file the report without leaving the session."), secondary: true),
+            Point("\uE72E", L("End-to-end encrypted, hosted in Switzerland")),
+            Point("\uE7C4", L("Several sessions in tabs or windows")),
+            Point("\uE70B", L("Session reports linked to Mixel ISM")));
+        hero.MaxWidth = 420;
+        hero.VerticalAlignment = VerticalAlignment.Center;
+        var left = new Border { Child = hero, Padding = new Thickness(48), Background = Ui.Brush("MixelChrome") };
+        form.MaxWidth = 460;
+        form.VerticalAlignment = VerticalAlignment.Center;
+        form.HorizontalAlignment = HorizontalAlignment.Center;
+        var right = new ScrollViewer { Content = new Border { Child = Ui.Column(12, form, Ui.Message(App.Error)), Padding = new Thickness(32), VerticalAlignment = VerticalAlignment.Center } };
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.Children.Add(left);
+        Grid.SetColumn(right, 1);
+        grid.Children.Add(right);
+        return grid;
     }
 
     private async Task CheckSignup()
@@ -226,46 +277,6 @@ internal sealed class AccountPage : PageView
         }
         return Ui.Card([.. items]);
     }
-
-    /// <summary>Sessions of the last 30 days, with notes; exported as CSV.</summary>
-    private Border ReportCard()
-    {
-        var company = Company;
-        var items = new List<UIElement?>
-        {
-            Ui.Split(Ui.CardTitle(L("Session report"), "\uE9F9"), Ui.Row(8,
-                Ui.Plain(company.ReportLoaded ? L("Refresh") : L("Show the last 30 days"), () => _ = company.LoadReport(), !company.Working),
-                company.Report.Count > 0 ? Ui.Plain(L("Export CSV…"), () => _ = Export(), true, "\uE896") : null)),
-            Ui.Text(company.Administers ? L("Every session of your company's technicians.") : L("Your own sessions."), secondary: true),
-        };
-        if (company.ReportLoaded && company.Report.Count == 0) items.Add(Ui.Text(L("No sessions in the last 30 days."), secondary: true));
-        foreach (var row in company.Report.Take(50))
-        {
-            var when = Format.ParseDate(row.StartedAt)?.ToLocalTime().ToString("g", Translator.Shared.Culture) ?? row.StartedAt;
-            var minutes = Math.Max(1, (int)Math.Round(row.DurationSeconds / 60.0));
-            var who = row.TechnicianName ?? row.TechnicianEmail ?? L("Deleted account");
-            var line = $"{when} · {who} → {row.DeviceName} ({Format.RemoteId(row.ConnectionId)}) · {L("%d min", minutes)} · {(row.Kind == "unattended" ? L("Unattended") : L("Attended"))}";
-            items.Add(Ui.Split(Ui.Column(1, Ui.Text(line), row.Note is { Length: > 0 } note ? Ui.Caption(note) : null),
-                Ui.Plain(L("Note…"), () => _ = Note(row))));
-        }
-        if (company.Report.Count > 50) items.Add(Ui.Caption(L("%d more in the export.", company.Report.Count - 50)));
-        return Ui.Card([.. items]);
-    }
-
-    private async Task Export()
-    {
-        if (await App.ChooseSaveLocation($"Mixel Remote sessions {DateTime.Now:yyyy-MM-dd}.csv") is not { } path) return;
-        await File.WriteAllTextAsync(path, CompanyModel.ReportCsv(Company.Report), new System.Text.UTF8Encoding(true));
-        Company.Notice = L("Saved %@", Path.GetFileName(path));
-    }
-
-    private Task Note(Models.SessionRow row) => Dialogs.Form(Root, L("Session note"), $"{row.DeviceName} · {Format.RemoteId(row.ConnectionId)}", [(L("Note"), row.Note ?? "")], L("Save"),
-        async values =>
-        {
-            if (!await Company.AddSessionNote(values[0], row.SessionId, null)) return Company.Error.Length > 0 ? Company.Error : L("Enter a note");
-            await Company.LoadReport();
-            return null;
-        });
 
     private Task Rename() => Dialogs.Form(Root, L("Rename company"), null, [(L("Company name"), Company.Tenant?.Name ?? "")], L("Rename"),
         async values => await Company.Rename(values[0].Trim()) ? null : Company.Error);

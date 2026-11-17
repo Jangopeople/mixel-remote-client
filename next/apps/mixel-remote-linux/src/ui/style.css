@@ -36,3 +36,52 @@
 .mixel-transfer { border-radius: 10px; padding: 10px; background-color: alpha(currentColor, 0.05); }
 .mixel-device-row { padding: 6px 4px; }
 .mixel-tools { background-color: @window_bg_color; }
+
+/* Pro Console (Direction B): shell, sidebar, device table, floating cards, session toolbar. */
+@define-color mixel_line alpha(@window_fg_color, 0.12);
+@define-color mixel_info #1f6fc4;
+.mixel-nav { padding: 5px 10px; border-radius: 9px; min-height: 22px; font-weight: 500; }
+.mixel-nav.active { background-color: alpha(@accent_bg_color, 0.12); color: @accent_color; font-weight: 700; }
+.mixel-nav .mixel-count { opacity: 0.7; font-feature-settings: "tnum"; }
+.mixel-pill { background-color: @accent_bg_color; color: @accent_fg_color; border-radius: 99px; padding: 0 7px; font-size: 11px; font-weight: 700; min-height: 18px; }
+.mixel-section { font-size: 11px; font-weight: 700; letter-spacing: 0.8px; opacity: 0.6; }
+.mixel-this { background-color: @card_bg_color; border-radius: 12px; border: 1px solid @mixel_line; padding: 10px 12px; }
+.mixel-this .mixel-id-small { font-size: 19px; }
+.mixel-avatar { background-color: #6f42c1; color: #ffffff; border-radius: 99px; min-width: 30px; min-height: 30px; font-weight: 700; font-size: 12px; }
+.mixel-dot { border-radius: 99px; min-width: 9px; min-height: 9px; }
+.mixel-dot.on { background-color: @mixel_success; }
+.mixel-dot.off { background-color: alpha(currentColor, 0.4); }
+.mixel-dot.busy { background-color: @mixel_warning; }
+.mixel-tile { background-color: @card_bg_color; border: 1px solid @mixel_line; border-radius: 10px; min-width: 38px; min-height: 38px; }
+.mixel-tile-dot { border: 2px solid @card_bg_color; min-width: 9px; min-height: 9px; }
+.mixel-title { font-size: 26px; font-weight: 800; }
+.mixel-connect-box { background-color: @card_bg_color; border: 1px solid @mixel_line; border-radius: 12px; padding: 4px 4px 4px 12px; }
+.mixel-connect-box entry { background: none; border: none; box-shadow: none; outline: none; font-family: monospace; font-size: 16px; min-width: 150px; }
+.mixel-chip { border-radius: 99px; padding: 2px 11px; min-height: 22px; font-weight: 500; border: 1px solid @mixel_line; background: none; }
+.mixel-chip:checked { background-color: alpha(@accent_bg_color, 0.12); color: @accent_color; border-color: alpha(@accent_bg_color, 0.45); }
+.mixel-th { font-size: 11px; font-weight: 700; letter-spacing: 0.8px; opacity: 0.6; padding: 6px 0; }
+.mixel-table-row { border-bottom: 1px solid @mixel_line; padding: 6px 12px; min-height: 52px; }
+.mixel-table-row.live { background-color: alpha(@accent_bg_color, 0.08); }
+.mixel-group-row { background-color: alpha(currentColor, 0.05); padding: 7px 14px; font-weight: 600; border-bottom: 1px solid @mixel_line; }
+.mixel-group-dot { border-radius: 3px; min-width: 9px; min-height: 9px; }
+.mixel-tag { border-radius: 7px; padding: 1px 8px; font-size: 12px; font-weight: 600; }
+.mixel-tag.unattended { background-color: alpha(@mixel_info, 0.14); color: @mixel_info; }
+.mixel-tag.update { background-color: alpha(@mixel_warning, 0.18); color: @mixel_warning; }
+.mixel-tag.session { background-color: alpha(@mixel_success, 0.16); color: @mixel_success; }
+.mixel-float { background-color: @popover_bg_color; color: @popover_fg_color; border-radius: 14px; border: 1px solid @mixel_line; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28); padding: 14px; }
+.mixel-step-done { color: @mixel_success; }
+.mixel-step-todo { opacity: 0.45; }
+.mixel-session-bar { padding: 6px 10px; border-bottom: 1px solid @mixel_line; }
+.mixel-bar-chip { background-color: alpha(currentColor, 0.07); border-radius: 9px; padding: 3px 8px; }
+.mixel-warn-strip { background-color: alpha(@mixel_warning, 0.16); color: @window_fg_color; padding: 6px 14px; }
+.mixel-signin-hero { background-image: linear-gradient(135deg, #8f1527, #ba2034 55%, #d8485a); color: #ffffff; padding: 36px; }
+.mixel-signin-hero label { color: #ffffff; }
+.mixel-sso { padding: 9px 14px; border-radius: 10px; font-weight: 600; }
+.mixel-quick { background-color: alpha(currentColor, 0.05); border-radius: 12px; padding: 10px 12px; }
+.mixel-fine { font-size: 12px; opacity: 0.7; }
+.mixel-group-0 { background-color: #5b5bd6; }
+.mixel-group-1 { background-color: #12a594; }
+.mixel-group-2 { background-color: #e5870b; }
+.mixel-group-3 { background-color: #a855c4; }
+.mixel-group-4 { background-color: #d6409f; }
+.mixel-group-5 { background-color: #3e8ed0; }

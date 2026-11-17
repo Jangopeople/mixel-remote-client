@@ -15,6 +15,14 @@ public struct SettingsView: View {
     }
 
     public var body: some View {
+        #if os(macOS)
+        SettingsConsoleView(app: app)
+        #else
+        formBody
+        #endif
+    }
+
+    private var formBody: some View {
         Form {
             Section {
                 Toggle(isOn: Binding(get: { settings.startup?.remembered ?? false }, set: { settings.setStaySignedIn($0) })) {
@@ -34,6 +42,10 @@ public struct SettingsView: View {
                     Text(verbatim: "Italiano").tag("it")
                 } label: { Text(verbatim: L("Language")) }
             } header: { Text(verbatim: L("General")) }
+
+            if !app.isPhone {
+                SessionSettingsSection(workspace: app.workspace)
+            }
 
             Section {
                 LabeledContent {
@@ -178,8 +190,23 @@ struct SignInScreenSection: View {
     @State private var company = ""
     @State private var name = ""
 
+    var embedded = false
+
     var body: some View {
-        Section {
+        if embedded {
+            VStack(alignment: .leading, spacing: 10) { content }.padding(16).task { await prepare() }
+        } else {
+            Section { content } header: { Text(verbatim: L("Sign-in screen")) }.task { await prepare() }
+        }
+    }
+
+    private func prepare() async {
+        if status.availability == .ready, status.connectionId == nil, enrollment.companies.isEmpty { enrollment.loadTeamRecords() }
+        if name.isEmpty { name = enrollment.name }
+    }
+
+    @ViewBuilder private var content: some View {
+        Group {
             switch status.availability {
             case .waitingForApple, .notHere:
                 HStack(alignment: .top, spacing: 10) {
@@ -217,10 +244,6 @@ struct SignInScreenSection: View {
             }
             if settings.signInWorking { ProgressView().controlSize(.small) }
             MessageLine(settings.signInMessage, error: false)
-        } header: { Text(verbatim: L("Sign-in screen")) }
-        .task {
-            if status.availability == .ready, status.connectionId == nil, enrollment.companies.isEmpty { enrollment.loadTeamRecords() }
-            if name.isEmpty { name = enrollment.name }
         }
     }
 }
@@ -233,8 +256,18 @@ struct RolloutSection: View {
     @State private var days = 30
     @State private var computers = 50
 
+    var embedded = false
+
     var body: some View {
-        Section {
+        if embedded {
+            VStack(alignment: .leading, spacing: 10) { content }.padding(16).task { if enrollment.companies.isEmpty { enrollment.loadTeamRecords() } }
+        } else {
+            Section { content } header: { Text(verbatim: L("Rollout for many computers")) }.task { if enrollment.companies.isEmpty { enrollment.loadTeamRecords() } }
+        }
+    }
+
+    @ViewBuilder private var content: some View {
+        Group {
             Picker(selection: $company) {
                 Text(verbatim: L("Choose a company")).tag("")
                 ForEach(enrollment.companies) { Text(verbatim: $0.clientName).tag($0.clientId) }
@@ -271,7 +304,24 @@ struct RolloutSection: View {
                     }
                 }
             }
-        } header: { Text(verbatim: L("Rollout for many computers")) }
-        .task { if enrollment.companies.isEmpty { enrollment.loadTeamRecords() } }
+        }
+    }
+}
+
+/// Sessions: what happens when one is ready, and where it opens (both remembered).
+struct SessionSettingsSection: View {
+    @ObservedObject var workspace: WorkspaceModel
+
+    var body: some View {
+        Section {
+            Picker(selection: $workspace.whenReady) {
+                Text(verbatim: L("Stay in Devices and show “Open”")).tag(WorkspaceModel.WhenReady.stay)
+                Text(verbatim: L("Switch to the session")).tag(WorkspaceModel.WhenReady.open)
+            } label: { Text(verbatim: L("When a session is ready")) }
+            Picker(selection: $workspace.openIn) {
+                Text(verbatim: L("A tab in this window")).tag(WorkspaceModel.OpenIn.tab)
+                Text(verbatim: L("Its own window")).tag(WorkspaceModel.OpenIn.window)
+            } label: { Text(verbatim: L("Open sessions in")) }
+        } header: { Text(verbatim: L("Sessions")) }
     }
 }

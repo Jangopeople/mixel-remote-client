@@ -22,7 +22,7 @@ internal sealed class RemoteScreen : Grid
 {
     private readonly SessionModel session;
     private readonly CanvasSwapChainPanel panel = new();
-    private readonly Grid input = new() { Background = new SolidColorBrush(Colors.Transparent), IsTabStop = true, UseSystemFocusVisuals = false };
+    private readonly CursorGrid input = new() { Background = new SolidColorBrush(Colors.Transparent), IsTabStop = true, UseSystemFocusVisuals = false };
     private readonly CanvasDevice device;
     private readonly HashSet<ushort> held = [];
     private readonly Dictionary<uint, byte> pressed = [];
@@ -56,8 +56,11 @@ internal sealed class RemoteScreen : Grid
         AutomationProperties.SetHelpText(input, L("Click to control the remote computer. Ctrl+Alt+Home gives the keyboard back."));
         SizeChanged += (_, _) => Resize();
         panel.CompositionScaleChanged += (_, _) => Resize();
-        session.FrameArrived += (sender, frame) => Draw(frame);
-        session.DrawingChanged += (sender, args) => { if (last is not null) Draw(last); };
+        session.FrameArrived += OnFrame;
+        session.DrawingChanged += OnDrawing;
+        session.PropertyChanged += OnSession;
+        input.PointerEntered += (_, _) => { inside = true; UpdateCursor(); };
+        input.PointerExited += (_, _) => { inside = false; UpdateCursor(); };
         input.PointerMoved += (sender, e) => Moved(e);
         input.PointerPressed += (sender, e) => Pressed(e);
         input.PointerReleased += (sender, e) => Released(e);
@@ -100,6 +103,44 @@ internal sealed class RemoteScreen : Grid
             session.Send(new InputEvent.Key(usage, down));
             return true;
         });
+    }
+
+    private void OnFrame(object? sender, VideoFrame frame) => Draw(frame);
+    private void OnDrawing(object? sender, EventArgs args) { if (last is not null) Draw(last); }
+    private void OnSession(object? sender, System.ComponentModel.PropertyChangedEventArgs change)
+    {
+        if (change.PropertyName == nameof(SessionModel.PointerMode)) UpdateCursor();
+    }
+
+    private bool inside;
+    private bool cursorHidden;
+
+    /// <summary>The host's cursor is in the picture (no host does this today; see <see cref="PointerPolicy"/>).</summary>
+    public bool HostDrawsCursor { get; set; }
+
+    /// <summary>Exactly one pointer over the picture: the local cursor, a crosshair in "Show pointer" mode, or none when the host's is drawn.</summary>
+    private void UpdateCursor()
+    {
+        var wanted = PointerPolicy.For(session.PointerMode, HostDrawsCursor);
+        input.Use(wanted == PointerPolicy.LocalCursor.Cross ? InputSystemCursorShape.Cross : InputSystemCursorShape.Arrow);
+        var hide = inside && wanted == PointerPolicy.LocalCursor.Hidden;
+        if (hide == cursorHidden) return;
+        cursorHidden = hide;
+        _ = Shell.Native.ShowCursor(!hide);
+    }
+
+    /// <summary>Stops listening to the session (the screen is leaving its window).</summary>
+    public void Detach()
+    {
+        session.FrameArrived -= OnFrame;
+        session.DrawingChanged -= OnDrawing;
+        session.PropertyChanged -= OnSession;
+        ReleaseKeyboard();
+        if (cursorHidden)
+        {
+            cursorHidden = false;
+            _ = Shell.Native.ShowCursor(true);
+        }
     }
 
     public void FocusScreen() => input.Focus(FocusState.Programmatic);
@@ -319,4 +360,10 @@ internal sealed class RemoteScreen : Grid
         if (horizontal != 0 || vertical != 0) session.Send(new InputEvent.Wheel(horizontal, vertical));
         e.Handled = true;
     }
+}
+
+/// <summary>A grid whose mouse cursor the screen sets (the cursor property is protected).</summary>
+internal sealed class CursorGrid : Grid
+{
+    public void Use(InputSystemCursorShape shape) => ProtectedCursor = InputSystemCursor.Create(shape);
 }

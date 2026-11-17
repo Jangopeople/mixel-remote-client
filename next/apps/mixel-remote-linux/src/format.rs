@@ -90,6 +90,23 @@ pub fn last_seen(iso: Option<&str>, now: i64) -> String {
     if days == 1 { t("Last seen yesterday") } else { tf("Last seen %d days ago", &[&days]) }
 }
 
+/// The short "last seen" of a table column: "Just now", "5 min ago", "3 h ago", "2 days ago".
+pub fn ago(iso: Option<&str>, now: i64) -> String {
+    let Some(at) = iso.and_then(parse_time) else { return String::new() };
+    let minutes = ((now - at).max(0) as f64 / 60.0).round() as i64;
+    if minutes < 2 {
+        return t("Just now");
+    }
+    if minutes < 60 {
+        return tf("%d min ago", &[&minutes]);
+    }
+    let hours = (minutes as f64 / 60.0).round() as i64;
+    if hours < 24 {
+        return tf("%d h ago", &[&hours]);
+    }
+    tf("%d days ago", &[&((hours as f64 / 24.0).round() as i64)])
+}
+
 /// A day as people write it in the shown language: "27 Nov 2026", "27. Nov. 2026", …
 pub fn day(iso: Option<&str>) -> String {
     let Some(at) = iso.and_then(parse_time) else { return String::new() };
@@ -179,6 +196,18 @@ pub fn plan(plan: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_table_shows_a_short_last_seen() {
+        crate::i18n::set_choice("en");
+        let now = parse_time("2026-11-17T12:00:00Z").unwrap();
+        let at = |iso: &str| ago(Some(iso), now);
+        assert_eq!(at("2026-11-17T11:59:30Z"), "Just now");
+        assert_eq!(at("2026-11-17T11:30:00Z"), "30 min ago");
+        assert_eq!(at("2026-11-17T09:00:00Z"), "3 h ago");
+        assert_eq!(at("2026-11-14T12:00:00Z"), "3 days ago");
+        assert_eq!(ago(None, now), "");
+    }
 
     #[test]
     fn remote_ids_are_grouped_and_parsed() {

@@ -15,6 +15,12 @@ pub struct Settings {
     pub macs: BTreeMap<u32, Vec<String>>,
     /// The company's own AI server for the session assistant.
     pub ai: Option<AiServer>,
+    /// "When a session is ready": `stay` (an Open notice, the default) or `open`.
+    pub when_ready: String,
+    /// "Open sessions in": `tab` (the default) or `window`.
+    pub open_in: String,
+    /// `system` (empty), `light` or `dark`.
+    pub appearance: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -159,6 +165,22 @@ fn from_legacy(items: &BTreeMap<String, String>) -> Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_session_choices_are_remembered_across_restarts() {
+        // An older settings file has none of them: the defaults (stay in Devices, tabs, system look).
+        let old: Settings = serde_json::from_str(r#"{"language":"de"}"#).unwrap();
+        assert_eq!((old.when_ready.as_str(), old.open_in.as_str(), old.appearance.as_str()), ("", "", ""));
+        let chosen = Settings { when_ready: "open".into(), open_in: "window".into(), appearance: "dark".into(), ..old };
+        let text = serde_json::to_string(&chosen).unwrap();
+        let back: Settings = serde_json::from_str(&text).unwrap();
+        let workspace = crate::workspace::Workspace::new(crate::workspace::WhenReady::from_id(&back.when_ready), crate::workspace::OpenIn::from_id(&back.open_in));
+        assert_eq!(workspace.when_ready, crate::workspace::WhenReady::Open);
+        assert_eq!(workspace.open_in, crate::workspace::OpenIn::Window);
+        assert_eq!(back.appearance, "dark");
+        let fresh = crate::workspace::Workspace::new(crate::workspace::WhenReady::from_id(&Settings::default().when_ready), crate::workspace::OpenIn::from_id(&Settings::default().open_in));
+        assert_eq!((fresh.when_ready, fresh.open_in), (crate::workspace::WhenReady::Stay, crate::workspace::OpenIn::Tab));
+    }
 
     #[test]
     fn settings_round_trip_and_mac_memory() {

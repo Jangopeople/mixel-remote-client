@@ -9,71 +9,184 @@ using MixelRemote.ViewModels;
 namespace MixelRemote.App.Pages;
 
 /// <summary>
-/// Devices: every device the account may reach, with its status and the reason when it cannot be reached;
-/// for companies also groups, the Manage menu, Add this computer and Add other computers (deploy link).
+/// Devices in the "Pro Console" look: the header with Connect by ID, search and quick filters, and a dense
+/// table grouped by group (favourite, system, name and note, ID, status, last seen, version, Connect, row
+/// menu). Connecting shows its progress on the row; the person stays here. For companies also groups, the
+/// Manage menu, Add this computer and Add other computers (deploy link).
 /// </summary>
 internal sealed class DevicesPage : PageView
 {
+    private const double StarWidth = 26, TileWidth = 44, IdWidth = 112, StatusWidth = 196, SeenWidth = 92, VersionWidth = 118, ActionsWidth = 150;
+
     public DevicesPage(AppModel app) : base(app)
     {
         Watch(app.Devices);
         Watch(app.Company);
         Watch(app.Enrollment);
+        Watch(app.Workspace);
+        SizeChanged += (_, _) =>
+        {
+            if (WidthClass == widthClass) return;
+            widthClass = WidthClass;
+            Rebuild();
+        };
         var refresh = new KeyboardAccelerator { Key = Windows.System.VirtualKey.F5 };
         refresh.Invoked += (sender, args) => { _ = app.Devices.Load(); args.Handled = true; };
         KeyboardAccelerators.Add(refresh);
+        // "/" puts the cursor into the search field, as in the mockup (not while typing in a field).
+        var slash = new KeyboardAccelerator { Key = (Windows.System.VirtualKey)191 };
+        slash.Invoked += (sender, args) =>
+        {
+            if (XamlRoot is not null && FocusManager.GetFocusedElement(XamlRoot) is TextBox or PasswordBox or ComboBox) return;
+            FocusSearch();
+            args.Handled = true;
+        };
+        KeyboardAccelerators.Add(slash);
     }
 
     private DevicesModel Model => App.Devices;
+    private WorkspaceModel Workspace => App.Workspace;
+    /// <summary>A connection is being prepared (its panel shows no failure): one at a time.</summary>
+    private bool Preparing => Workspace.Attempt is { Failure.Length: 0 };
+
+    public void FocusSearch() => Peek<TextBox>("search")?.Focus(FocusState.Keyboard);
+    public void FocusConnectById() => Peek<TextBox>("byid")?.Focus(FocusState.Keyboard);
+
+    // The table follows the width: from 1100 DIPs the version, from 900 the last-seen column, below that a tight layout.
+    private bool ShowVersion => Model.AdminAvailable && (ActualWidth == 0 || ActualWidth >= 1100);
+    private bool ShowSeen => ActualWidth == 0 || ActualWidth >= 900;
+    private bool Tight => ActualWidth > 0 && ActualWidth < 900;
+    private int widthClass = -1;
+
+    private int WidthClass => (ShowVersion ? 1 : 0) + (ShowSeen ? 2 : 0) + (Tight ? 4 : 0);
+
+    private string Title() => Model.View.Kind switch
+    {
+        DeviceViewKind.Online => L("Online now"),
+        DeviceViewKind.Favorites => L("Favourites"),
+        DeviceViewKind.Recent => L("Recent"),
+        DeviceViewKind.Group => Model.View.Group,
+        _ => L("All devices"),
+    };
+
+    private string Summary()
+    {
+        if (!App.SignedIn) return L("Sign in to see the devices available to your account.");
+        var shown = Model.Filtered;
+        var total = Model.DevicesIn(Model.View).Count;
+        var line = L("%d of %d devices · %d online", shown.Count, total, shown.Count(Model.IsOnline));
+        return Model.AdminAvailable ? line + " · " + L("%d with unattended access", Model.UnattendedCount) : line;
+    }
 
     protected override UIElement Build()
     {
         var model = Model;
-        var header = Ui.Split(
-            Ui.Column(4, Ui.PageTitle(L("Devices")), model.Tenant is { } tenant ? Ui.Text(tenant.Name, secondary: true) : null),
-            Ui.Row(8,
-                model.Tenant is not null && App.SignedIn && model.Manages && !model.RegisteredHere
-                    ? Tip(Ui.Plain(L("Add this computer"), () => _ = AddThisComputer(), model.AddBlocked.Length == 0, "\uE710"), model.AddBlocked) : null,
-                model.Tenant is not null && App.SignedIn && model.Deploys
-                    ? Tip(Ui.Plain(L("Add other computers"), () => _ = AddOthers(), model.AddBlocked.Length == 0, "\uE71B"), model.AddBlocked) : null,
-                App.SignedIn && model.RollsOut ? Ui.Plain(L("Create rollout command"), () => _ = Rollout(), true, "\uE71B") : null,
-                Ui.IconButton("\uE72C", L("Refresh devices") + " (F5)", () => _ = model.Load(), App.SignedIn && !model.Loading)));
-        var search = Keep("search", () =>
+        var titleBlock = new TextBlock { Text = Title(), FontSize = 26, FontWeight = Microsoft.UI.Text.FontWeights.Bold };
+        AutomationProperties.SetHeadingLevel(titleBlock, Microsoft.UI.Xaml.Automation.Peers.AutomationHeadingLevel.Level1);
+        var header = Ui.Split(Ui.Column(4, titleBlock, Ui.Text(Summary(), secondary: true)), ConnectById());
+        var search = SearchBox();
+        var filters = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        filters.Children.Add(search);
+        filters.Children.Add(Ui.Chip(L("Online"), model.OnlineOnly, () => model.OnlineOnly = !model.OnlineOnly, "MixelSuccess"));
+        if (model.AdminAvailable)
         {
-            var box = new TextBox { PlaceholderText = L("Device name"), Width = 300 };
-            box.TextChanged += (_, _) => Model.Search = box.Text;
-            box.KeyDown += (sender, key) => { if (key.Key == Windows.System.VirtualKey.Enter) _ = Model.Load(); };
-            AutomationProperties.SetName(box, L("Search"));
-            return box;
-        });
-        var filters = Ui.Row(8, search,
-            model.Manages && model.GroupsOn && model.Groups.Count > 0
-                ? Ui.Choice([("", L("All groups")), .. model.Groups.Select(group => (group.GroupId, group.Name))], model.GroupFilter ?? "", value =>
-                {
-                    model.GroupFilter = string.IsNullOrEmpty(value) ? null : value;
-                    _ = model.Load();
-                })
-                : null,
-            Ui.Plain(L("Search"), () => _ = model.Load(), App.SignedIn && !model.Loading));
-        var top = Ui.Column(14, header, filters,
+            filters.Children.Add(Ui.Chip(L("Unattended"), model.UnattendedOnly, () => model.UnattendedOnly = !model.UnattendedOnly));
+            filters.Children.Add(Ui.Chip(L("Update available"), model.UpdateOnly, () => model.UpdateOnly = !model.UpdateOnly));
+        }
+        filters.Children.Add(Ui.Hairline(vertical: true));
+        foreach (var (key, label) in new[] { ("macos", "macOS"), ("windows", "Windows"), ("linux", "Linux") })
+        {
+            filters.Children.Add(Ui.Chip(label, model.Systems.Contains(key), () => model.ToggleSystem(key)));
+        }
+        var tools = Ui.Row(8,
+            model.Tenant is not null && App.SignedIn && model.Manages && !model.RegisteredHere
+                ? Tip(Ui.Plain(L("Add this computer"), () => _ = AddThisComputer(), model.AddBlocked.Length == 0), model.AddBlocked) : null,
+            model.Tenant is not null && App.SignedIn && model.Deploys
+                ? Tip(Ui.Plain(L("Add other computers"), () => _ = AddOthers(), model.AddBlocked.Length == 0), model.AddBlocked) : null,
+            App.SignedIn && model.RollsOut ? Ui.Plain(L("Create rollout command"), () => _ = Rollout()) : null,
+            Ui.IconButton("", L("Refresh devices") + " (F5)", () => _ = model.Load(), App.SignedIn && !model.Loading),
+            Ui.Text(L("Sorted by status"), secondary: true, wrap: false));
+        var filterRow = Ui.Split(new ScrollViewer { Content = filters, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled, HorizontalScrollMode = ScrollMode.Auto, VerticalScrollMode = ScrollMode.Disabled }, tools);
+        var top = Ui.Column(14, header, filterRow,
             model.AddBlocked.Length > 0 && model.Manages ? Ui.Message(model.Writable
                 ? L("Device limit of your plan reached. Remove a device or upgrade the plan to add more.")
                 : L("This company is read-only. You can still remove devices; adding devices and other changes need an active plan."), error: false) : null,
             App.SignedIn && !App.Remote.Connected && App.Remote.Phase != "closing" && !App.Enrollment.NeedsSetup ? ConnectionBanner() : null,
             Ui.Message(model.Error),
-            Ui.Message(App.Error),
-            (App.Busy || App.Remote.Phase is "outgoing" or "negotiating") && (!string.IsNullOrEmpty(App.Progress) || !string.IsNullOrEmpty(App.ConnectionMessage))
-                ? Ui.Message(!string.IsNullOrEmpty(App.Progress) ? App.Progress : App.ConnectionMessage, error: false) : null,
-            Ui.Message(model.Message == L("Page %d · %d devices.", model.Page + 1, model.Devices.Count) ? "" : model.Message, error: false));
-        top.Padding = new Thickness(32, 24, 32, 12);
+            Workspace.Attempt is null ? Ui.Message(App.Error) : null,
+            Ui.Message(model.Notice, error: false));
+        top.Padding = new Thickness(28, 22, 28, 10);
         var grid = new Grid();
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         grid.Children.Add(top);
-        var list = List();
+        var list = Table();
         Grid.SetRow(list, 1);
         grid.Children.Add(list);
-        return grid;
+        return new Border { Child = grid, Background = Ui.Brush("MixelPaper") };
+    }
+
+    private TextBox SearchBox()
+    {
+        var box = Keep("search", () =>
+        {
+            var created = new TextBox { PlaceholderText = L("Search name, ID or group"), Width = 300 };
+            created.TextChanged += (_, _) => Model.FilterText = created.Text;
+            created.KeyDown += (sender, key) =>
+            {
+                // The directory of a team member is paged on the server: search there too.
+                if (key.Key == Windows.System.VirtualKey.Enter && Model.Tenant is null)
+                {
+                    Model.Search = created.Text;
+                    _ = Model.Load();
+                }
+            };
+            return created;
+        });
+        box.PlaceholderText = L("Search name, ID or group");
+        AutomationProperties.SetName(box, L("Search"));
+        ToolTipService.SetToolTip(box, L("Search") + " (/)");
+        return box;
+    }
+
+    /// <summary>"Connect by ID 000 000 000" and the red Connect button, top right.</summary>
+    private UIElement ConnectById()
+    {
+        var box = Keep("byid", () =>
+        {
+            var created = new TextBox { PlaceholderText = "000 000 000", Width = 150, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Cascadia Mono, Consolas"), FontSize = 15, MaxLength = 11 };
+            created.TextChanged += (_, _) =>
+            {
+                var digits = new string([.. created.Text.Where(char.IsAsciiDigit).Take(9)]);
+                var grouped = string.Join(' ', Enumerable.Range(0, (digits.Length + 2) / 3).Select(group => digits.Substring(group * 3, Math.Min(3, digits.Length - group * 3))));
+                if (grouped != created.Text)
+                {
+                    created.Text = grouped;
+                    created.SelectionStart = grouped.Length;
+                }
+                else Rebuild();
+            };
+            created.KeyDown += (sender, key) =>
+            {
+                if (key.Key == Windows.System.VirtualKey.Enter) ConnectTyped(created);
+            };
+            return created;
+        });
+        AutomationProperties.SetName(box, L("Connect by ID"));
+        var connect = Ui.Primary(L("Connect"), () => ConnectTyped(box), App.SignedIn && Format.ParseRemoteId(box.Text) is not null && !App.Remote.InSession && !Preparing, "\uE945");
+        return Ui.Row(8, Ui.Text(L("Connect by ID"), secondary: true, wrap: false), box, connect);
+    }
+
+    private void ConnectTyped(TextBox box)
+    {
+        if (Format.ParseRemoteId(box.Text) is not { } id)
+        {
+            App.Error = L("Enter a nine-digit connection ID");
+            return;
+        }
+        box.Text = "";
+        var known = Model.AllDevices.FirstOrDefault(device => device.ConnectionId == id);
+        _ = Workspace.Connect(id, known?.Name, known?.Os ?? "", unattended: true, checkPhone: known is null);
     }
 
     private static Button Tip(Button button, string why)
@@ -90,7 +203,7 @@ internal sealed class DevicesPage : PageView
             CornerRadius = new CornerRadius(8),
             Background = Ui.Brush("MixelWarningSoft"),
             Child = Ui.Split(
-                Ui.Row(10, Ui.Icon("\uE871", 16, Ui.Brush("MixelWarning")), Ui.Column(3,
+                Ui.Row(10, Ui.Icon("", 16, Ui.Brush("MixelWarning")), Ui.Column(3,
                     Ui.Text(App.Remote.Phase == "error" ? L("This computer lost its connection") : L("This computer is not connected yet"), bold: true),
                     Ui.Text(string.IsNullOrWhiteSpace(App.Remote.Message)
                         ? L("Mixel Remote reconnects by itself. Device status appears once it is connected; you can still choose Connect.")
@@ -100,13 +213,38 @@ internal sealed class DevicesPage : PageView
         return banner;
     }
 
-    private FrameworkElement List()
+    // ---- The table ----
+
+    private Grid Columns()
+    {
+        var grid = new Grid { ColumnSpacing = 8 };
+        var tight = Tight;
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(StarWidth) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(TileWidth) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = tight ? 120 : 160 });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(tight ? 104 : IdWidth) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(tight ? 160 : StatusWidth) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(ShowSeen ? SeenWidth : 0) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(ShowVersion ? VersionWidth : 0) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(tight ? 128 : ActionsWidth) });
+        return grid;
+    }
+
+    private static void Put(Grid grid, UIElement element, int column)
+    {
+        Grid.SetColumn((FrameworkElement)element, column);
+        ((FrameworkElement)element).VerticalAlignment = VerticalAlignment.Center;
+        grid.Children.Add(element);
+    }
+
+    private FrameworkElement Table()
     {
         var model = Model;
-        if (model.Devices.Count == 0)
+        var groups = model.RowGroups;
+        if (groups.Count == 0)
         {
             var empty = Ui.Column(10,
-                Ui.Icon("\uE977", 44, Ui.Secondary),
+                Ui.Icon("", 44, Ui.Secondary),
                 new TextBlock { Text = EmptyTitle(), FontSize = 20, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Center },
                 new TextBlock { Text = EmptyDetail(), Foreground = Ui.Secondary, TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center, MaxWidth = 440 },
                 !App.SignedIn ? Ui.Link(L("Sign in to Mixel →"), () => App.Section = AppSection.Account) : null);
@@ -115,30 +253,68 @@ internal sealed class DevicesPage : PageView
             foreach (var child in empty.Children) ((FrameworkElement)child).HorizontalAlignment = HorizontalAlignment.Center;
             return empty;
         }
-        var rows = new StackPanel { Spacing = 8, Padding = new Thickness(32, 0, 32, 24) };
-        foreach (var device in model.Devices) rows.Children.Add(Row(device));
-        if (model.Page > 0 || model.HasNext)
+        var header = Columns();
+        header.Padding = new Thickness(12, 8, 12, 8);
+        Put(header, Ui.Label(L("Device")), 2);
+        Put(header, Ui.Label(L("ID")), 3);
+        Put(header, Ui.Label(L("Status")), 4);
+        if (ShowSeen) Put(header, Ui.Label(L("Last seen")), 5);
+        if (ShowVersion) Put(header, Ui.Label(L("Version")), 6);
+        var actionsLabel = Ui.Label(L("Actions"));
+        actionsLabel.HorizontalAlignment = HorizontalAlignment.Right;
+        Put(header, actionsLabel, 7);
+        var rows = new StackPanel { Spacing = 0, Padding = new Thickness(0, 0, 0, 120) };
+        foreach (var group in groups)
         {
-            rows.Children.Add(Ui.Split(
-                Ui.Row(8, Ui.Plain(L("Previous"), () => _ = model.PreviousPage(), model.Page > 0 && !model.Loading), Ui.Plain(L("Next"), () => _ = model.NextPage(), model.HasNext && !model.Loading)),
-                Ui.Text(model.Message, secondary: true)));
+            rows.Children.Add(GroupHeader(group));
+            foreach (var device in group.Devices) rows.Children.Add(Row(device, group));
         }
-        return new ScrollViewer { Content = rows, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+        if (model.Tenant is null && (model.Page > 0 || model.HasNext))
+        {
+            var pager = Ui.Split(
+                Ui.Row(8, Ui.Plain(L("Previous"), () => _ = model.PreviousPage(), model.Page > 0 && !model.Loading), Ui.Plain(L("Next"), () => _ = model.NextPage(), model.HasNext && !model.Loading)),
+                Ui.Text(model.Message, secondary: true));
+            pager.Margin = new Thickness(12, 16, 12, 0);
+            rows.Children.Add(pager);
+        }
+        var table = new Grid { Margin = new Thickness(16, 0, 16, 0) };
+        table.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        table.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        table.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        table.Children.Add(header);
+        var line = Ui.Hairline();
+        Grid.SetRow(line, 1);
+        table.Children.Add(line);
+        var scroller = new ScrollViewer { Content = rows, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+        Grid.SetRow(scroller, 2);
+        table.Children.Add(scroller);
+        return table;
+    }
+
+    private static UIElement GroupHeader(RowGroup group)
+    {
+        var row = Ui.Row(8,
+            new Microsoft.UI.Xaml.Shapes.Ellipse { Width = 8, Height = 8, Fill = group.Id == "-" ? Ui.Secondary : Ui.GroupColor(group.Name), VerticalAlignment = VerticalAlignment.Center },
+            Ui.Text(group.Name, bold: true, wrap: false),
+            Ui.Text(L("%d devices · %d online", group.Devices.Count, group.Online), secondary: true, wrap: false));
+        var border = new Border { Child = row, Padding = new Thickness(14, 8, 14, 8), Background = Ui.Brush("MixelGroupRow"), BorderBrush = Ui.Brush("MixelHairline"), BorderThickness = new Thickness(0, 0, 0, 1) };
+        AutomationProperties.SetName(border, $"{group.Name}, {L("%d devices · %d online", group.Devices.Count, group.Online)}");
+        AutomationProperties.SetHeadingLevel(border, Microsoft.UI.Xaml.Automation.Peers.AutomationHeadingLevel.Level2);
+        return border;
     }
 
     private string EmptyTitle()
     {
         if (Model.Loading) return L("Loading your devices…");
         if (!App.SignedIn) return L("Your devices belong here");
-        if (Model.Search.Length > 0) return L("No matching devices");
-        if (Model.Tenant is not null && Model.GroupFilter is not null) return L("No devices in this group");
+        if (Model.AnyFilter) return L("No matching devices");
         return L("No devices to display");
     }
 
     private string EmptyDetail()
     {
         if (!App.SignedIn) return L("Sign in to see the devices available to your account.");
-        if (Model.Search.Length > 0) return L("Try another device name or clear the search.");
+        if (Model.AnyFilter) return L("Try another device name or clear the search.");
         if (Model.Tenant is not null)
         {
             return Model.Manages ? L("Add this computer, or add other computers with a deploy link.") : L("Devices you add appear here. Ask an administrator of your company for access to other devices.");
@@ -146,54 +322,131 @@ internal sealed class DevicesPage : PageView
         return L("Devices appear here after a Mixel team member enrolls them.");
     }
 
-    private Border Row(Device device)
+    private static string LastSeenText(DevicesModel model, Device device, Presence presence, string? state)
+    {
+        if (state is not null || presence is Presence.Online or Presence.This) return L("Now");
+        if (model.LastSeenDate(device) is not { } date) return "—";
+        var minutes = Math.Max(0, (int)(DateTimeOffset.UtcNow - date).TotalMinutes);
+        if (minutes < 2) return L("Just now");
+        if (minutes < 60) return L("%d min ago", minutes);
+        var hours = minutes / 60;
+        if (hours < 24) return L("%d h ago", hours);
+        var days = hours / 24;
+        return days == 1 ? L("Yesterday") : L("%d days ago", days);
+    }
+
+    private UIElement Row(Device device, RowGroup group)
     {
         var model = Model;
         var presence = model.PresenceOf(device);
+        var state = Workspace.StateOf(device.ConnectionId);
+        var attempt = Workspace.Attempt is { } current && current.Peer == device.ConnectionId ? current : null;
+        var info = model.AdminOf(device);
+        var inSession = state is "ready" or "starting";
+        var grid = Columns();
+        grid.Padding = new Thickness(12, 8, 12, 8);
+
+        // Star, system tile with the status dot, name and the line under it.
+        if (model.Tenant is not null)
+        {
+            var on = model.IsFavorite(device);
+            var star = Ui.IconButton(on ? "" : "", on ? L("Remove from favorites") : L("Add to favorites"), () => _ = model.ToggleFavorite(device), !App.Busy);
+            star.Style = null;
+            star.Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Transparent);
+            star.BorderThickness = new Thickness(0);
+            star.Padding = new Thickness(3);
+            if (on && star.Content is FontIcon icon) icon.Foreground = Ui.Brush("MixelStar");
+            Put(grid, star, 0);
+        }
+        var dot = state is not null ? "MixelWarning" : presence is Presence.Online or Presence.This ? "MixelSuccess" : presence == Presence.Offline ? "TextFillColorTertiaryBrush" : null;
+        Put(grid, Ui.OsTile(device.Os, dot), 1);
+        var parts = new List<string> { Format.Os(device.Os) };
+        if (model.View.Kind != DeviceViewKind.Group && !string.IsNullOrEmpty(device.GroupName) && group.Id == "-") parts.Add(device.GroupName);
+        if (!string.IsNullOrWhiteSpace(info?.Note)) parts.Add(info!.Note!);
+        if (presence == Presence.This) parts.Add(L("This computer"));
+        var name = Ui.Column(2, Ui.Text(device.Name, bold: true, wrap: false), Ui.Text(string.Join(" · ", parts), secondary: true, wrap: false));
+        foreach (var child in name.Children.OfType<TextBlock>().Skip(1)) child.FontSize = 12;
+        Put(grid, name, 2);
+        var id = Ui.Selectable(Format.RemoteId(device.ConnectionId), 13, mono: true);
+        AutomationProperties.SetName(id, L("Connection ID") + " " + Format.RemoteId(device.ConnectionId));
+        Put(grid, id, 3);
+
+        // Status: connect progress on the row, "In session", or online/offline with the badges.
+        UIElement status;
+        if (attempt is { Failure.Length: 0 })
+        {
+            var progress = new ProgressBar { Minimum = 0, Maximum = 5, Value = attempt.Step + 1, MaxWidth = 180, Foreground = Ui.BrandBrush };
+            AutomationProperties.SetName(progress, L("Connecting"));
+            status = Ui.Column(4, Ui.Row(6, Ui.Spinner(14), Ui.Text(ConnectStepTitle(attempt.Step, attempt.Unattended) + "…", bold: true, wrap: false)), progress);
+        }
+        else if (state is "ready" or "starting" or "ending")
+        {
+            status = Ui.Pill(state == "starting" ? L("Starting video") : L("In session"), "", "MixelSessionText", "MixelSessionSoft");
+        }
+        else
+        {
+            var line = Ui.Row(6, Ui.Status(Badge(presence), model.Label(presence)));
+            if (info?.Unattended == true) line.Children.Add(Ui.Pill(L("Unattended"), "", "MixelInfoText", "MixelInfoSoft"));
+            status = line;
+            ToolTipService.SetToolTip(line, model.Reason(device));
+        }
+        Put(grid, status, 4);
+        if (ShowSeen) Put(grid, Ui.Text(LastSeenText(model, device, presence, state), secondary: true, wrap: false), 5);
+        if (ShowVersion)
+        {
+            var version = Ui.Row(6, Ui.Text(model.VersionOf(device), secondary: true, wrap: false));
+            if (model.UpdateAvailable(device)) version.Children.Add(Ui.Pill(L("Update"), null, "MixelUpdateText", "MixelUpdateSoft"));
+            Put(grid, version, 6);
+        }
+
+        // Actions: Connect or Show, and the "..." menu.
         var blocked = model.ConnectBlocked(device);
-        var grid = new Grid { ColumnSpacing = 14 };
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var icon = Ui.Icon(Format.OsGlyph(device.Os), 24, presence is Presence.Online or Presence.This ? Ui.BrandBrush : Ui.Secondary);
-        icon.VerticalAlignment = VerticalAlignment.Center;
-        grid.Children.Add(icon);
-        var details = string.Join(" · ", new[] { Format.Os(device.Os), device.GroupName, Format.RemoteId(device.ConnectionId) }.Where(part => !string.IsNullOrEmpty(part)));
-        var name = Ui.Column(2, Ui.Text(device.Name, bold: true, wrap: false), Ui.Caption(details));
-        Grid.SetColumn(name, 1);
-        grid.Children.Add(name);
-        var reason = model.Reason(device);
-        var status = Ui.Column(2, Ui.Status(Badge(presence), model.Label(presence)), reason.Length > 0 ? Ui.Caption(reason) : null);
-        status.MaxWidth = 300;
-        status.VerticalAlignment = VerticalAlignment.Center;
-        Grid.SetColumn(status, 2);
-        grid.Children.Add(status);
-        var macs = model.KnownMacs(device);
-        var favorite = model.Tenant is null ? null : Ui.IconButton(model.IsFavorite(device) ? "\uE735" : "\uE734",
-            model.IsFavorite(device) ? L("Remove %@ from favorites", device.Name) : L("Add %@ to favorites", device.Name), () => _ = model.ToggleFavorite(device), !App.Busy, false);
-        if (favorite is not null && model.IsFavorite(device)) favorite.Foreground = Ui.BrandBrush;
-        var connectingHere = App.Remote.Peer == device.ConnectionId && (App.Remote.Phase == "outgoing" || (App.Remote.Phase == "negotiating" && !App.Remote.Sharing));
-        var actions = Ui.Row(8,
-            favorite,
-            presence == Presence.Offline && macs.Length > 0 ? Ui.Plain(L("Wake up"), () => _ = model.Wake(device, macs), !App.Busy, "\uE7E8") : null,
-            model.Manages ? ManageButton(device) : null,
-            Tip(Ui.Primary(connectingHere ? L("Connecting…") : L("Connect"), () => _ = model.Connect(device), blocked.Length == 0 && !connectingHere), blocked.Length == 0 ? L("Connect to %@", device.Name) : blocked));
-        actions.VerticalAlignment = VerticalAlignment.Center;
-        Grid.SetColumn(actions, 3);
-        grid.Children.Add(actions);
+        var connecting = state == "connecting";
+        Button main;
+        if (inSession)
+        {
+            main = Ui.Plain(L("Show"), () => Workspace.Show(device.ConnectionId), true, "");
+            ToolTipService.SetToolTip(main, L("Show the session with %@", device.Name));
+        }
+        else
+        {
+            main = Ui.Plain(connecting ? L("Connecting…") : L("Connect"), () => _ = Workspace.Connect(device.ConnectionId, device.Name, device.Os, unattended: true),
+                blocked.Length == 0 && !connecting && !Preparing);
+            ToolTipService.SetToolTip(main, blocked.Length == 0 ? L("Connect to %@", device.Name) : blocked);
+        }
+        var menu = DeviceMenu(device, presence);
+        var more = new DropDownButton { Content = Ui.Icon("", 14), Flyout = menu, Padding = new Thickness(8, 6, 8, 6) };
+        more.Resources["DropDownButtonCustomChevronVisibility"] = Visibility.Collapsed;
+        AutomationProperties.SetName(more, L("More for %@", device.Name));
+        var actions = Ui.Row(6, main, more);
+        actions.HorizontalAlignment = HorizontalAlignment.Right;
+        Put(grid, actions, 7);
+
         var card = new Border
         {
             Child = grid,
-            Padding = new Thickness(16, 12, 16, 12),
-            CornerRadius = new CornerRadius(8),
-            Background = Ui.Brush("CardBackgroundFillColorDefaultBrush"),
-            BorderBrush = Ui.Brush("CardStrokeColorDefaultBrush"),
-            BorderThickness = new Thickness(1),
+            Background = Ui.Brush(inSession ? "MixelActiveRow" : "MixelPaper"),
+            BorderBrush = Ui.Brush("MixelHairline"),
+            BorderThickness = new Thickness(0, 0, 0, 1),
+            ContextFlyout = DeviceMenu(device, presence),
         };
-        AutomationProperties.SetName(card, $"{device.Name}, {model.Label(presence)}");
+        if (!inSession)
+        {
+            card.PointerEntered += (_, _) => card.Background = Ui.Brush("MixelHoverRow");
+            card.PointerExited += (_, _) => card.Background = Ui.Brush("MixelPaper");
+        }
+        AutomationProperties.SetName(card, $"{device.Name}, {Format.Os(device.Os)}, {model.Label(presence)}");
         return card;
     }
+
+    /// <summary>The steps of a connection, as the connecting panel and the row show them.</summary>
+    public static string ConnectStepTitle(int step, bool unattended) => step switch
+    {
+        0 => L("Reaching device"),
+        1 => unattended ? L("Checking unattended access") : L("Waiting for the person to accept"),
+        2 => L("Encrypting end-to-end"),
+        _ => L("Starting video"),
+    };
 
     private static Ui.Badge Badge(Presence presence) => presence switch
     {
@@ -203,7 +456,8 @@ internal sealed class DevicesPage : PageView
         _ => Ui.Badge.Unknown,
     };
 
-    private Button ManageButton(Device device)
+    /// <summary>The row's "..." menu (also its right-click menu).</summary>
+    private MenuFlyout DeviceMenu(Device device, Presence presence)
     {
         var model = Model;
         var menu = new MenuFlyout();
@@ -213,14 +467,45 @@ internal sealed class DevicesPage : PageView
             item.Click += (_, _) => action();
             menu.Items.Add(item);
         }
-        Add(L("Rename…"), () => _ = Rename(device), model.Writable);
-        if (model.GroupsOn) Add(L("Move to group…"), () => _ = Move(device), model.Writable);
-        menu.Items.Add(new MenuFlyoutSeparator());
-        Add(L("Remove…"), () => _ = Remove(device));
-        var button = new DropDownButton { Content = L("Manage"), Flyout = menu };
-        AutomationProperties.SetName(button, L("Manage %@", device.Name));
-        return button;
+        var blocked = model.ConnectBlocked(device);
+        Add(L("Connect without confirmation (unattended access)"), () => _ = Workspace.Connect(device.ConnectionId, device.Name, device.Os, unattended: true), blocked.Length == 0);
+        Add(L("Connect and ask the person to accept"), () => _ = Workspace.Connect(device.ConnectionId, device.Name, device.Os, unattended: false), blocked.Length == 0);
+        var macs = model.KnownMacs(device);
+        if (presence == Presence.Offline && macs.Length > 0) Add(L("Wake"), () => _ = model.Wake(device, macs), !App.Busy);
+        Add(L("Copy ID"), () => App.CopyText(device.ConnectionId.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        if (model.Tenant is not null) Add(model.IsFavorite(device) ? L("Remove from favorites") : L("Add to favorites"), () => _ = model.ToggleFavorite(device));
+        if (model.Manages || model.CanAdmin(device))
+        {
+            menu.Items.Add(new MenuFlyoutSeparator());
+            if (model.AdminAvailable && model.CanAdmin(device))
+            {
+                Add(L("Edit note…"), () => _ = EditNote(device));
+                var unattended = new MenuFlyoutSubItem { Text = L("Unattended access") };
+                var current = model.AdminOf(device)?.UnattendedSetting ?? "default";
+                foreach (var (key, label) in new[] { ("default", L("Company default")), ("on", L("Allowed")), ("off", L("Turned off")) })
+                {
+                    var choice = new ToggleMenuFlyoutItem { Text = label, IsChecked = current == key };
+                    var setting = key;
+                    choice.Click += (_, _) => _ = model.SetUnattended(device, setting);
+                    unattended.Items.Add(choice);
+                }
+                menu.Items.Add(unattended);
+            }
+            if (model.Manages)
+            {
+                Add(L("Rename…"), () => _ = Rename(device), model.Writable);
+                if (model.GroupsOn) Add(L("Move to group…"), () => _ = Move(device), model.Writable);
+                menu.Items.Add(new MenuFlyoutSeparator());
+                Add(L("Remove…"), () => _ = Remove(device));
+            }
+        }
+        return menu;
     }
+
+    private Task EditNote(Device device) => Dialogs.Form(Root, L("Edit note…"), null, [(L("Note"), model_note(device))], L("Save"),
+        async values => await Model.SetNote(device, values[0]) ? null : Model.Error);
+
+    private string model_note(Device device) => Model.AdminOf(device)?.Note ?? "";
 
     private Task Rename(Device device) => Dialogs.Form(Root, L("Rename device"), null, [(L("Device name"), device.Name)], L("Rename"),
         async values => await Model.Rename(device, values[0].Trim()) ? null : Model.Error);
@@ -244,6 +529,15 @@ internal sealed class DevicesPage : PageView
 
     private async Task Remove(Device device)
     {
+        if (Model.AdminAvailable && Model.CanAdmin(device))
+        {
+            // The admin API asks for the device's own 9-digit ID as confirmation.
+            await Dialogs.Form(Root, L("Remove this device?"),
+                L("Remove %@ (%@)? It is signed out of Mixel Remote and must be added again.", device.Name, Format.RemoteId(device.ConnectionId)),
+                [(L("Type the ID to confirm"), "")], L("Remove %@", device.Name),
+                async values => await Model.RemoveConfirmed(device, values[0]) ? null : Model.Error);
+            return;
+        }
         if (await Dialogs.Confirm(Root, L("Remove this device?"), L("Its running sessions end at once. It can be added again later."), L("Remove %@", device.Name)))
         {
             await Model.Remove(device);

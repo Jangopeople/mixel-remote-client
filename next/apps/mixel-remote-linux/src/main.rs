@@ -33,6 +33,10 @@ mod tray;
 mod ui;
 #[cfg(target_os = "linux")]
 mod video;
+#[cfg(target_os = "linux")]
+mod view;
+#[cfg(target_os = "linux")]
+mod workspace;
 
 /// The application id: D-Bus name, desktop file, icon, settings folder.
 #[cfg(target_os = "linux")]

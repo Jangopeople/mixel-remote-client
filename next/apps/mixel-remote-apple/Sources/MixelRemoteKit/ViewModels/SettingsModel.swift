@@ -1,4 +1,7 @@
 import Foundation
+#if os(macOS)
+import AppKit
+#endif
 
 /// Settings: stay signed in, start with this computer, this computer (remove it), remote printing,
 /// permissions, language, updates, About and legal.
@@ -22,6 +25,30 @@ public final class SettingsModel: ObservableObject {
     @Published public var language: String = Translator.shared.choice
     @Published public var error = ""
     @Published public var notice = ""
+    /// "Stay signed in" chosen on the sign-in screen, before there is an account to remember. Applied
+    /// once the sign-in is done (`applySignInChoice`); on by default, as the app has always remembered.
+    static let stayKey = "mixel.remote.signin.stay.v1"
+    @Published public var staySignedIn: Bool = UserDefaults.standard.object(forKey: SettingsModel.stayKey) as? Bool ?? true {
+        didSet { UserDefaults.standard.set(staySignedIn, forKey: Self.stayKey) }
+    }
+
+    /// After a sign-in: "stay signed in" was unchecked on the sign-in screen, so this computer does not remember it.
+    func applySignInChoice() async {
+        guard app.signedIn, !app.isPhone, !staySignedIn else { return }
+        UserDefaults.standard.set(true, forKey: "mixel.remote.autostart.configured")
+        try? await app.engine.perform("set_stay_signed_in", ["enabled": false])
+        startup = try? await app.engine.run("startup_settings")
+    }
+
+    /// Appearance: `system` (follow this Mac), `light` or `dark`. Remembered; the Mac app applies it to the whole app.
+    public enum Appearance: String, CaseIterable, Sendable { case system, light, dark }
+    static let appearanceKey = "mixel.remote.appearance.v1"
+    @Published public var appearance: Appearance = Appearance(rawValue: UserDefaults.standard.string(forKey: SettingsModel.appearanceKey) ?? "") ?? .system {
+        didSet {
+            UserDefaults.standard.set(appearance.rawValue, forKey: Self.appearanceKey)
+            applyAppearance()
+        }
+    }
 
     /// The desktop app's setting ("on"/"off"), kept under the same name.
     static let autoUpdateKey = "mixel.remote.autoupdate.v1"
@@ -29,6 +56,22 @@ public final class SettingsModel: ObservableObject {
     private var installFailed = false
 
     init(app: AppModel) { self.app = app }
+
+    /// Sets `NSApp.appearance` from the choice (nil = follow the system). A lab build started with
+    /// `MIXEL_QA_APPEARANCE` keeps that appearance.
+    public func applyAppearance() {
+        #if os(macOS)
+        guard let application = NSApp else { return }
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["MIXEL_QA_APPEARANCE"] != nil { return }
+        #endif
+        switch appearance {
+        case .system: application.appearance = nil
+        case .light: application.appearance = NSAppearance(named: .aqua)
+        case .dark: application.appearance = NSAppearance(named: .darkAqua)
+        }
+        #endif
+    }
 
     public func load() async {
         if !app.isPhone { signInScreen = try? await app.engine.run("signin_screen_status") }

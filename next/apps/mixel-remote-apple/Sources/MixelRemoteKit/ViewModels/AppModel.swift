@@ -3,12 +3,13 @@ import SwiftUI
 
 /// The sections of the app (sidebar on the Mac, tabs on the phone).
 public enum AppSection: String, CaseIterable, Identifiable, Sendable {
-    case remote, devices, reports, account, settings
+    case remote, devices, sessions, reports, account, settings
     public var id: String { rawValue }
     public var title: String {
         switch self {
         case .remote: L("Remote control")
         case .devices: L("Devices")
+        case .sessions: L("Sessions")
         case .reports: L("Session reports")
         case .account: L("Account")
         case .settings: L("Settings")
@@ -18,6 +19,7 @@ public enum AppSection: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .remote: "arrow.left.arrow.right"
         case .devices: "laptopcomputer.and.iphone"
+        case .sessions: "macwindow.on.rectangle"
         case .reports: "list.bullet.rectangle"
         case .account: "person.crop.circle"
         case .settings: "gearshape"
@@ -33,6 +35,8 @@ public final class AppModel: ObservableObject {
     @Published public var section: AppSection = .remote
     @Published public private(set) var account = AccountStatus(phase: "signed_out", message: "Sign in with your Mixel account")
     @Published public private(set) var remote = RemoteStatus.offline
+    /// The engine has answered about the account once (so the window does not flash the sign-in screen at launch).
+    @Published public private(set) var accountChecked = false
     /// The last failure of an action, shown near the action.
     @Published public var error = ""
     /// Progress of a connection being prepared ("Looking up this ID…").
@@ -51,6 +55,7 @@ public final class AppModel: ObservableObject {
     public lazy var assistant = AssistantModel(app: self)
     public lazy var drawing = DrawingModel(app: self)
     public lazy var reports = ReportsModel(app: self)
+    public lazy var workspace = WorkspaceModel(app: self)
 
     /// The app opens web pages (sign-in, legal texts) through this.
     public var openURL: (URL) -> Void = { _ in }
@@ -81,6 +86,7 @@ public final class AppModel: ObservableObject {
     /// Starts reading the engine. Idempotent.
     public func start() {
         guard loop == nil else { return }
+        settings.applyAppearance()
         loop = Task { [weak self] in
             await self?.refreshAccount()
             await self?.settings.flushPendingRemoval()
@@ -108,6 +114,7 @@ public final class AppModel: ObservableObject {
     public func refreshAccount() async {
         lastAccountRead = Date()
         guard let next: AccountStatus = try? await engine.run("account_status") else { return }
+        if !accountChecked { accountChecked = true }
         if next != account { account = next }
         let key = next.signedIn ? "\(next.account?.profile ?? "")|\(next.account?.organization ?? "")|\(next.account?.personal ?? false)" : ""
         if !next.signedIn, signInProviders.isEmpty { await loadSignInProviders() }
@@ -128,6 +135,7 @@ public final class AppModel: ObservableObject {
         reports.statusChanged(from: previous, to: next)
         host.statusChanged(from: previous, to: next)
         devices.statusChanged(from: previous, to: next)
+        workspace.statusChanged(from: previous, to: next)
         await goOnlineIfNeeded()
     }
 
@@ -155,6 +163,7 @@ public final class AppModel: ObservableObject {
                 await company.load()
                 await enrollment.check()
                 await devices.load()
+                await settings.applySignInChoice()
                 await settings.load()
             }
         }
@@ -201,9 +210,17 @@ public final class AppModel: ObservableObject {
     /// `provider`: nil for Mixel ID (or the company's single sign-on), else google, azure or apple.
     public func signIn(provider: String? = nil, showLink: Bool = false) {
         act {
-            let url: String = try await self.engine.run("account_sign_in", ["open_browser": false, "provider": provider])
-            if showLink { self.signInLink = url }
-            else if let link = URL(string: url) { (self.openSignIn ?? self.openURL)(link) }
+            // A lab core (qa-session) signs in at once and answers null instead of a link.
+            let url: String? = try await self.engine.run("account_sign_in", ["open_browser": false, "provider": provider], as: String?.self)
+            if let url { if showLink { self.signInLink = url } else if let link = URL(string: url) { (self.openSignIn ?? self.openURL)(link) } }
+            await self.refreshAccount()
+        }
+    }
+
+    /// The first sign-in of a new Mixel ID: the name that goes with the account.
+    public func completeProfile(name: String) {
+        act {
+            try await self.engine.perform("account_setup", ["name": name.trimmingCharacters(in: .whitespaces)])
             await self.refreshAccount()
         }
     }
@@ -320,6 +337,7 @@ public final class AppModel: ObservableObject {
         struct Request: Encodable { var host: UInt32; var password: String?; var unattended: Bool }
         try await engine.perform("remote_request", Request(host: id, password: password?.isEmpty == false ? password : nil, unattended: phone ? false : unattended))
         session.lastRequestUnattended = unattended && !phone
+        session.lastRequestPassword = password?.isEmpty == false
         progress = session.lastRequestUnattended
             ? L("Requesting unattended access…")
             : L("Waiting for the other person to accept your request.")
