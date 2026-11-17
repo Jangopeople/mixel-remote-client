@@ -4599,6 +4599,28 @@
         }
       }
     },
+    "End session with %@?": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sitzung mit %@ beenden?"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Terminer la session avec %@ ?"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Terminare la sessione con %@?"
+          }
+        }
+      }
+    },
     "End session?": {
       "localizations": {
         "de": {

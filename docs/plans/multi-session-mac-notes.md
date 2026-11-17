@@ -21,7 +21,8 @@ Engine API: `multi-session-engine-api.md`. App code: `next/apps/mixel-remote-app
   `{"hint":"too_many_sessions","max":4,...}` is shown as a sentence (`EngineFailure.typed`; de/fr/it in
   `scripts/make-strings.py` NATIVE). `already_connected` has its own sentence.
 - Transport renewal: same `id`, new `session`: tab, model, picture and selection stay.
-- A window's red button still docks it back into its tab (does not end the session; End does).
+- A popped-out window's red button (and Cmd-W) asks "End session with <device>?" and, on confirm, ends that session
+  (`WorkspaceModel.windowCloseRequested`, 2.1.0); the separate "Back into a tab" button docks it.
 - `scripts/build-core.sh`: `ARM_ONLY=1` builds Apple silicon only (lab builds).
 
 ## Tests

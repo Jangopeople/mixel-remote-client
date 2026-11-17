@@ -130,6 +130,7 @@ NATIVE = {
     'The session stays open while Mixel Remote asks that computer again.': ('Die Sitzung bleibt offen, während Mixel Remote diesen Computer erneut anfragt.', 'La session reste ouverte pendant que Mixel Remote redemande cet ordinateur.', 'La sessione resta aperta mentre Mixel Remote contatta di nuovo quel computer.'),
     'Could not reconnect': ('Verbindung konnte nicht wiederhergestellt werden', 'Impossible de se reconnecter', 'Impossibile riconnettersi'),
     'Retry': ('Erneut versuchen', 'Réessayer', 'Riprova'),
+    'End session with %@?': ('Sitzung mit %@ beenden?', 'Terminer la session avec %@ ?', 'Terminare la sessione con %@?'),
     'Back into a tab': ('Zurück in einen Tab', 'Retour dans un onglet', 'Torna in una scheda'),
     'Chat with %@': ('Chat mit %@', 'Chat avec %@', 'Chat con %@'),
     'Checking unattended access': ('Unbeaufsichtigter Zugriff wird geprüft', 'Vérification de l’accès sans surveillance', 'Verifica dell’accesso non presidiato'),

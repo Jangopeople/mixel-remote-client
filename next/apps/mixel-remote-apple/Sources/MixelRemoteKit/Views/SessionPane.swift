@@ -454,13 +454,15 @@ struct SessionBar: View {
     }
 }
 
-/// A popped-out session: its own window, titled "<device> — Mixel Remote". Closing it puts the session
-/// back into its tab; the window closes by itself when the session ends.
+/// A popped-out session: its own window, titled "<device> — Mixel Remote". Closing it (red button, Cmd-W) asks
+/// "End session with <device>?" and ends the session; "Back into a tab" docks it. The window closes by itself
+/// when the session ends.
 public struct SessionWindowView: View {
     @ObservedObject var app: AppModel
     @ObservedObject var workspace: WorkspaceModel
     let peer: UInt32
     @State private var window: NSWindow?
+    @State private var closeGuard: WindowCloseGuard?
 
     public init(app: AppModel, peer: UInt32) {
         self.app = app
@@ -471,7 +473,17 @@ public struct SessionWindowView: View {
     public var body: some View {
         SessionPane(app: app, peer: peer, inWindow: true)
             .frame(minWidth: 820, minHeight: 520)
-            .background(WindowReader { window = $0 })
+            .background(WindowReader { found in
+                window = found
+                guard let found, closeGuard == nil else { return }
+                let guardian = WindowCloseGuard(window: found) { [weak workspace] in
+                    // Closed by the person: no session left means close; else ask, and close only after "End".
+                    guard let workspace, workspace.tab(peer) != nil else { return true }
+                    askToEnd(in: found)
+                    return false
+                }
+                closeGuard = guardian
+            })
             .navigationTitle(L("%@ — Mixel Remote", workspace.tab(peer)?.name ?? Format.remoteId(peer)))
             .tint(Theme.brand)
             .onChange(of: workspace.tab(peer) == nil) { ended in if ended { window?.close() } }
@@ -493,6 +505,46 @@ public struct SessionWindowView: View {
                 }
             }
     }
+}
+
+extension SessionWindowView {
+    /// The alert: "End session with <device>?" as a sheet on the window; End ends the session and closes it.
+    @MainActor private func askToEnd(in window: NSWindow) {
+        workspace.confirmEnd = { tab in
+            await withCheckedContinuation { continuation in
+                let alert = NSAlert()
+                alert.alertStyle = .warning
+                alert.messageText = workspace.endQuestion(tab.peer)
+                alert.informativeText = L("The connection ends for both sides.")
+                alert.addButton(withTitle: L("End session")).hasDestructiveAction = true
+                alert.addButton(withTitle: L("Cancel"))
+                alert.beginSheetModal(for: window) { continuation.resume(returning: $0 == .alertFirstButtonReturn) }
+            }
+        }
+        Task { @MainActor in
+            if await workspace.windowCloseRequested(peer) { window.close() }
+        }
+    }
+}
+
+/// Stands in front of the window's own delegate: the close button asks the view first; everything else
+/// is forwarded to the delegate SwiftUI installed.
+final class WindowCloseGuard: NSObject, NSWindowDelegate {
+    private weak var original: NSWindowDelegate?
+    private let shouldClose: () -> Bool
+
+    init(window: NSWindow, shouldClose: @escaping () -> Bool) {
+        original = window.delegate
+        self.shouldClose = shouldClose
+        super.init()
+        window.delegate = self
+        objc_setAssociatedObject(window, &WindowCloseGuard.key, self, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+    }
+    private static var key = 0
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool { shouldClose() }
+    override func responds(to selector: Selector!) -> Bool { super.responds(to: selector) || original?.responds(to: selector) == true }
+    override func forwardingTarget(for selector: Selector!) -> Any? { original?.responds(to: selector) == true ? original : nil }
 }
 
 public extension Notification.Name {

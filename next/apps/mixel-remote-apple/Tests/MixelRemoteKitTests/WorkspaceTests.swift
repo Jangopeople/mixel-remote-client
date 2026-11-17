@@ -66,15 +66,64 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(ws.selected, .session(731_204_118))
     }
 
-    func testClosingTheWindowDocksIt() async throws {
-        let (app, _) = try await viewingApp(openIn: .window)
+    /// Closing a popped-out window (red button) asks "End session with <device>?": cancel keeps window and session,
+    /// confirm ends this session (remote_close with its stable id) and lets the window close.
+    func testClosingTheWindowAsksThenEndsOrKeeps() async throws {
+        let (app, engine) = try await viewingApp(openIn: .window)
         let ws = app.workspace
         ws.openWindow = { _ in }
         ws.show(731_204_118)
         XCTAssertTrue(ws.isInWindow(731_204_118), "default own window")
-        ws.windowClosed(731_204_118)
+        var asked: [String] = []
+        ws.confirmEnd = { tab in asked.append(ws.endQuestion(tab.peer)); return false }
+
+        let keep = await ws.windowCloseRequested(731_204_118)
+        XCTAssertFalse(keep, "cancel: the window stays")
+        XCTAssertEqual(asked, [L("End session with %@?", ws.tab(731_204_118)!.name)])
+        XCTAssertTrue(ws.isInWindow(731_204_118))
+        XCTAssertNotNil(ws.tab(731_204_118))
+        try await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertTrue(engine.calls("remote_close").isEmpty, "cancel ends nothing")
+
+        ws.confirmEnd = { _ in true }
+        let close = await ws.windowCloseRequested(731_204_118)
+        XCTAssertTrue(close, "confirm: the window may close")
+        XCTAssertFalse(ws.isInWindow(731_204_118))
+        let deadline = Date().addingTimeInterval(4)
+        while engine.calls("remote_close").isEmpty, Date() < deadline { try await Task.sleep(nanoseconds: 20_000_000) }
+        XCTAssertEqual(engine.calls("remote_close").map { $0.object["session"] as? String }, [Fixtures.session], "the session ended, not docked")
+        XCTAssertNotEqual(ws.selected, .session(731_204_118), "it was not docked into its tab")
+    }
+
+    func testTheEndQuestionNamesTheDeviceOrItsRemoteId() async throws {
+        let (app, _) = try await viewingApp(openIn: .window)
+        let ws = app.workspace
+        XCTAssertEqual(ws.endQuestion(731_204_118), L("End session with %@?", ws.tab(731_204_118)!.name))
+        XCTAssertEqual(ws.endQuestion(123_456_789), L("End session with %@?", Format.remoteId(123_456_789)), "no tab: the Remote ID")
+    }
+
+    func testAWindowWithoutASessionClosesWithoutAsking() async throws {
+        let (app, _) = try await viewingApp(openIn: .window)
+        let ws = app.workspace
+        ws.confirmEnd = { _ in XCTFail("no question for a window without a session"); return false }
+        let closes = await ws.windowCloseRequested(123_456_789)
+        XCTAssertTrue(closes)
+    }
+
+    func testDockStillKeepsTheSessionAndOtherCloseWaysDockIt() async throws {
+        let (app, engine) = try await viewingApp(openIn: .window)
+        let ws = app.workspace
+        ws.openWindow = { _ in }
+        ws.closeWindow = { _ in }
+        ws.show(731_204_118)
+        ws.dock(731_204_118)
         XCTAssertFalse(ws.isInWindow(731_204_118))
         XCTAssertEqual(ws.selected, .session(731_204_118))
+        // The window went away without the red button (app quit, system): back into the tab, session kept.
+        ws.popOut(731_204_118)
+        ws.windowClosed(731_204_118)
+        XCTAssertEqual(ws.selected, .session(731_204_118))
+        XCTAssertTrue(engine.calls("remote_close").isEmpty)
     }
 
     func testSessionEndRemovesTabWindowAndNotice() async throws {

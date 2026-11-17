@@ -84,6 +84,10 @@ public final class WorkspaceModel: ObservableObject {
     public var focusWindow: (UInt32) -> Void = { _ in }
     public var closeWindow: (UInt32) -> Void = { _ in }
 
+    /// Asks "End session with <device>?" (set by the Mac view layer: an alert on the window). Answers whether to end it.
+    /// Until a view layer sets it, nothing is ended.
+    public var confirmEnd: (SessionTab) async -> Bool = { _ in false }
+
     /// The session window that is in front (set by the Mac app), nil when none is.
     @Published public private(set) var windowFocus: UInt32?
 
@@ -273,7 +277,26 @@ public final class WorkspaceModel: ObservableObject {
         if select, tabs.contains(where: { $0.peer == peer }) { selected = .session(peer) }
     }
 
-    /// The session window was closed by the person (red button): it goes back into its tab.
+    /// The text of the confirmation: the device as the tab shows it (name, else its Remote ID).
+    public func endQuestion(_ peer: UInt32) -> String {
+        L("End session with %@?", tab(peer).map { $0.name.isEmpty ? Format.remoteId(peer) : $0.name } ?? Format.remoteId(peer))
+    }
+
+    /// The red button (or Cmd-W) of a session window: asks first; on yes the session ends (this one only) and the
+    /// window may close (answer `true`); on no the window and the session stay (`false`). A window whose
+    /// session is already gone closes without a question. "Back into a tab" (`dock`) is the way to keep the session.
+    public func windowCloseRequested(_ peer: UInt32) async -> Bool {
+        guard let tab = tab(peer) else { return true }
+        guard await confirmEnd(tab) else { return false }
+        windows.remove(peer)
+        readyNotices.removeAll { $0 == peer }
+        if windowFocus == peer { windowFocus = nil }
+        end(peer)
+        return true
+    }
+
+    /// The session window went away by other means than the red button (the app quits, the window is closed by
+    /// the system): the session goes back into its tab.
     public func windowClosed(_ peer: UInt32) {
         guard windows.remove(peer) != nil else { return }
         if tabs.contains(where: { $0.peer == peer }) { selected = .session(peer) }
