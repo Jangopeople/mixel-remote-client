@@ -2364,6 +2364,8 @@ struct Peer {
     expires: Arc<AtomicU64>,
     relay_expires: u64,
     restart_pending: Option<std::time::Instant>,
+    /// How often the renewal request was sent for this attempt (the first send counts).
+    restart_tries: u8,
     rotated_at: std::time::Instant,
     started_at: std::time::Instant,
     local_consent: Option<bool>,
@@ -2546,6 +2548,53 @@ impl Peer {
     /// the running transport keeps sharing (the technician keeps seeing its pictures) until the
     /// renewed one takes over, and the person sees the same session (`ui`) with the same
     /// consent, grants and stop flags: both transports stop with the session.
+    /// What the renewal of this transport needs now (see `renewal_decision`).
+    fn renewal_step(&self, now: u64, live: bool) -> Renewal {
+        let relay_left = if self.relay_expires == 0 { None } else { Some(self.relay_expires.saturating_sub(now)) };
+        let step = renewal_decision(
+            live && !self.cancel.load(Ordering::Acquire),
+            self.restart_pending.map(|sent| sent.elapsed()),
+            self.restart_tries,
+            self.rotated_at.elapsed(),
+            relay_left,
+            renewal_shortened(),
+        );
+        #[cfg(feature = "qa-session")]
+        if step == Renewal::Wait && self.restart_pending.is_none() && self.rotated_at.elapsed() >= Duration::from_secs(31) && (relay_left.is_some_and(|left| left <= 90) || renewal_shortened().is_some_and(|after| self.rotated_at.elapsed() >= after)) {
+            // Lab builds: a renewal that is due but held back says why (once in a while).
+            use std::sync::atomic::AtomicU64 as Last;
+            static LAST: Last = Last::new(0);
+            if now >= LAST.load(Ordering::Relaxed) + 10 {
+                LAST.store(now, Ordering::Relaxed);
+                eprintln!("QA renewal due but held back: live={live} cancel={} pending={:?} tries={} signals={} relay_left={relay_left:?} since_rotation={:?} at clock {}", self.cancel.load(Ordering::Acquire), self.restart_pending.map(|sent| sent.elapsed()), self.restart_tries, self.signals.is_some(), self.rotated_at.elapsed(), crate::remote_control::qa_wall_clock());
+            }
+        }
+        step
+    }
+    /// Books the step; true when the request is to be sent now.
+    fn apply_renewal(&mut self, step: Renewal) -> bool {
+        match step {
+            Renewal::Send | Renewal::Retry => {
+                #[cfg(feature = "qa-session")]
+                if step == Renewal::Retry {
+                    eprintln!("QA renewal request not answered after {:?}: asking again (try {}) at clock {}", self.restart_pending.map(|sent| sent.elapsed()), self.restart_tries + 1, crate::remote_control::qa_wall_clock());
+                }
+                self.restart_pending = Some(std::time::Instant::now());
+                self.restart_tries = self.restart_tries.saturating_add(1);
+                true
+            }
+            Renewal::GiveUp => {
+                // The old transport still runs: ask again from the start after the pause between renewals.
+                #[cfg(feature = "qa-session")]
+                eprintln!("QA renewal gave up after {} tries, will ask again at clock {}", self.restart_tries, crate::remote_control::qa_wall_clock());
+                self.restart_pending = None;
+                self.restart_tries = 0;
+                self.rotated_at = std::time::Instant::now();
+                false
+            }
+            Renewal::Wait | Renewal::Expired => false,
+        }
+    }
     fn begin_renewal(&mut self, session: Uuid) {
         let before = std::mem::take(&mut self.link);
         before.superseded.store(true, Ordering::Release);
@@ -2560,6 +2609,7 @@ impl Peer {
         self.nonce = None;
         self.relay_expires = 0;
         self.restart_pending = None;
+        self.restart_tries = 0;
         self.rotated_at = std::time::Instant::now();
         self.accepted_at = Some(std::time::Instant::now());
     }
@@ -2669,6 +2719,55 @@ struct Out {
     cancelled: bool,
 }
 /// The peer with this session id: the hosted one, or one of the technician's sessions.
+/// Seconds after which an unanswered renewal request is sent again, and how often.
+const RENEWAL_RETRY: Duration = Duration::from_secs(6);
+const RENEWAL_TRIES: u8 = 3;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Renewal {
+    Wait,
+    /// Send the first request.
+    Send,
+    /// The last request got no answer: send it again.
+    Retry,
+    /// Every try went unanswered but the old relay lease still runs: start over later.
+    GiveUp,
+    /// Unanswered and the old relay lease is over: the session cannot go on.
+    Expired,
+}
+
+/// Lab builds only: renew after this many seconds instead of shortly before the relay lease ends
+/// (environment `MIXEL_QA_RENEW_AFTER`), to test chains of renewals quickly.
+fn renewal_shortened() -> Option<Duration> {
+    #[cfg(feature = "qa-session")]
+    {
+        static VALUE: std::sync::OnceLock<Option<Duration>> = std::sync::OnceLock::new();
+        *VALUE.get_or_init(|| std::env::var("MIXEL_QA_RENEW_AFTER").ok().and_then(|text| text.parse::<u64>().ok()).filter(|seconds| *seconds >= 31)  .map(Duration::from_secs))
+    }
+    #[cfg(not(feature = "qa-session"))]
+    None
+}
+
+/// When the controller side asks for new relay credentials and transport keys. `relay_left` is the time
+/// the relay lease of the running transport has left (`None` while unknown, which counts as due). A request that the broker
+/// does not answer within a few seconds is sent again, well before the lease ends.
+fn renewal_decision(live: bool, pending: Option<Duration>, tries: u8, since_rotation: Duration, relay_left: Option<u64>, shortened: Option<Duration>) -> Renewal {
+    if !live {
+        return Renewal::Wait;
+    }
+    if let Some(waited) = pending {
+        if waited < RENEWAL_RETRY {
+            return Renewal::Wait;
+        }
+        if tries < RENEWAL_TRIES {
+            return Renewal::Retry;
+        }
+        return if relay_left.is_none_or(|left| left > 5) { Renewal::GiveUp } else { Renewal::Expired };
+    }
+    let due = relay_left.is_none_or(|left| left <= 90) || since_rotation >= Duration::from_secs(720) || shortened.is_some_and(|after| since_rotation >= after);
+    if since_rotation >= Duration::from_secs(31) && due { Renewal::Send } else { Renewal::Wait }
+}
+
 fn find_peer<'a>(peer: &'a mut Option<Peer>, ctrl: &'a mut [Peer], id: Uuid) -> Option<&'a mut Peer> {
     if peer.as_ref().is_some_and(|active| active.id == id || active.ui == id) {
         return peer.as_mut();
@@ -3276,29 +3375,37 @@ async fn run(
                             state.change(generation,|status|{status.phase="ready".into();status.session=None;status.peer=None;status.requester=None;status.message="The local invitation or acceptance deadline expired; request a fresh connection".into();}).await;
                             continue;
                         }
-                        if active.started_at.elapsed()>=Duration::from_secs(8*3600) || active.restart_pending.is_some_and(|start|start.elapsed()>=Duration::from_secs(20)){return Err("The accepted connection lifetime or renewal deadline expired".into());}
-                        if !active.host && active.signals.is_some() && !active.cancel.load(Ordering::Acquire) && active.restart_pending.is_none() && active.rotated_at.elapsed()>=Duration::from_secs(31) && (active.relay_expires.saturating_sub(now)<=90 || active.rotated_at.elapsed()>=Duration::from_secs(720)) && state.status().await.phase=="active"{
-                            send(&mut socket,ClientMessage::Restart{session:active.id}).await?;active.restart_pending=Some(std::time::Instant::now());
-                            state.change(generation,|status|status.message="Renewing relay credentials and transport keys for the accepted peer".into()).await;
+                        if active.started_at.elapsed()>=Duration::from_secs(8*3600){return Err("The accepted connection lifetime expired".into());}
+                        if !active.host{
+                            let live=active.signals.is_some() && state.status().await.phase=="active";
+                            let step=active.renewal_step(now,live);
+                            if step==Renewal::Expired{return Err("The accepted connection renewal deadline expired".into());}
+                            if active.apply_renewal(step){
+                                send(&mut socket,ClientMessage::Restart{session:active.id}).await?;
+                                state.change(generation,|status|status.message="Renewing relay credentials and transport keys for the accepted peer".into()).await;
+                            }
                         }
                     }
                     if !ctrl.is_empty() {
                         // Each technician session is looked after on its own: one that expires or fails ends
                         // alone, the others keep running.
                         let mut ended:Vec<(Uuid,String)>=Vec::new();
-                        let mut renew:Vec<Uuid>=Vec::new();
+                        let mut renew:Vec<(Uuid,Renewal)>=Vec::new();
                         for active in ctrl.iter() {
                             if active.close_sent || resuming.iter().any(|(id,_)|*id==active.id) {continue;}
                             if active.cancel.load(Ordering::Acquire) && active.signals.is_none() {ended.push((active.id,"Invitation stopped locally; ready for a new connection".into()));continue;}
                             let invitation_expired=active.signals.is_none() && ((active.local_consent.is_none() && active.accepted_at.is_none() && active.started_at.elapsed()>=core_protocol::session::CONSENT_LIFETIME) || active.accepted_at.is_some_and(|accepted|accepted.elapsed()>=core_protocol::session::NEGOTIATION_LIFETIME));
                             if invitation_expired {ended.push((active.id,"The local invitation or acceptance deadline expired; request a fresh connection".into()));continue;}
-                            if active.started_at.elapsed()>=Duration::from_secs(8*3600) || active.restart_pending.is_some_and(|start|start.elapsed()>=Duration::from_secs(20)) {ended.push((active.id,"The accepted connection lifetime or renewal deadline expired".into()));continue;}
-                            if active.signals.is_some() && !active.cancel.load(Ordering::Acquire) && active.restart_pending.is_none() && active.rotated_at.elapsed()>=Duration::from_secs(31) && (active.relay_expires.saturating_sub(now)<=90 || active.rotated_at.elapsed()>=Duration::from_secs(720)) {renew.push(active.id);}
+                            if active.started_at.elapsed()>=Duration::from_secs(8*3600) {ended.push((active.id,"The accepted connection lifetime expired".into()));continue;}
+                            let live=active.signals.is_some() && state.slot_active(active.ui).await;
+                            let step=active.renewal_step(now,live);
+                            if step==Renewal::Expired {ended.push((active.id,"The accepted connection renewal deadline expired".into()));continue;}
+                            if matches!(step,Renewal::Send|Renewal::Retry|Renewal::GiveUp) {renew.push((active.id,step));}
                         }
-                        for session in renew {
-                            if state.slot_active(session).await && let Some(active)=ctrl.iter_mut().find(|active|active.id==session) {
-                                send(&mut socket,ClientMessage::Restart{session}).await?;active.restart_pending=Some(std::time::Instant::now());
-                                state.slot_change(generation,session,|view|view.message="Renewing relay credentials and transport keys for the accepted peer".into()).await;
+                        for (session,step) in renew {
+                            if let Some(active)=ctrl.iter_mut().find(|active|active.id==session) && active.apply_renewal(step) {
+                                send(&mut socket,ClientMessage::Restart{session}).await?;
+                                state.slot_change(generation,active.ui,|view|view.message="Renewing relay credentials and transport keys for the accepted peer".into()).await;
                             }
                         }
                         for (session,message) in ended {
@@ -3639,7 +3746,7 @@ async fn run(
                     }
                     let message=if let ServerMessage::Restarted{previous,session,nonce,controller_identity,host_identity}=message{
                         let Some(active)=find_peer(&mut peer,&mut ctrl,previous).filter(|peer|peer.signals.is_some() && !peer.cancel.load(Ordering::Acquire)) else{send(&mut socket,ClientMessage::Close{session}).await?;continue;};
-                        let running=if active.host{state.status().await.phase=="active"}else{state.slot_active(previous).await};
+                        let running=if active.host{state.status().await.phase=="active"}else{state.slot_active(active.ui).await};
                         if !running || active.started_at.elapsed()>=Duration::from_secs(8*3600){send(&mut socket,ClientMessage::Close{session}).await?;continue;}
                         // A transport replacement is confined to the already
                         // accepted device/account/source and existing grants.
@@ -3708,7 +3815,7 @@ async fn run(
                                 continue;
                             }
                             let Out{slot,host:remote,key,joined:joined_request,..}=waiting;
-                            let started=Peer{id:session,ui:session,link:Default::default(),handover:None,remote,host:false,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:None,expires:Arc::new(AtomicU64::new(0)),relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:joined_request,switched:false,reversed:false};
+                            let started=Peer{id:session,ui:session,link:Default::default(),handover:None,remote,host:false,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:None,expires:Arc::new(AtomicU64::new(0)),relay_expires:0,restart_pending:None,restart_tries:0,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:joined_request,switched:false,reversed:false};
                             if started.track(state,generation,slot).await.is_err() {
                                 // Ended meanwhile: close it at the connection service, the others go on.
                                 remember_gone(&mut recent,session);
@@ -3730,7 +3837,7 @@ async fn run(
                             #[cfg(not(target_os = "linux"))]
                             let Some((key,ticket,source,confirm,primary_control))=checked else {send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;continue;};
                             let expires=Arc::new(AtomicU64::new(ticket.expires_at));
-                            let mut colleague=Peer{id:session,ui:session,link:Default::default(),handover:None,remote:requester_connection,host:true,key,source,#[cfg(target_os = "linux")] portal,confirm,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:true,switched:false,reversed:false};
+                            let mut colleague=Peer{id:session,ui:session,link:Default::default(),handover:None,remote:requester_connection,host:true,key,source,#[cfg(target_os = "linux")] portal,confirm,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,restart_tries:0,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:true,switched:false,reversed:false};
                             if unattended && !unattended_join_allowed(&state.status().await) {
                                 send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;continue;
                             }
@@ -3759,7 +3866,7 @@ async fn run(
                             let memory=memory.ok_or("Switch state unavailable")?;
                             let pressed=from.by==enrolled.connection_id && switch_pressed.take().is_some_and(|(previous,_)|previous==from.previous);
                             let expires=Arc::new(AtomicU64::new(ticket.expires_at));
-                            peer=Some(Peer{id:session,ui:session,link:Default::default(),handover:None,remote:requester_connection,host:true,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:false,switched:true,reversed:!memory.reversed});
+                            peer=Some(Peer{id:session,ui:session,link:Default::default(),handover:None,remote:requester_connection,host:true,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,restart_tries:0,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:false,switched:true,reversed:!memory.reversed});
                             peer.as_ref().ok_or("Invitation state unavailable")?.track(state,generation,session).await?;
                             state.change(generation,|status|{status.phase="incoming".into();status.message="The other side asks to switch sides: they would see this screen. Accept or Reject".into();status.peer=Some(requester_connection);status.requester=None;status.sharing=true;status.unattended_session=false;}).await;
                             // Switching back to the computer that was helped restores what its user allowed;
@@ -3780,7 +3887,7 @@ async fn run(
                             switch_pressed=None;
                             let expires=Arc::new(AtomicU64::new(memory.identity.expires_at));
                             let slot=state.slot_begin(generation,host).await?;
-                            ctrl.push(Peer{id:session,ui:session,link:Default::default(),handover:None,remote:host,host:false,key:memory.key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(memory.identity.clone()),expires,relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:false,switched:true,reversed:!memory.reversed});
+                            ctrl.push(Peer{id:session,ui:session,link:Default::default(),handover:None,remote:host,host:false,key:memory.key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(memory.identity.clone()),expires,relay_expires:0,restart_pending:None,restart_tries:0,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:false,switched:true,reversed:!memory.reversed});
                             ctrl.last().ok_or("Invitation state unavailable")?.track(state,generation,slot).await?;
                             state.slot_change(generation,slot,|view|{view.phase="outgoing".into();view.message="Switching sides: waiting for the other computer's picture".into();}).await;
                         },
@@ -3825,7 +3932,7 @@ async fn run(
                                 Some(config)
                             }else{None};
                             let expires=Arc::new(AtomicU64::new(ticket.expires_at));
-                            peer=Some(Peer{id:session,ui:session,link:Default::default(),handover:None,remote:requester_connection,host:true,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:false,switched:false,reversed:false});
+                            peer=Some(Peer{id:session,ui:session,link:Default::default(),handover:None,remote:requester_connection,host:true,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,restart_tries:0,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:false,switched:false,reversed:false});
                             peer.as_ref().ok_or("Invitation state unavailable")?.track(state,generation,session).await?;
                             state.change(generation,|status|{status.phase="incoming".into();status.message="Incoming request: choose a source and Accept or Reject".into();status.peer=Some(requester_connection);status.requester=Some(requester);status.sharing=true;status.unattended_session=is_unattended;}).await;
                             if let Some(config)=auto {
@@ -4302,7 +4409,7 @@ mod consent_tests {
         assert!(peer.cancel.load(Ordering::Acquire));
         assert!(!peer.take_close());
     }
-    fn invitation() -> Peer {
+    pub(super) fn invitation() -> Peer {
         let now = std::time::Instant::now();
         Peer {
             id: Uuid::from_u128(1),
@@ -4331,6 +4438,7 @@ mod consent_tests {
             expires: Arc::new(AtomicU64::new(900)),
             relay_expires: 0,
             restart_pending: None,
+            restart_tries: 0,
             rotated_at: now,
             started_at: now,
             local_consent: None,
@@ -4340,6 +4448,48 @@ mod consent_tests {
             switched: false,
             reversed: false,
         }
+    }
+    #[test]
+    fn a_renewal_request_without_an_answer_is_sent_again_before_the_lease_ends() {
+        let s = Duration::from_secs;
+        assert_eq!(renewal_decision(true, None, 0, s(100), Some(500), None), Renewal::Wait, "not due while the lease has time");
+        assert_eq!(renewal_decision(true, None, 0, s(10), Some(30), None), Renewal::Wait, "not within the pause between renewals");
+        assert_eq!(renewal_decision(true, None, 0, s(510), Some(90), None), Renewal::Send);
+        assert_eq!(renewal_decision(true, Some(s(3)), 1, s(520), Some(80), None), Renewal::Wait);
+        assert_eq!(renewal_decision(true, Some(s(6)), 1, s(520), Some(80), None), Renewal::Retry);
+        assert_eq!(renewal_decision(true, Some(s(6)), 2, s(520), Some(72), None), Renewal::Retry);
+        assert_eq!(renewal_decision(true, Some(s(6)), 3, s(540), Some(60), None), Renewal::GiveUp, "the lease still runs: start over later");
+        assert_eq!(renewal_decision(true, Some(s(6)), 3, s(600), Some(0), None), Renewal::Expired);
+        assert_eq!(renewal_decision(false, None, 0, s(900), Some(0), None), Renewal::Wait, "not live: never asks");
+        assert_eq!(renewal_decision(true, None, 0, s(60), Some(500), Some(s(60))), Renewal::Send, "lab shortening");
+    }
+    #[test]
+    fn the_renewal_bookkeeping_counts_tries_and_starts_over_after_giving_up() {
+        let mut peer = invitation();
+        peer.host = false;
+        peer.signals = Some(mpsc::channel(1).0);
+        peer.relay_expires = 1_000;
+        peer.rotated_at = std::time::Instant::now() - Duration::from_secs(600);
+        // 920 s clock: 80 s left.
+        assert_eq!(peer.renewal_step(920, true), Renewal::Send);
+        assert!(peer.apply_renewal(Renewal::Send));
+        assert_eq!((peer.restart_tries, peer.restart_pending.is_some()), (1, true));
+        assert_eq!(peer.renewal_step(921, true), Renewal::Wait);
+        peer.restart_pending = Some(std::time::Instant::now() - Duration::from_secs(7));
+        assert_eq!(peer.renewal_step(930, true), Renewal::Retry);
+        assert!(peer.apply_renewal(Renewal::Retry));
+        peer.restart_pending = Some(std::time::Instant::now() - Duration::from_secs(7));
+        assert!(peer.apply_renewal(Renewal::Retry));
+        assert_eq!(peer.restart_tries, 3);
+        peer.restart_pending = Some(std::time::Instant::now() - Duration::from_secs(7));
+        assert_eq!(peer.renewal_step(945, true), Renewal::GiveUp);
+        assert!(!peer.apply_renewal(Renewal::GiveUp));
+        assert_eq!((peer.restart_tries, peer.restart_pending.is_none()), (0, true));
+        assert_eq!(peer.renewal_step(946, true), Renewal::Wait, "waits the pause between renewals again");
+        // An answer (the broker's Restarted) resets the count.
+        peer.restart_tries = 2;
+        peer.begin_renewal(Uuid::from_u128(9));
+        assert_eq!(peer.restart_tries, 0);
     }
     #[test]
     fn a_renewal_keeps_the_running_transport_and_the_session_until_the_new_one_takes_over() {
@@ -5137,6 +5287,30 @@ mod multi_session_tests {
     }
 
     #[tokio::test]
+    async fn a_session_renewed_once_is_still_found_by_the_renewal_check_and_renews_again() {
+        // Regression (long-line hold): after the first renewal the peer's own id is the renewed one, but the
+        // technician session is known under the id its first transport had (`ui`). Asking about the new id
+        // found no session, so the second renewal never started and the lease ran out.
+        let (remote, mut commands) = registered().await;
+        let first = open(&remote, &mut commands, 200_000_001).await;
+        let mut peer = super::consent_tests::invitation();
+        peer.host = false;
+        peer.ui = first.session;
+        peer.id = first.session;
+        peer.signals = Some(mpsc::channel(1).0);
+        peer.relay_expires = 1_000;
+        peer.begin_renewal(Uuid::new_v4());
+        assert_ne!(peer.id, peer.ui);
+        assert!(!remote.slot_active(peer.id).await, "the renewed id is not the slot's key");
+        assert!(remote.slot_active(peer.ui).await);
+        peer.rotated_at = std::time::Instant::now() - Duration::from_secs(520);
+        peer.relay_expires = 1_000;
+        peer.signals = Some(mpsc::channel(1).0);
+        let live = peer.signals.is_some() && remote.slot_active(peer.ui).await;
+        assert_eq!(peer.renewal_step(920, live), Renewal::Send, "a second renewal is due and goes out");
+    }
+
+    #[tokio::test]
     async fn the_single_session_form_still_works() {
         let (remote, mut commands) = registered().await;
         let mut only = open(&remote, &mut commands, 200_000_001).await;
@@ -5215,6 +5389,7 @@ mod per_session_recovery_tests {
             expires: Arc::new(AtomicU64::new(900)),
             relay_expires: 0,
             restart_pending: None,
+            restart_tries: 0,
             rotated_at: now,
             started_at: now,
             local_consent: None,
