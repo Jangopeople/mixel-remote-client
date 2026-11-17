@@ -7,6 +7,7 @@ pub mod native_commands;
 /// LAB builds only: the live session check shared by every app.
 #[cfg(all(feature = "qa-session", any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "android")))]
 pub mod qa_live;
+pub mod qa_timeline;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod session_platform;
 /// iPhone, iPad and Android phones and tablets: controller only.

@@ -218,6 +218,7 @@ async fn run(config: &mut Config) -> Result<(), String> {
         NativeTransport::new("0.0.0.0:0".into(), servers).await
     };
     let mut transport = transport.map_err(|_| "Cannot create the native WebRTC transport")?;
+    crate::qa_timeline::mark(if strict_relay { "transport created (relay only)" } else { "transport created (direct and relay)" });
     let result = async {
         let (mut consent, channel, sender, size, mut control) =
             negotiate(config, &mut transport).await?;
@@ -424,6 +425,7 @@ async fn negotiate(
             )
             .await
             .map_err(|error| error.to_string())?;
+        crate::qa_timeline::mark(&format!("offer ready, own candidates: {}", crate::qa_timeline::candidate_summary(&offer.sdp)));
         let proof = config.identity.handshake(
             context.clone(),
             role,
@@ -509,11 +511,12 @@ async fn negotiate(
                     .await
                     .unwrap_or_default();
                     displays.truncate(16);
+                    crate::qa_timeline::mark(&format!("displays listed: {}", displays.len()));
                 }
                 transport
                     .peer
                     .set_remote_description(
-                        NativeSessionDescription::offer(sdp).map_err(|_| "Invalid remote offer")?,
+                        NativeSessionDescription::offer(sdp.clone()).map_err(|_| "Invalid remote offer")?,
                     )
                     .await
                     .map_err(|_| "Remote offer was rejected")?;
@@ -528,6 +531,7 @@ async fn negotiate(
                     )
                     .await
                     .map_err(|error| error.to_string())?;
+                crate::qa_timeline::mark(&format!("answer ready, own candidates: {}; the technician's: {}", crate::qa_timeline::candidate_summary(&answer.sdp), crate::qa_timeline::candidate_summary(&sdp)));
                 let proof = config.identity.handshake(
                     context.clone(),
                     role,
@@ -616,11 +620,12 @@ async fn negotiate(
                 transport
                     .peer
                     .set_remote_description(
-                        NativeSessionDescription::answer(sdp)
+                        NativeSessionDescription::answer(sdp.clone())
                             .map_err(|_| "Invalid remote answer")?,
                     )
                     .await
                     .map_err(|_| "Remote answer was rejected")?;
+                crate::qa_timeline::mark(&format!("answer applied, the host's candidates: {}", crate::qa_timeline::candidate_summary(&sdp)));
                 remote_description = true;
             }
             Signal::Ice(text) => {
@@ -645,7 +650,10 @@ async fn negotiate(
         }
         pump_ice(config, transport).await?;
         match tokio::time::timeout(Duration::from_millis(5), channel.poll()).await {
-            Ok(Some(NativeDataChannelEvent::OnOpen)) => break,
+            Ok(Some(NativeDataChannelEvent::OnOpen)) => {
+                crate::qa_timeline::mark("control channel open (ICE and DTLS done)");
+                break;
+            }
             Ok(
                 None
                 | Some(
@@ -689,6 +697,7 @@ async fn negotiate(
         },
     )
     .await?;
+    crate::qa_timeline::mark("session authenticated (identities and certificates checked)");
     // Both sides: what the other app supports (colleagues joining, switching sides).
     config.state.set_peer_features(config.generation, config.session, peer_features.clone()).await;
     if !config.host {
@@ -1179,6 +1188,10 @@ async fn host_media(
             }
             mirror.send(&encoded.annex_b, duration);
             sent += 1;
+            #[cfg(feature = "qa-session")]
+            if sent == 1 {
+                crate::qa_timeline::mark(&format!("first picture sent ({bytes} bytes, capture ready after {} ms)", capture_ready.as_millis()));
+            }
             // Lab builds only: how long the host took to start (capture, first picture).
             #[cfg(feature = "qa-session")]
             if sent == 1
@@ -1358,7 +1371,10 @@ async fn viewer_media(
         match tokio::time::timeout(Duration::from_millis(10), transport.incoming_tracks.recv())
             .await
         {
-            Ok(Some(track)) => break track,
+            Ok(Some(track)) => {
+                crate::qa_timeline::mark("video track open");
+                break track;
+            }
             Ok(None) => return Err("Remote video transport closed".into()),
             Err(_) => {}
         }
@@ -1602,6 +1618,7 @@ async fn viewer_media(
                         last = Instant::now();
                         #[cfg(feature = "qa-session")]
                         if received == 1 {
+                            crate::qa_timeline::mark("first picture decoded");
                             eprintln!("QA first picture after {} ms: {} packets, {qa_gaps} gaps ({qa_lost} numbers missing), {} requests for a complete picture", qa_started.elapsed().as_millis(), qa_rtp.0, qa_rtp.3);
                         }
                         #[cfg(feature = "qa-session")]

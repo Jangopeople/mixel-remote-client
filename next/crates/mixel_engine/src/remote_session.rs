@@ -2349,16 +2349,19 @@ async fn run(
                 Some(command)=commands.recv()=>match command {
                     Command::Request(host,code,unattended)=>{
                         if peer.is_some() || outgoing.is_some(){continue;}
+                        crate::qa_timeline::begin(if unattended {"connect asked (unattended)"} else if code.is_some() {"connect asked (password)"} else {"connect asked (attended)"});
                         let Some(credential) = credential.as_ref() else { return Err("A startup host cannot request sessions".into()); };
                         let cached = peer_keys.get(&host).and_then(|(key, at)| (at.elapsed() < Duration::from_secs(300)).then_some(*key));
+                        let qa_cached = cached.is_some();
                         let key=if let Some(key)=cached{key}else{match credential.ism.peer_key_scoped(&credential.token,credential.principal.is_personal(),host).await{Ok(key)=>{peer_keys.insert(host,(key,std::time::Instant::now()));key},Err(_)=>{state.change(generation,|status|{status.phase="ready".into();status.peer=None;status.message="This account could not verify that device ID. Check that it is enrolled in Mixel Remote and that your company has access.".into();}).await;continue;}}};
+                        crate::qa_timeline::mark(if qa_cached {"device key from the cache"} else {"device key fetched from the account service"});
                         if cancel.load(Ordering::Acquire){break;}
                         let request=match code {
                             Some(code)=>ClientMessage::RequestWithCode{host,code},
                             None if unattended=>ClientMessage::RequestUnattended{host},
                             None=>ClientMessage::Request{host},
                         };
-                        send(&mut socket,request).await?;outgoing=Some((host,key,unattended,false));
+                        send(&mut socket,request).await?;outgoing=Some((host,key,unattended,false));crate::qa_timeline::mark("request sent to the connection service");
                         state.change(generation,|status|{status.phase="outgoing".into();status.message="Waiting for the remote host to Accept".into();status.peer=Some(host);status.sharing=false;}).await;
                     },
                     Command::ConfigureUnattended{enabled}=>{
@@ -2691,6 +2694,7 @@ async fn run(
                             state.change(generation,|status|status.invite_message=Some(if delivered==0{"Your colleague is not online in Mixel Remote right now".into()}else{"Invitation sent: your colleague joins when they accept and the person at the computer allows it".into()})).await;
                         },
                         ServerMessage::Consent{session,requester_connection,requester,requester_identity,unattended,..}=>{
+                            crate::qa_timeline::begin(if unattended {"request came in (unattended)"} else {"request came in"});
                             if crate::service_config::controller_only() || peer.is_some() || outgoing.is_some(){send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;continue;}
                             let ticket=requester_identity.ok_or("The invitation has no signed requester identity")?;
                             let key=peer_identity(&ticket,requester_connection,&principal,true,&roots)?;
@@ -2733,6 +2737,7 @@ async fn run(
                             }
                         },
                         ServerMessage::Accepted{session,nonce,controller_identity,host_identity}=>{
+                            crate::qa_timeline::mark("accepted (connection service)");
                             let active=peer.as_mut().filter(|peer|peer.id==session && peer.signals.is_none()).ok_or("Unexpected accepted invitation")?;
                             if active.cancel.load(Ordering::Acquire){if active.take_close(){send(&mut socket,ClientMessage::Close{session}).await?;}continue;}
                             if !active.can_negotiate(std::time::Instant::now()){return Err("A broker response cannot grant or extend local sharing consent".into());}
@@ -2807,6 +2812,7 @@ async fn run(
                                 // A computer with unattended access accepts this. One without it
                                 // still gets the usual Accept prompt, instead of a hard failure.
                                 if was_unattended && !joined && code==ErrorCode::Unavailable {
+                                    crate::qa_timeline::mark("unattended request refused (Unavailable): asking again as an attended request");
                                     send(&mut socket,ClientMessage::Request{host}).await?;
                                     outgoing=Some((host,key,false,false));
                                     state.change(generation,|status|{status.phase="outgoing".into();status.peer=Some(host);status.message="Waiting for the remote host to Accept".into();}).await;

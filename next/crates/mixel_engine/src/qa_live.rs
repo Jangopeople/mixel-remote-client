@@ -14,6 +14,8 @@
 //! must survive; then pictures, input, the clipboard both ways (`clip-pushed.txt` out,
 //! `clip-received.txt` and `clip-host.txt` in: the lab script reads and sets the host's clipboard),
 //! chat, drawing, and the session is ended. Finally this device removes itself.
+//! With `load-wanted.txt` in the folder the technician also times input, clipboard and chat while
+//! the host's picture keeps moving (`load-on.txt` in: the lab script moves it; `load-done.txt` out).
 //!
 //! `qa_live_host` is the other side on a computer that can be helped (never on a phone): it adds
 //! this computer, goes online, writes `host-id.txt`, and when the technician asks it allows the
@@ -347,6 +349,18 @@ async fn session(check: &mut Check<'_>, suffix: &str, tenant: &str, mine: u64) {
         }
         check.check("chat answer from the host arrives", seen, "");
     }
+    // 5b. Only when the lab script asks for it (`load-wanted.txt`): the same round trips while the
+    // host's picture keeps moving. The lab script starts a moving picture on the host's screen and
+    // says so in `load-on.txt`; `load-done.txt` tells it to stop.
+    if check.folder.join("load-wanted.txt").exists() {
+        check.print("WAITING for the moving picture on the host (load-on.txt)");
+        if check.file("load-on.txt", 90).await.is_some() {
+            under_load(check, id, &text, control, active["clipboard"] == true).await;
+        } else {
+            check.check("moving picture on the host", false, "no load-on.txt");
+        }
+        let _ = std::fs::write(check.folder.join("load-done.txt"), "1");
+    }
     // 6. Drawing on the host's screen.
     if active["peer_features"].as_array().is_some_and(|features| features.iter().any(|feature| feature == "draw")) {
         let stroke = json!({ "kind": "stroke", "id": 1, "tool": "arrow", "color": 0, "width": 2, "points": [[12000, 12000], [30000, 26000]], "done": true });
@@ -397,6 +411,90 @@ async fn session(check: &mut Check<'_>, suffix: &str, tenant: &str, mine: u64) {
     }
     check.check("back to ready after the session", check.wait(20, |status| status["phase"] == "ready").await.is_some(), check.status().await["message"].clone());
     check.print(&format!("shown after the session: {}", check.status().await["message"]));
+}
+
+/// A round trip slower than this while the picture moves is the fault of 14 Nov 2026 (the control
+/// channel waiting behind the pictures: 1.8 to 4.5 s); a healthy one takes a relay round trip.
+const PROMPT: Duration = Duration::from_millis(1500);
+
+/// Smallest, middle and largest of the times (0, 0, 0 when there is none).
+fn spread(times: &mut [u128]) -> (u128, u128, u128) {
+    times.sort_unstable();
+    match (times.first(), times.get(times.len() / 2), times.last()) {
+        (Some(least), Some(middle), Some(most)) => (*least, *middle, *most),
+        _ => (0, 0, 0),
+    }
+}
+
+/// Input, clipboard and chat while the host's picture keeps moving: each is timed from asking to
+/// the host's answer (chat: to the message being on its way), and the pictures taken meanwhile
+/// are counted. All of them must be confirmed, each within [`PROMPT`].
+async fn under_load(check: &mut Check<'_>, id: uuid::Uuid, session: &str, control: bool, clipboard: bool) {
+    let started = Instant::now();
+    let mut pictures = 0u32;
+    let (mut inputs, mut pushes, mut pulls, mut chats) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (mut asked, mut failed) = (0u32, Vec::new());
+    // Twelve rounds, one every half second or slower: five pointer moves, then in turn a clipboard
+    // push, a clipboard pull or a chat message.
+    for round in 0..12u16 {
+        let turn = Instant::now();
+        for step in 0..5u16 {
+            while check.picture(id).await {
+                pictures += 1;
+            }
+            if !control {
+                break;
+            }
+            asked += 1;
+            let sent = Instant::now();
+            let result = check.input(id, InputEvent::Pointer { x: 15000 + round * 2500 + step * 300, y: 34000 }).await;
+            let took = sent.elapsed();
+            inputs.push(took.as_millis());
+            if result != Ok(true) || took > PROMPT {
+                failed.push(format!("input {asked}: {result:?} after {} ms", took.as_millis()));
+            }
+            tokio::time::sleep(Duration::from_millis(60)).await;
+        }
+        asked += 1;
+        let sent = Instant::now();
+        let (label, result, times) = match round % 3 {
+            0 if clipboard => {
+                let _ = session_platform::write_text(&format!("Mixel under load {round}"));
+                ("clipboard push", check.call("remote_clipboard", json!({ "session": session, "push": true })).await.map(|_| ()), &mut pushes)
+            }
+            1 if clipboard => ("clipboard get", check.call("remote_clipboard", json!({ "session": session, "push": false })).await.map(|_| ()), &mut pulls),
+            _ => ("chat", check.call("remote_chat_send", json!({ "session": session, "text": format!("Mixel under load {round}") })).await.map(|_| ()), &mut chats),
+        };
+        let took = sent.elapsed();
+        times.push(took.as_millis());
+        if result.is_err() || took > PROMPT {
+            failed.push(format!("{label} {asked}: {result:?} after {} ms", took.as_millis()));
+        }
+        tokio::time::sleep(Duration::from_millis(500).saturating_sub(turn.elapsed())).await;
+    }
+    while check.picture(id).await {
+        pictures += 1;
+    }
+    let seconds = started.elapsed().as_secs_f32();
+    let line = |name: &str, times: &mut Vec<u128>| {
+        let (least, middle, most) = spread(times);
+        format!("{name} {} times, {least} / {middle} / {most} ms", times.len())
+    };
+    check.print(&format!(
+        "while the picture moves ({pictures} pictures taken in {seconds:.1} s; least / middle / most): {}; {}; {}; {}",
+        line("input", &mut inputs),
+        line("clipboard push", &mut pushes),
+        line("clipboard get", &mut pulls),
+        line("chat", &mut chats)
+    ));
+    if !failed.is_empty() {
+        check.print(&format!("late or not confirmed while the picture moves: {}", failed.join("; ")));
+    }
+    check.check(
+        &format!("input, clipboard and chat stay prompt while the picture moves ({} of {asked} within {} ms)", asked as usize - failed.len(), PROMPT.as_millis()),
+        failed.is_empty(),
+        "",
+    );
 }
 
 /// The computer being helped; see the module text. `folder/live.txt` has every line.
@@ -509,4 +607,17 @@ async fn hosted(check: &mut Check<'_>, suffix: &str, mine: u64) {
     let ended = check.wait(300, |status| status["phase"] != "active").await;
     check.check("the technician ends the session; this computer is ready again", ended.is_some() && check.wait(20, |status| status["phase"] == "ready").await.is_some(), check.status().await["message"].clone());
     check.print(&format!("shown after the session: {}", check.status().await["message"]));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::spread;
+
+    #[test]
+    fn least_middle_and_most_of_the_round_trip_times() {
+        assert_eq!(spread(&mut []), (0, 0, 0));
+        assert_eq!(spread(&mut [70]), (70, 70, 70));
+        assert_eq!(spread(&mut [300, 40, 90]), (40, 90, 300));
+        assert_eq!(spread(&mut [4500, 60, 1800, 45]), (45, 1800, 4500));
+    }
 }
