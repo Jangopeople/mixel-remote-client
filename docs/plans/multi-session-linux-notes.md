@@ -38,6 +38,15 @@ Build image `mixel-ui-linux-build` (Debian 12 arm64, Rust 1.99.1, GTK 4.8 / liba
   libadwaita warning. New scene `multi-session` (three sessions, one in its own window, one tab in front) was looked at.
 - The engine crate compiles on Linux (`cfg(target_os = "linux")` blocks included).
 
+## After the merge of feat/2.1.0 (0e3cbdd)
+- The engine now keeps `sessions[].session` equal to the stable id (make-before-break renewal); the app keys on `id` and treats
+  `session` only as "the transport's name", so nothing changed for it.
+- The one-time-password warning and the "Reconnecting…" line (`logic::session_warnings`) are kept. The one-time warning follows the
+  device (`State.password_peers`), not a single flag. `reconnecting` and `password_session` (time left) are top-level status
+  fields, so they describe the oldest session and show in every session view while it applies.
+- Fixed two lint failures that came with the merge (unused `use super::*` in `logic.rs` tests, `push_str(" ")` in `ui/settings.rs`).
+- Re-run: `cargo test -p mixel_remote_linux` 71 passed, 0 failed, 1 ignored; `cargo clippy -p mixel_remote_linux --tests -- -D warnings` clean.
+
 ## Not verified
 - No live session with two or more real hosts (no lab host was used); the engine's own tests cover that side.
 - Window activation is judged from GTK's `is-active`; Xvfb without a window manager does not give real focus changes, so the

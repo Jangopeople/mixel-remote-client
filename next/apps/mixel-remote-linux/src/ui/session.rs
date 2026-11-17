@@ -522,8 +522,9 @@ impl SessionView {
 
     fn render_warning(&self, state: &State) {
         let extra = crate::logic::session_warnings(&state.remote);
-        let on = (state.session.password_session || !extra.is_empty()) && (state.remote.viewing() || state.remote.reconnecting);
-        let key = format!("{on}|{}", extra.join("|"));
+        let one_time = state.remote.peer.is_some_and(|peer| state.password_peers.contains(&peer));
+        let on = (one_time || !extra.is_empty()) && (state.remote.viewing() || state.remote.reconnecting);
+        let key = format!("{on}|{one_time}|{}", extra.join("|"));
         if self.warn.widget_name() == key.as_str() && self.warn.first_child().is_some() == on {
             return;
         }
@@ -537,7 +538,7 @@ impl SessionView {
                 text.push_str(line);
                 text.push('\n');
             }
-            if state.session.password_session {
+            if one_time {
                 text.push_str(&t("This session was opened with a one-time password. Continue only if the person at the other computer gave it to you; either side can end it at any time."));
             }
             let text = label(text.trim_end());

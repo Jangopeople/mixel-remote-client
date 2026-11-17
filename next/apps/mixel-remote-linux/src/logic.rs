@@ -778,8 +778,6 @@ mod tests {
         assert_eq!(source.matches("set_cursor_from_name").count(), 1);
     }
 
-    use super::*;
-
     fn remote(phase: &str) -> RemoteStatus {
         RemoteStatus { phase: phase.into(), ..RemoteStatus::offline() }
     }

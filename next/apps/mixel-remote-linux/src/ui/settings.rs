@@ -205,7 +205,7 @@ impl SettingsPage {
         if let Some(update) = &settings.update {
             let mut subtitle = tf("Version %@ is available.", &[&update.version]);
             if update.waits_for_session {
-                subtitle.push_str(" ");
+                subtitle.push(' ');
                 subtitle.push_str(&t("Update ready, installs after this session"));
             }
             row.set_subtitle(&subtitle);
