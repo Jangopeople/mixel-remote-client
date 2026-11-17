@@ -122,6 +122,41 @@ public sealed class ConsoleTests
     }
 
     [TestMethod]
+    public async Task Who_may_connect_lists_the_members_with_their_grants_and_sets_them()
+    {
+        var (engine, app) = await Company();
+        var device = app.Devices.AllDevices.Single(item => item.Name == "Reception PC");
+        var marco = "22222222-2222-4222-8222-222222222222";
+        engine.Reply("remote_admin_unattended_grants", $$"""[{"user_id":"{{marco}}","name":"Marco Rossi","role":"technician","source":"grant","granted_at":"2026-11-17T09:00:00Z"},{"user_id":"{{DemoFixtures.Profile}}","name":"Anna Muster","role":"owner","source":"company_setting"}]""");
+        var rows = await app.Devices.UnattendedWho(device);
+        Assert.IsNotNull(rows);
+        Assert.AreEqual(2, rows.Count);
+        Assert.IsTrue(rows.Single(row => row.UserId == marco).Granted);
+        Assert.IsFalse(rows.Single(row => row.Name == "Anna Muster").Granted);
+        Assert.IsTrue(rows.Single(row => row.Name == "Anna Muster").Automatic);
+        engine.Reply("remote_admin_set_unattended_grant", "true");
+        Assert.IsTrue(await app.Devices.SetUnattendedGrant(device, marco, false));
+        var call = engine.CallsOf("remote_admin_set_unattended_grant").Single().Object;
+        Assert.AreEqual(marco, call["user"]!.GetValue<string>());
+        Assert.IsFalse(call["granted"]!.GetValue<bool>());
+        Assert.AreEqual("d1000000-0000-4000-8000-000000000001", call["device"]!.GetValue<string>());
+        engine.Fail("remote_admin_set_unattended_grant", """{"status":400,"hint":"invalid_user","message":"Not a member"}""");
+        Assert.IsFalse(await app.Devices.SetUnattendedGrant(device, "x", true));
+        Assert.AreEqual("This person cannot be given access to this computer.", app.Devices.Error);
+        engine.Fail("remote_admin_unattended_grants", """{"status":400,"hint":"not_saas","message":"console"}""");
+        Assert.IsNull(await app.Devices.UnattendedWho(device));
+        StringAssert.Contains(app.Devices.Error, "administration console");
+    }
+
+    [TestMethod]
+    public void The_refused_unattended_request_says_what_to_do()
+    {
+        var text = DevicesModel.UnattendedRefusalAdvice("The remote device is not available to you. Ask the other person to make their computer available.");
+        StringAssert.Contains(text, "Ask an admin to allow you unattended access to this computer");
+        Assert.IsNull(DevicesModel.UnattendedRefusalAdvice("The remote device is busy."));
+    }
+
+    [TestMethod]
     public async Task The_engines_typed_failure_text_gives_the_right_sentence()
     {
         var (engine, app) = await Company();

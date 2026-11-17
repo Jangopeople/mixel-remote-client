@@ -247,7 +247,7 @@ public sealed class WorkspaceModel : Observable
                 // With other sessions open the connection's own message is theirs, so only a lone connection has a sentence to give.
                 var refusal = status.LastRefusal;
                 if (refusal is not null && refusal.Peer == current.Peer && DateTimeOffset.UtcNow.ToUnixTimeSeconds() - refusal.At < 120 && refusal.Message.Length > 0)
-                    failure = Translator.Shared.Translate(refusal.Message);
+                    failure = (current.Unattended ? DevicesModel.UnattendedRefusalAdvice(refusal.Message) : null) ?? Translator.Shared.Translate(refusal.Message);
                 else
                 failure = status.Message.Length == 0 || status.Phase == "ready" || status.TechnicianSessions.Count > 0
                     ? L("The connection was not established. The other side declined, did not answer, or unattended access is not allowed.")

@@ -208,6 +208,59 @@ public sealed partial class DevicesModel
 
     public Task<bool> SetUnattended(Device device, string setting) => AdminChange(device, info => DeviceAdmin.SetUnattended(info, setting));
 
+    /// <summary>
+    /// The people of the company who may connect to this device without being asked: the owners, administrators and
+    /// technicians, each with their grant (engine: remote_admin_unattended_grants + saas_members). Null with <see cref="Error"/> set when it cannot be read.
+    /// </summary>
+    public async Task<List<GrantRow>?> UnattendedWho(Device device)
+    {
+        if (AdminOf(device) is not { } info || Tenant is not { } tenant) return null;
+        Error = "";
+        try
+        {
+            var grants = await DeviceAdmin.UnattendedGrants(info);
+            var members = await app.Engine.RunAsync<List<Member>?>("saas_members", ("tenant", tenant.TenantId)) ?? [];
+            return members.Where(member => member.Role is "owner" or "admin" or "technician").Select(member =>
+            {
+                var own = grants.FirstOrDefault(grant => grant.UserId == member.UserId && grant.Source != "company_setting");
+                var automatic = grants.Any(grant => grant.UserId == member.UserId && grant.Source == "company_setting");
+                return new GrantRow(member.UserId, member.Name.Length > 0 ? member.Name : member.Email, member.Email, member.Role, own is not null, automatic);
+            }).OrderBy(row => row.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
+        }
+        catch (EngineFailure failure)
+        {
+            Error = failure.Message.Contains("not_saas", StringComparison.Ordinal)
+                ? L("The people who may connect to this computer are managed in the administration console of its company.")
+                : AdminError(failure);
+            return null;
+        }
+    }
+
+    public async Task<bool> SetUnattendedGrant(Device device, string userId, bool granted)
+    {
+        if (AdminOf(device) is not { } info) return false;
+        Error = "";
+        try
+        {
+            await DeviceAdmin.SetUnattendedGrant(info, userId, granted);
+            return true;
+        }
+        catch (EngineFailure failure)
+        {
+            Error = failure.Message.Contains("invalid_user", StringComparison.Ordinal) ? L("This person cannot be given access to this computer.") : AdminError(failure);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The sentence for a refused unattended request: the engine's "not available to you" does not say what to do.
+    /// Null when the message is not that refusal.
+    /// </summary>
+    public static string? UnattendedRefusalAdvice(string engineMessage) =>
+        engineMessage.StartsWith("The remote device is not available to you", StringComparison.Ordinal)
+            ? L("This computer did not accept an unattended connection from you. Ask an admin to allow you unattended access to this computer (its menu in Devices, Unattended access, Who may connect…), or connect and ask the person there to accept.")
+            : null;
+
     private async Task<bool> AdminChange(Device device, Func<AdminDevice, Task> work)
     {
         if (AdminOf(device) is not { } info) return false;

@@ -45,6 +45,8 @@ public interface IDeviceAdmin
     Task<AdminDevice> Move(AdminDevice device, string? groupId, string? groupName);
     Task<AdminDevice> SetNote(AdminDevice device, string? note);
     Task SetUnattended(AdminDevice device, string setting);
+    Task<IReadOnlyList<UnattendedGrant>> UnattendedGrants(AdminDevice device);
+    Task SetUnattendedGrant(AdminDevice device, string userId, bool granted);
     Task Remove(AdminDevice device, uint confirmConnectionId);
 }
 
@@ -66,6 +68,25 @@ public sealed class EngineDeviceAdmin(IEngine engine) : IDeviceAdmin
     public Task SetUnattended(AdminDevice device, string setting) =>
         engine.PerformAsync("remote_admin_set_device_unattended", ("device", device.DeviceId), ("setting", setting));
 
+    public async Task<IReadOnlyList<UnattendedGrant>> UnattendedGrants(AdminDevice device) =>
+        await engine.RunAsync<List<UnattendedGrant>?>("remote_admin_unattended_grants", ("device", device.DeviceId)) ?? [];
+
+    public Task SetUnattendedGrant(AdminDevice device, string userId, bool granted) =>
+        engine.PerformAsync("remote_admin_set_unattended_grant", ("device", device.DeviceId), ("user", userId), ("granted", granted));
+
     public Task Remove(AdminDevice device, uint confirmConnectionId) =>
         engine.PerformAsync("remote_admin_remove_device", ("device", device.DeviceId), ("confirm_connection_id", confirmConnectionId));
 }
+
+/// <summary>One row of remote_admin_unattended_grants (API doc 2.8): a per-user grant, or automatic access from the company setting.</summary>
+public sealed record UnattendedGrant
+{
+    [JsonPropertyName("user_id")] public string UserId { get; init; } = "";
+    public string? Name { get; init; }
+    public string? Role { get; init; }
+    /// <summary>"company_setting" for automatic access (read-only); "grant" for a per-user grant (the SQL function says "grant"; the API doc says absent: both are read as a grant).</summary>
+    public string? Source { get; init; }
+}
+
+/// <summary>One person in the "Who may connect" list.</summary>
+public sealed record GrantRow(string UserId, string Name, string Email, string Role, bool Granted, bool Automatic);

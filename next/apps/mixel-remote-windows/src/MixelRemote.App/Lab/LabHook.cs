@@ -74,6 +74,23 @@ internal static class LabHook
                 var files = session.Files;
                 return $"phase={r.Phase} sessions={app.Sessions.Count()} tabs={app.Workspace.Tabs.Count} fps={session.Fps} frame={session.Frame?.Width}x{session.Frame?.Height} displays={r.Displays} display={r.Display} actions={string.Join(",", r.HostActions)} " +
                     $"in={files?.Incoming?.Phase}/{files?.Incoming?.Name} out={files?.Outgoing?.Phase}/{files?.Outgoing?.Progress:0.00} chat={string.Join("|", session.Chat.TakeLast(3).Select(m => (m.Mine ? "me:" : "peer:") + m.Text))} clip={session.ClipboardResult} error={session.Error}";
+            case "attempt": { var a = app.Workspace.Attempt; return a is null ? "no attempt" : $"step={a.Step} unattended={a.Unattended} failure={a.Failure}"; }
+            case "grants":
+            {
+                // grants <connection id>: the "Who may connect" list of the device
+                var device = app.Devices.AllDevices.FirstOrDefault(d => d.ConnectionId == uint.Parse(parts[1]));
+                if (device is null) return "no such device";
+                var rows = await app.Devices.UnattendedWho(device);
+                return rows is null ? "error=" + app.Devices.Error : string.Join(" | ", rows.Select(row => $"{row.UserId}:{row.Name}:{row.Role}:granted={row.Granted}:auto={row.Automatic}"));
+            }
+            case "grant":
+            {
+                // grant <connection id> <user id> on|off
+                var args = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                var device = app.Devices.AllDevices.FirstOrDefault(d => d.ConnectionId == uint.Parse(args[1]));
+                if (device is null) return "no such device";
+                return (await app.Devices.SetUnattendedGrant(device, args[2], args[3] == "on")) ? "ok" : "error=" + app.Devices.Error;
+            }
             default: return "unknown command";
         }
     }

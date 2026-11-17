@@ -498,6 +498,13 @@ internal sealed class DevicesPage : PageView
                     choice.Click += (_, _) => _ = model.SetUnattended(device, setting);
                     unattended.Items.Add(choice);
                 }
+                if (model.Deploys)
+                {
+                    unattended.Items.Add(new MenuFlyoutSeparator());
+                    var who = new MenuFlyoutItem { Text = L("Who may connect…") };
+                    who.Click += (_, _) => _ = UnattendedWho(device);
+                    unattended.Items.Add(who);
+                }
                 menu.Items.Add(unattended);
             }
             if (model.Manages)
@@ -509,6 +516,39 @@ internal sealed class DevicesPage : PageView
             }
         }
         return menu;
+    }
+
+    /// <summary>"Unattended access, Who may connect…": the company's technicians with a switch each (admins and owners only).</summary>
+    private async Task UnattendedWho(Device device)
+    {
+        var rows = await Model.UnattendedWho(device);
+        if (rows is null)
+        {
+            await Dialogs.Show(Root, L("Who may connect…"), Ui.Text(Model.Error.Length > 0 ? Model.Error : L("The list could not be read."), secondary: false));
+            return;
+        }
+        var problem = Ui.Text("", secondary: false);
+        problem.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.IndianRed);
+        var list = Ui.Column(8, Ui.Text(L("People who may connect to %@ (%@) without anyone there being asked.", device.Name, Format.RemoteId(device.ConnectionId)), secondary: true));
+        foreach (var row in rows)
+        {
+            var person = row;
+            var toggle = new ToggleSwitch { Header = person.Name + " · " + person.Role + (person.Automatic ? " · " + L("automatic (company setting)") : ""), IsOn = person.Granted || person.Automatic, IsEnabled = !person.Automatic, OnContent = L("On"), OffContent = L("Off") };
+            var settling = false;
+            toggle.Toggled += async (_, _) =>
+            {
+                if (settling) return;
+                var wanted = toggle.IsOn;
+                toggle.IsEnabled = false;
+                if (await Model.SetUnattendedGrant(device, person.UserId, wanted)) problem.Text = "";
+                else { problem.Text = Model.Error; settling = true; toggle.IsOn = !wanted; settling = false; }
+                toggle.IsEnabled = true;
+            };
+            list.Children.Add(toggle);
+        }
+        if (rows.Count == 0) list.Children.Add(Ui.Text(L("This company has no other technicians."), secondary: true));
+        list.Children.Add(problem);
+        await Dialogs.Show(Root, L("Who may connect…"), list);
     }
 
     private Task EditNote(Device device) => Dialogs.Form(Root, L("Edit note…"), null, [(L("Note"), model_note(device))], L("Save"),
