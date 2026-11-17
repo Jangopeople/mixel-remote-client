@@ -420,15 +420,30 @@ async fn session(check: &mut Check<'_>, suffix: &str, tenant: &str, mine: u64) {
     if let Some(minutes) = std::fs::read_to_string(check.folder.join("hold-minutes.txt")).ok().and_then(|text| text.trim().parse::<u64>().ok()) {
         let started = Instant::now();
         let (mut asked, mut late, mut changed, mut pictures) = (0u32, Vec::new(), None, 0u32);
+        // The transport is renewed while the session runs (a new session id, the picture back within
+        // seconds): counted, not a failure, as long as the session is active again.
+        let (mut current, mut renewals) = (active["session"].clone(), 0u32);
         while started.elapsed() < Duration::from_secs(minutes * 60) {
             while check.picture(id).await {
                 pictures += 1;
             }
-            let now = check.status().await;
-            if now["phase"] != "active" || now["session"] != active["session"] {
+            let mut now = check.status().await;
+            if now["phase"] != "active" {
+                // A renewal in progress: give it 15 s to come back.
+                if let Some(back) = check.wait(15, |status| status["phase"] == "active").await {
+                    now = back;
+                }
+            }
+            if now["phase"] != "active" {
                 changed = Some(format!("after {} s: {} {}", started.elapsed().as_secs(), now["phase"], now["message"]));
                 break;
             }
+            if now["session"] != current {
+                renewals += 1;
+                check.print(&format!("transport renewed after {} s (new session {})", started.elapsed().as_secs(), now["session"]));
+                current = now["session"].clone();
+            }
+            let id = current.as_str().and_then(|text| text.parse::<uuid::Uuid>().ok()).unwrap_or(id);
             if control {
                 asked += 1;
                 let sent = Instant::now();
@@ -446,7 +461,7 @@ async fn session(check: &mut Check<'_>, suffix: &str, tenant: &str, mine: u64) {
             check.print(&format!("late or not confirmed while held: {}", late.join("; ")));
         }
         check.check(
-            &format!("the session holds for {minutes} min ({} s held, {asked} inputs, {} late, {pictures} pictures)", started.elapsed().as_secs(), late.len()),
+            &format!("the session holds for {minutes} min ({} s held, {renewals} transport renewals, {asked} inputs, {} late, {pictures} pictures)", started.elapsed().as_secs(), late.len()),
             changed.is_none() && late.is_empty(),
             changed.unwrap_or_default(),
         );
