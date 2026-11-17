@@ -41,7 +41,7 @@ internal abstract class PageView : Grid
     protected void Watch(INotifyPropertyChanged model)
     {
         watched.Add(model);
-        model.PropertyChanged += (_, _) => Rebuild();
+        model.PropertyChanged += (_, change) => { Perf.Time($"changed {model.GetType().Name}.{change.PropertyName}", () => { }); Rebuild(); };
     }
 
     /// <summary>Hidden pages do not rebuild (the window shows one page at a time).</summary>
@@ -67,8 +67,13 @@ internal abstract class PageView : Grid
     }
 
     /// <summary>Builds now (screenshots, first show).</summary>
+    private static long renderWindow; private static int renderCount;
     public void Render()
     {
+        // Diagnostics: a page rebuilt more than 8 times in a second is logged once per second (runaway re-rendering).
+        var second = Environment.TickCount64 / 1000;
+        if (second != renderWindow) { if (renderCount > 8) MixelRemote.App.App.Log($"render storm: {renderCount} page builds in one second (last {GetType().Name})"); renderWindow = second; renderCount = 0; }
+        renderCount++;
         try
         {
             Ui.Theme = ActualTheme == ElementTheme.Default ? ElementTheme.Light : ActualTheme;
@@ -77,7 +82,7 @@ internal abstract class PageView : Grid
             foreach (UIElement child in Children) Release(child);
             foreach (var element in kept.Values) Detach(element);
             Children.Clear();
-            Children.Add(Build());
+            Perf.Time("Build " + GetType().Name, () => Children.Add(Build()));
             if (focused is not null && kept.ContainsValue(focused))
             {
                 // Keyboard focus keeps the next digit in this field. Programmatic focus selects the text, so the next digit replaces it.

@@ -162,6 +162,25 @@ public sealed class AppModel : Observable
         }
     }
 
+    private string lastSignificant = "";
+    private DateTimeOffset lastRemoteRaised = DateTimeOffset.MinValue;
+
+    /// <summary>The status without its running counters (bytes received, picture statistics).</summary>
+    internal static string Significant(string json)
+    {
+        try
+        {
+            if (System.Text.Json.Nodes.JsonNode.Parse(json) is not System.Text.Json.Nodes.JsonObject root) return json;
+            root.Remove("received");
+            if (root["sessions"] is System.Text.Json.Nodes.JsonArray sessions)
+            {
+                foreach (var item in sessions.OfType<System.Text.Json.Nodes.JsonObject>()) { item.Remove("received"); item.Remove("quality"); }
+            }
+            return root.ToJsonString();
+        }
+        catch (System.Text.Json.JsonException) { return json; }
+    }
+
     public async Task RefreshRemote()
     {
         string json;
@@ -171,7 +190,20 @@ public sealed class AppModel : Observable
         if (json != lastRemoteJson)
         {
             lastRemoteJson = json;
-            if (Json.Decode<RemoteStatus>(json) is { } next) Remote = next;
+            if (Json.Decode<RemoteStatus>(json) is { } next)
+            {
+                // Byte and picture counters change with every poll. They must not rebuild every page 10 times a second (a live session froze
+                // the window in the lab VM): the change is announced only when something else changed, else at most once a second.
+                var significant = Significant(json);
+                var now0 = DateTimeOffset.UtcNow;
+                if (significant != lastSignificant || now0 - lastRemoteRaised >= TimeSpan.FromSeconds(1))
+                {
+                    lastSignificant = significant;
+                    lastRemoteRaised = now0;
+                    Remote = next;
+                }
+                else remote = next;
+            }
         }
         var now = Remote;
         if (now.Phase == "ready")

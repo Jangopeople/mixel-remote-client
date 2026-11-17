@@ -178,6 +178,16 @@ public sealed class ViewModelTests
     }
 
     [TestMethod]
+    public void Running_counters_do_not_count_as_a_status_change()
+    {
+        var a = AppModel.Significant("""{"phase":"active","received":10,"sessions":[{"id":"x","phase":"active","received":5,"quality":{"pictures":3}}]}""");
+        var b = AppModel.Significant("""{"phase":"active","received":99,"sessions":[{"id":"x","phase":"active","received":50,"quality":{"pictures":30}}]}""");
+        var c = AppModel.Significant("""{"phase":"closing","received":99,"sessions":[{"id":"x","phase":"active","received":50}]}""");
+        Assert.AreEqual(a, b);
+        Assert.AreNotEqual(a, c);
+    }
+
+    [TestMethod]
     public async Task First_connect_without_identity_offers_add_this_computer()
     {
         var engine = new MockEngine();

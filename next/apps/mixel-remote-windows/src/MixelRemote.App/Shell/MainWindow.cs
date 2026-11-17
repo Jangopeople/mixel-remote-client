@@ -231,7 +231,7 @@ internal sealed partial class MainWindow : Window
         {
             pending = false;
             if (closed) return;
-            try { RefreshNow(); }
+            try { Perf.Time("RefreshNow", RefreshNow); }
             catch (Exception failure) { MixelRemote.App.App.Log($"main window: {failure}"); }
         });
     }

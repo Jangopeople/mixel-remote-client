@@ -106,7 +106,7 @@ internal sealed class RemoteScreen : Grid
         });
     }
 
-    private void OnFrame(object? sender, VideoFrame frame) => Draw(frame);
+    private void OnFrame(object? sender, VideoFrame frame) => Shell.Perf.Time("Draw frame", () => Draw(frame));
     private void OnDrawing(object? sender, EventArgs args) { if (last is not null) Draw(last); }
     private void OnSession(object? sender, System.ComponentModel.PropertyChangedEventArgs change)
     {
