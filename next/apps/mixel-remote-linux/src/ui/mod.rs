@@ -479,6 +479,11 @@ impl Ui {
     }
 }
 
+/// The "Invite a colleague" dialog of the session (also used by the screenshots).
+pub fn invite_colleague_dialog(app: &Rc<App>) {
+    session::invite_dialog(app);
+}
+
 /// `system`, `light` or `dark` (empty is `system`).
 pub fn apply_appearance(value: &str) {
     adw::StyleManager::default().set_color_scheme(match value {

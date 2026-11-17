@@ -36,6 +36,11 @@ const SCENES: &[&str] = &[
     "reports",
     "invite-colleague",
     "wayland",
+    "connecting",
+    "connect-failed",
+    "session-ready",
+    "popout",
+    "sessions",
 ];
 
 fn engine_for(scene: &str) -> MockEngine {
@@ -62,7 +67,7 @@ fn engine_for(scene: &str) -> MockEngine {
             mock::signed_in(&engine, false);
             mock::hosting(&engine);
         }
-        "session" | "session-chat" | "session-files" | "session-clipboard" | "session-draw" | "invite-colleague" => {
+        "session" | "session-chat" | "session-files" | "session-clipboard" | "session-draw" | "invite-colleague" | "session-ready" | "popout" | "sessions" => {
             mock::signed_in(&engine, false);
             mock::viewing(&engine);
         }
@@ -79,10 +84,12 @@ fn engine_for(scene: &str) -> MockEngine {
 fn section_for(scene: &str) -> Section {
     match scene {
         "sign-in-browser" | "second-step" | "account-company" | "create-company" => Section::Account,
-        "devices" | "deploy-link" => Section::Devices,
+        "devices" | "deploy-link" | "connecting" | "connect-failed" | "session-ready" => Section::Devices,
+        "sessions" => Section::Sessions,
         "settings" | "wayland" => Section::Settings,
         "reports" => Section::Reports,
-        _ => Section::Remote,
+        "remote-control" | "set-up-this-computer" | "phone-help" | "unattended" | "hosted-session" => Section::Computer,
+        _ => Section::Devices,
     }
 }
 
@@ -123,7 +130,10 @@ async fn scene(application: &adw::Application, folder: &std::path::Path, name: &
     i18n::set_choice(language);
     adw::StyleManager::default().set_color_scheme(if dark { adw::ColorScheme::ForceDark } else { adw::ColorScheme::ForceLight });
     let engine = Rc::new(engine_for(name));
-    let app = App::new(engine.clone(), Store::memory(Settings { language: language.into(), ..Settings::default() }));
+    // Sessions that are shown at once (the session scenes), the others stay in Devices with a notice.
+    let open_session = name.starts_with("session") && name != "session-ready" || name == "invite-colleague" || name == "sessions";
+    let settings = Settings { language: language.into(), when_ready: if open_session { "open".into() } else { String::new() }, open_in: if name == "popout" { "window".into() } else { String::new() }, ..Settings::default() };
+    let app = App::new(engine.clone(), Store::memory(settings));
     crate::ui::install(&app, application, false);
     // The same reads the running app does after a start, once.
     if let Ok(linux) = app.run("linux_session", json!({})).await {
@@ -137,6 +147,18 @@ async fn scene(application: &adw::Application, folder: &std::path::Path, name: &
     app.refresh_remote().await;
     let section = section_for(name);
     app.edit(|state| state.section = section);
+    if matches!(name, "connecting" | "connect-failed") {
+        // A connection being prepared: the device list with the card and the progress on the row.
+        app.edit(|state| {
+            state.workspace.connect(731_204_558, "Reception PC", "windows", true, 0.0, None);
+            if let Some(attempt) = state.workspace.attempt.as_mut() {
+                attempt.step = 2;
+                if name == "connect-failed" {
+                    attempt.failure = i18n::t("The connection was not established. The other side declined, did not answer, or unattended access is not allowed.");
+                }
+            }
+        });
+    }
     match name {
         "sign-in-browser" => app.edit(|state| state.sign_in_link = Some("https://auth.mixel.ch/application/o/authorize/?client_id=mixel-remote&code_challenge=…".into())),
         "set-up-this-computer" => app.edit(|state| state.enrollment.needs_setup = true),
@@ -184,9 +206,7 @@ async fn scene(application: &adw::Application, folder: &std::path::Path, name: &
             top_dialog(application, &window)
         }
         "invite-colleague" => {
-            if let Some(button) = find_button(&window, &i18n::t("Invite a colleague")) {
-                button.emit_clicked();
-            }
+            crate::ui::invite_colleague_dialog(&app);
             settle(300).await;
             top_dialog(application, &window)
         }
