@@ -11,6 +11,21 @@ public sealed class SupportTests
     public void English() => Translator.Shared.Choice = "en";
 
     [TestMethod]
+    public void Phone_connect_messages_resolve_in_all_four_languages()
+    {
+        foreach (var language in new[] { "en", "de", "fr", "it" })
+        {
+            Translator.Shared.Choice = language;
+            var needs = T.L("Connecting to phones needs your Mixel team account with the second confirmation step. Sign in again under Account, then choose Connect.");
+            var prepared = T.L("This phone could not be prepared for the session: %@", "boom");
+            Assert.IsTrue(prepared.EndsWith("boom", StringComparison.Ordinal) && !prepared.Contains("%@"), language);
+            if (language == "en") continue;
+            Assert.AreNotEqual("Connecting to phones needs your Mixel team account with the second confirmation step. Sign in again under Account, then choose Connect.", needs, language);
+            Assert.AreNotEqual("This phone could not be prepared for the session: boom", prepared, language);
+        }
+    }
+
+    [TestMethod]
     public void Remote_ids_are_grouped_and_parsed_strictly()
     {
         Assert.AreEqual("482 913 557", Format.RemoteId(482_913_557));

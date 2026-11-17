@@ -577,9 +577,9 @@ public sealed class AppModel : Observable
             {
                 if (System.Text.RegularExpressions.Regex.IsMatch(failure.Message, "MFA|staff|42501"))
                 {
-                    throw new EngineFailure("Connecting to phones needs your Mixel team account with the second confirmation step. Sign in again under Account, then choose Connect.");
+                    throw new EngineFailure(L("Connecting to phones needs your Mixel team account with the second confirmation step. Sign in again under Account, then choose Connect."));
                 }
-                throw new EngineFailure($"This phone could not be prepared for the session: {failure.Message}");
+                throw new EngineFailure(L("This phone could not be prepared for the session: %@", failure.Translated));
             }
         }
         if (phone)
