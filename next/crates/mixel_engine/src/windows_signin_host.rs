@@ -913,7 +913,7 @@ fn note_update_problem(error: &str) {
     if let Ok(mut last) = LAST.lock() {
         if *last != error {
             *last = error.to_owned();
-            log(&format!("update check: {error} (tries again in 15 minutes)"));
+            log(&format!("update check: {error} (tries again in 15 minutes). The always-on service updates only from the separate windows-x64-program channel: if the app is newer than this service, that channel was not published with the installer"));
         }
     }
 }
