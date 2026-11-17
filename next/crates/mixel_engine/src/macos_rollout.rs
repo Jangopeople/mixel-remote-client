@@ -66,7 +66,9 @@ fn xml(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
-/// The per-user launch agent: runs the headless host in the person's graphical session.
+/// The per-user launch agent: runs the headless host in the person's graphical session. launchd starts it again at most
+/// 10 seconds after its last start (the pre-login daemon's value; 30 s kept a host that restarted within half a minute
+/// of its start offline for the rest of that time).
 pub fn agent_plist(label: &str, program: &Path, settings: &Path) -> String {
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
@@ -74,7 +76,7 @@ pub fn agent_plist(label: &str, program: &Path, settings: &Path) -> String {
          \t<key>LimitLoadToSessionType</key>\n\t<array>\n\t\t<string>Aqua</string>\n\t</array>\n\
          \t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>{program}</string>\n\t\t<string>--startup-host</string>\n\t\t<string>{settings}</string>\n\t</array>\n\
          \t<key>RunAtLoad</key>\n\t<true/>\n\t<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>\n\
-         \t<key>ThrottleInterval</key>\n\t<integer>30</integer>\n\t<key>ProcessType</key>\n\t<string>Interactive</string>\n\
+         \t<key>ThrottleInterval</key>\n\t<integer>10</integer>\n\t<key>ProcessType</key>\n\t<string>Interactive</string>\n\
          </dict>\n</plist>\n",
         label = xml(label),
         program = xml(&program.display().to_string()),
@@ -183,6 +185,13 @@ pub fn enroll(token: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_launch_agent_restarts_the_host_within_ten_seconds() {
+        let plist = agent_plist("ch.mixel.test", Path::new("/x/desktop_app"), Path::new("/x/settings.json"));
+        assert!(plist.contains("<key>ThrottleInterval</key>\n\t<integer>10</integer>"), "{plist}");
+        assert!(plist.contains("<key>SuccessfulExit</key>\n\t\t<false/>"));
+    }
+
     use super::*;
 
     #[test]

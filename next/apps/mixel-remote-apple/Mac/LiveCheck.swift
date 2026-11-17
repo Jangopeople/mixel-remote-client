@@ -346,6 +346,54 @@ enum LiveCheck {
         try? await engine.shutdown()
     }
 
+    /// `--live-restart <qa-session.json> <suffix> <folder> first|second`: a computer that restarts. `first` enrols this Mac in the QA
+    /// login's company, goes online and is then killed at once (SIGKILL: no goodbye to the connection service, as in a crash or an
+    /// update that replaces the program). `second` starts again with the same engine folder, signs in, goes online and says how
+    /// long that took (from the start of the process); it then removes this Mac again. The registration steps are in stderr.
+    static func restart(sessionFile: String, suffix: String, folder: String, phase: String) -> Never {
+        let began = Date()
+        setenv("MIXEL_QA_SESSION_FILE", sessionFile, 1)
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
+            let url = URL(fileURLWithPath: folder)
+            guard let engine = try? CoreEngine(dataDirectory: url.appendingPathComponent("engine")) else { check("engine starts", false); done.signal(); return }
+            check("sign-in with the QA session (\(Int(Date().timeIntervalSince(began) * 1000)) ms after the start)", await signIn(engine))
+            let signedIn = Date()
+            var added: [String: Any]?
+            if phase == "first" {
+                let rows = (try? await call(engine, "saas_my_tenants").get()) as? [[String: Any]] ?? []
+                let tenant = rows.first?["tenant_id"] as? String ?? ""
+                added = (try? await call(engine, "saas_add_this_device", ["tenant": tenant, "name": "QA Mac lab restart", "group": NSNull()]).get()) as? [String: Any]
+                check("this Mac added to the company", (added?["connection_id"] as? Int ?? 0) > 0, "\(String(describing: added))")
+                if let data = try? JSONSerialization.data(withJSONObject: added ?? [:]) { try? data.write(to: url.appendingPathComponent("added.json")) }
+            } else if let data = try? Data(contentsOf: url.appendingPathComponent("added.json")) {
+                added = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            }
+            let asked = Date()
+            _ = await call(engine, "remote_register")
+            let ready = await wait(engine, seconds: 90) { ($0["phase"] as? String) == "ready" }
+            let ms = Int(Date().timeIntervalSince(asked) * 1000)
+            let snapshot = await status(engine)
+            check("online (\(ms) ms after asking to register; \(Int(Date().timeIntervalSince(began) * 1000)) ms after the start of the process; sign-in took \(Int(signedIn.timeIntervalSince(began) * 1000)) ms)", ready != nil, "\(String(describing: snapshot))")
+            if phase == "first" {
+                fflush(stdout)
+                kill(getpid(), SIGKILL)
+            }
+            if let device = added?["device_id"] as? String {
+                _ = await call(engine, "remote_disconnect")
+                let removal = await call(engine, "device_self_remove", ["confirmed": true, "registration": ["device": device, "connection_id": added?["connection_id"] ?? 0, "generation": added?["generation"] ?? 0]])
+                check("this Mac removes itself again", ((try? removal.get()) as? String) == "removed", "\(removal)")
+            }
+            try? await engine.shutdown()
+            done.signal()
+        }
+        while done.wait(timeout: .now()) == .timedOut { RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05)) }
+        print("RESULT \(checks - failures)/\(checks) passed")
+        exit(failures == 0 ? 0 : 1)
+    }
+
+    static func status(_ engine: CoreEngine) async -> [String: Any] { ((try? await call(engine, "remote_status").get()) as? [String: Any]) ?? [:] }
+
     static func providers() -> Never {
         let done = DispatchSemaphore(value: 0)
         Task.detached {

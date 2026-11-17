@@ -40,6 +40,10 @@ enum Entry {
         if arguments.count >= 5, arguments[1] == "--live-multi" {
             LiveCheck.multi(sessionFile: arguments[2], suffix: arguments[3], folder: arguments[4])
         }
+        // `--live-restart <qa-session.json> <suffix> <folder> first|second`: a computer that restarts (killed, then started again).
+        if arguments.count >= 6, arguments[1] == "--live-restart" {
+            LiveCheck.restart(sessionFile: arguments[2], suffix: arguments[3], folder: arguments[4], phase: arguments[5])
+        }
         // `--live-providers`: every sign-in button reaches its provider's login page (no sign-in).
         if arguments.count >= 2, arguments[1] == "--live-providers" { LiveCheck.providers() }
         // `--live-prepare <qa-session.json> <suffix> <folder>`: QA company + deploy token for the update test.

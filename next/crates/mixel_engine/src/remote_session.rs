@@ -2997,30 +2997,38 @@ async fn run(
         // Each kept session is the hosted one or one of the technician's; every one is resumed on its own.
         for kept in kept.peers { if kept.host { peer = Some(kept); } else { ctrl.push(kept); } }
     }
-    let enrolled = auth.enrollment(&initial, &identity).await?;
-    crate::qa_timeline::mark("registration: device enrollment ready");
-    let device = enrolled.device;
-    let principal = auth.principal(&initial)?.clone();
-    if enrolled.public_key != identity.public_key()? {
-        return Err("The saved device key does not match its enrollment".into());
-    }
-    let service = crate::service_config::ServiceConfig::load()?;
-    let roots = service.roots()?;
-    let mut own_ticket = registration_ticket(&initial, &enrolled, &identity).await?;
-    crate::qa_timeline::mark("registration: device ticket ready");
-    if cancel.load(Ordering::Acquire) {
-        return Err("The device registration was cancelled".into());
-    }
+    // The secure connection to the connection service is opened while the account service answers (device enrollment and
+    // registration ticket): registering no longer waits for the handshake after them. A failure of the account side is
+    // reported first (it names what to do); the socket of a failed attempt is simply dropped.
     let config = WebSocketConfig::default()
         .max_message_size(Some(MAX_MESSAGE))
         .max_frame_size(Some(MAX_MESSAGE));
-    let (mut socket, _) = tokio::time::timeout(
-        Duration::from_secs(12),
-        connect_async_with_config(url.as_str(), Some(config), false),
-    )
-    .await
-    .map_err(|_| Failure::network("Secure connection timed out"))?
-    .map_err(crate::remote_recovery::socket)?;
+    let connect = async {
+        tokio::time::timeout(Duration::from_secs(12), connect_async_with_config(url.as_str(), Some(config), false))
+            .await
+            .map_err(|_| Failure::network("Secure connection timed out"))?
+            .map_err(crate::remote_recovery::socket)
+    };
+    let prepare = async {
+        let enrolled = auth.enrollment(&initial, &identity).await?;
+        crate::qa_timeline::mark("registration: device enrollment ready");
+        let principal = auth.principal(&initial)?.clone();
+        if enrolled.public_key != identity.public_key()? {
+            return Err("The saved device key does not match its enrollment".into());
+        }
+        let service = crate::service_config::ServiceConfig::load()?;
+        let roots = service.roots()?;
+        let own_ticket = registration_ticket(&initial, &enrolled, &identity).await?;
+        crate::qa_timeline::mark("registration: device ticket ready");
+        Ok::<_, Failure>((enrolled, principal, service, roots, own_ticket))
+    };
+    let (connected, prepared) = tokio::join!(connect, prepare);
+    let (enrolled, principal, service, roots, mut own_ticket) = prepared?;
+    let device = enrolled.device;
+    if cancel.load(Ordering::Acquire) {
+        return Err("The device registration was cancelled".into());
+    }
+    let (mut socket, _) = connected?;
     crate::qa_timeline::mark("registration: connection service socket open");
     let broker_lease = carried_lease.unwrap_or_else(|| Arc::new(std::sync::Mutex::new((0, std::time::Instant::now()))));
     if let Ok(mut lease) = broker_lease.lock() {
