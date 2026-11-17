@@ -113,7 +113,7 @@ struct SignInScreen: View {
                     MessageLine(app.error)
                 }
                 .padding(.horizontal, 48).padding(.top, 44).padding(.bottom, 28)
-                .frame(maxWidth: 440)
+                .frame(maxWidth: 460)
                 .frame(maxWidth: .infinity)
             }
         }
@@ -188,8 +188,8 @@ struct SignInScreen: View {
     }
 
     private var quickSupport: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "bolt.fill").foregroundStyle(Theme.brand).frame(width: 34, height: 34)
+        HStack(spacing: 10) {
+            Image(systemName: "bolt.fill").foregroundStyle(Theme.brand).frame(width: 30, height: 30)
                 .background(Theme.brandSoft, in: RoundedRectangle(cornerRadius: 9, style: .continuous)).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text(verbatim: L("Need help, no account?")).font(.system(size: 13, weight: .semibold))
@@ -198,7 +198,7 @@ struct SignInScreen: View {
             Spacer(minLength: 8)
             Button(L("Quick Support")) { if let url = URL(string: "https://ism.mixel.ch/remote/support/") { app.openURL(url) } }
         }
-        .padding(12)
+        .padding(10)
         .background(Theme.chrome, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.hairline, lineWidth: 1))
         .padding(.top, 4)
