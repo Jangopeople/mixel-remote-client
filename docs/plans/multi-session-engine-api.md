@@ -20,7 +20,7 @@ Technician sessions, oldest first. Each item (all fields always present):
 | field | meaning |
 |---|---|
 | `id` | **stable id** of the session, chosen when it is requested, never changes. Bind tabs and windows to it. |
-| `session` | the connection service's id of the current transport; `null` until the service answered; **changes at every transport renewal (about every 8.5 min)** |
+| `session` | the connection service's id of the session (the first transport's id); `null` until the service answered; since the make-before-break renewal of 2.1.0 it **stays the same through transport renewals** (engine `Peer.ui`); old ids of a transport are still accepted by the commands |
 | `peer`, `device` | Remote ID (9 digits) of the device viewed |
 | `phase` | `outgoing` (asked, waiting for Accept), `negotiating`, `active`, `closing` |
 | `message` | the sentence for the person (English) |
@@ -60,3 +60,8 @@ app that does not know `sessions` keeps working with one session.
   its last picture or stop fetching (the engine keeps only the newest picture per session).
 - Closing a tab/window ends that session only (`remote_close`).
 - The Connect button stays usable while fewer than `max_sessions` sessions are open (do not gate on `phase == "ready"`).
+
+## Resume and reconnect (integration agent's features) with several sessions
+- A lost registration to the connection service keeps the session (resume, 30 s) when this app holds exactly **one** technician
+  session (or hosts one); with two or more technician sessions they all end with the registration (message "Connection lost; sharing stopped").
+- "The computer went away, asking again for a minute" (reconnect.rs) also works for the sole technician session only.
