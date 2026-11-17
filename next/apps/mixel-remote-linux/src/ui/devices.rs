@@ -543,7 +543,10 @@ impl DevicesPage {
         seen.set_size_request(SEEN_W, -1);
         row.append(&seen);
         let version = hbox(6);
-        version.append(&label(meta.and_then(|meta| meta.app_version.as_deref()).unwrap_or("—")));
+        let number = label(meta.and_then(|meta| meta.app_version.as_deref()).unwrap_or("—"));
+        // A version number never breaks into one character per line, however narrow the row gets.
+        number.set_wrap(false);
+        version.append(&number);
         if summary.update {
             version.append(&pill_tag("update", &t("Update")));
         }
