@@ -21,6 +21,9 @@ pub struct Settings {
     pub open_in: String,
     /// `system` (empty), `light` or `dark`.
     pub appearance: String,
+    /// The e-mail address last used on the sign-in screen (the field is pre-filled with it; any other
+    /// address can be typed). Not a secret.
+    pub last_signin_email: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

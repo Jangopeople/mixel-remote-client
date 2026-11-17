@@ -15,6 +15,9 @@ pub struct SigninPage {
     form: gtk::Box,
     key: RefCell<String>,
     code: gtk::Entry,
+    email: gtk::Entry,
+    email_filled: std::cell::Cell<bool>,
+    activate: std::cell::Cell<Option<gtk::glib::SignalHandlerId>>,
     stay: gtk::CheckButton,
 }
 
@@ -83,11 +86,17 @@ impl SigninPage {
         widget.set_visible_child(&scroller);
         let stay = gtk::CheckButton::with_label(&t("Stay signed in on this computer"));
         stay.set_active(true);
+        let email = entry("name@company.ch");
+        email.set_input_purpose(gtk::InputPurpose::Email);
+        email.set_hexpand(true);
         Self {
             widget,
             form,
             key: RefCell::new(String::new()),
             code: entry(&t("Verification code")),
+            email,
+            email_filled: std::cell::Cell::new(false),
+            activate: std::cell::Cell::new(None),
             stay,
         }
     }
@@ -111,7 +120,11 @@ impl SigninPage {
             return;
         }
         self.key.replace(key);
-        keep_focus(&[self.code.clone().upcast()], || self.build(app, state));
+        // The address field starts with the last one used; after that it is the person's own text.
+        if !self.email_filled.replace(true) {
+            self.email.set_text(&app.store.borrow().settings.last_signin_email);
+        }
+        keep_focus(&[self.code.clone().upcast(), self.email.clone().upcast()], || self.build(app, state));
     }
 
     fn build(&self, app: &Rc<App>, state: &State) {
@@ -213,14 +226,28 @@ impl SigninPage {
                     or.set_halign(gtk::Align::Center);
                     self.form.append(&or);
                 }
-                let (a, stay) = (app.clone(), self.stay.clone());
-                let email = primary(&t("Continue with e-mail"), move || {
+                // A real text entry: pre-filled with the last address used, accepts any typed address.
+                self.form.append(&field(&t("E-mail"), &adopt(&self.email)));
+                self.email.set_sensitive(!state.busy);
+                let (a, stay, typed) = (app.clone(), self.stay.clone(), self.email.clone());
+                let go = move || {
                     a.state.borrow_mut().signin_stay = Some(stay.is_active());
-                    a.sign_in(false, None);
-                });
+                    a.sign_in_with_email(false, &typed.text());
+                };
+                let go = Rc::new(go);
+                let run = go.clone();
+                let email = primary(&t("Continue with e-mail"), move || run());
                 email.add_css_class("mixel-sso");
                 email.set_sensitive(!state.busy);
                 self.form.append(&email);
+                if let Some(old) = self.activate.take() {
+                    self.email.disconnect(old);
+                }
+                let run = go.clone();
+                self.activate.set(Some(self.email.connect_activate(move |_| run())));
+                if !state.error.is_empty() {
+                    append_message(&self.form, &state.error, true);
+                }
                 self.form.append(&dim(&t(
                     "Your browser opens; come back here when it says you are signed in.",
                 )));
