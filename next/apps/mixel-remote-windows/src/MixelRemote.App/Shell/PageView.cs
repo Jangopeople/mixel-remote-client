@@ -112,6 +112,9 @@ internal abstract class PageView : Grid
         return box;
     }
 
+    /// <summary>A kept input as it is now, without taking it out of the screen (focus it, read it).</summary>
+    public T? Peek<T>(string name) where T : FrameworkElement => kept.TryGetValue(name, out var found) ? found as T : null;
+
     /// <summary>Takes the kept inputs out of the old screen wherever they are (panels, borders, scroll and content controls).</summary>
     private void Release(UIElement node)
     {

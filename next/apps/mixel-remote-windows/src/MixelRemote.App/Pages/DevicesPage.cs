@@ -24,6 +24,12 @@ internal sealed class DevicesPage : PageView
         Watch(app.Company);
         Watch(app.Enrollment);
         Watch(app.Workspace);
+        SizeChanged += (_, _) =>
+        {
+            if (WidthClass == widthClass) return;
+            widthClass = WidthClass;
+            Rebuild();
+        };
         var refresh = new KeyboardAccelerator { Key = Windows.System.VirtualKey.F5 };
         refresh.Invoked += (sender, args) => { _ = app.Devices.Load(); args.Handled = true; };
         KeyboardAccelerators.Add(refresh);
@@ -43,8 +49,16 @@ internal sealed class DevicesPage : PageView
     /// <summary>A connection is being prepared (its panel shows no failure): one at a time.</summary>
     private bool Preparing => Workspace.Attempt is { Failure.Length: 0 };
 
-    public void FocusSearch() => Keep("search", () => new TextBox()).Focus(FocusState.Keyboard);
-    public void FocusConnectById() => Keep("byid", () => new TextBox()).Focus(FocusState.Keyboard);
+    public void FocusSearch() => Peek<TextBox>("search")?.Focus(FocusState.Keyboard);
+    public void FocusConnectById() => Peek<TextBox>("byid")?.Focus(FocusState.Keyboard);
+
+    // The table follows the width: from 1100 DIPs the version, from 900 the last-seen column, below that a tight layout.
+    private bool ShowVersion => Model.AdminAvailable && (ActualWidth == 0 || ActualWidth >= 1100);
+    private bool ShowSeen => ActualWidth == 0 || ActualWidth >= 900;
+    private bool Tight => ActualWidth > 0 && ActualWidth < 900;
+    private int widthClass = -1;
+
+    private int WidthClass => (ShowVersion ? 1 : 0) + (ShowSeen ? 2 : 0) + (Tight ? 4 : 0);
 
     private string Title() => Model.View.Kind switch
     {
@@ -201,18 +215,18 @@ internal sealed class DevicesPage : PageView
 
     // ---- The table ----
 
-    private static Grid Columns()
+    private Grid Columns()
     {
         var grid = new Grid { ColumnSpacing = 8 };
-        foreach (var width in new[] { StarWidth, TileWidth })
-        {
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(width) });
-        }
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 160 });
-        foreach (var width in new[] { IdWidth, StatusWidth, SeenWidth, VersionWidth, ActionsWidth })
-        {
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(width) });
-        }
+        var tight = Tight;
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(StarWidth) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(TileWidth) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = tight ? 120 : 160 });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(tight ? 104 : IdWidth) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(tight ? 160 : StatusWidth) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(ShowSeen ? SeenWidth : 0) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(ShowVersion ? VersionWidth : 0) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(tight ? 128 : ActionsWidth) });
         return grid;
     }
 
@@ -244,8 +258,8 @@ internal sealed class DevicesPage : PageView
         Put(header, Ui.Label(L("Device")), 2);
         Put(header, Ui.Label(L("ID")), 3);
         Put(header, Ui.Label(L("Status")), 4);
-        Put(header, Ui.Label(L("Last seen")), 5);
-        if (model.AdminAvailable) Put(header, Ui.Label(L("Version")), 6);
+        if (ShowSeen) Put(header, Ui.Label(L("Last seen")), 5);
+        if (ShowVersion) Put(header, Ui.Label(L("Version")), 6);
         var actionsLabel = Ui.Label(L("Actions"));
         actionsLabel.HorizontalAlignment = HorizontalAlignment.Right;
         Put(header, actionsLabel, 7);
@@ -377,8 +391,8 @@ internal sealed class DevicesPage : PageView
             ToolTipService.SetToolTip(line, model.Reason(device));
         }
         Put(grid, status, 4);
-        Put(grid, Ui.Text(LastSeenText(model, device, presence, state), secondary: true, wrap: false), 5);
-        if (model.AdminAvailable)
+        if (ShowSeen) Put(grid, Ui.Text(LastSeenText(model, device, presence, state), secondary: true, wrap: false), 5);
+        if (ShowVersion)
         {
             var version = Ui.Row(6, Ui.Text(model.VersionOf(device), secondary: true, wrap: false));
             if (model.UpdateAvailable(device)) version.Children.Add(Ui.Pill(L("Update"), null, "MixelUpdateText", "MixelUpdateSoft"));

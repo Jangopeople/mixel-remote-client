@@ -147,7 +147,7 @@ internal sealed class SessionView : Grid
         var session = app.Session;
         waiting.Visibility = session.Frame is null ? Visibility.Visible : Visibility.Collapsed;
         ((TextBlock)waiting.Children[1]).Text = app.Remote.Phase == "outgoing" ? L("Waiting for the other person to accept your request.") : L("Starting video");
-        var lines = new[] { session.Notice, session.MeetingNotice, session.Error, session.RecordingText }.Where(line => line.Length > 0).ToList();
+        var lines = new[] { session.PasswordWarning(), session.Notice, session.MeetingNotice, session.Error, session.RecordingText }.Where(line => line.Length > 0).ToList();
         notices.Visibility = lines.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         notices.Child = Ui.Column(4, [.. lines.Select(line => (UIElement)new TextBlock { Text = line, Foreground = new SolidColorBrush(line == session.Error ? Windows.UI.Color.FromArgb(255, 0xFF, 0xB4, 0xBD) : Microsoft.UI.Colors.White), TextWrapping = TextWrapping.Wrap, MaxWidth = 620 })]);
         UpdateRecording();
@@ -157,25 +157,35 @@ internal sealed class SessionView : Grid
     private void UpdateRecording()
     {
         var since = app.Session.RecordingSince;
+        if (recTimer is null)
+        {
+            // One tick a second: the recording time and the support-password warnings (5 and 1 minute before the end).
+            recTimer = DispatcherQueue.CreateTimer();
+            recTimer.Interval = TimeSpan.FromSeconds(1);
+            recTimer.Tick += (_, _) =>
+            {
+                ShowRecordingTime();
+                var warning = app.Session.PasswordWarning();
+                if (warning != lastWarning)
+                {
+                    lastWarning = warning;
+                    Rebuild();
+                }
+            };
+            recTimer.Start();
+        }
         if (since is null || app.Remote.Recording?.Running != true)
         {
             recBadge.Visibility = Visibility.Collapsed;
-            recTimer?.Stop();
             return;
         }
         recBadge.Visibility = Visibility.Visible;
         recSince = since;
         ShowRecordingTime();
-        if (recTimer is null)
-        {
-            recTimer = DispatcherQueue.CreateTimer();
-            recTimer.Interval = TimeSpan.FromSeconds(1);
-            recTimer.Tick += (_, _) => ShowRecordingTime();
-        }
-        recTimer.Start();
     }
 
     private DateTimeOffset? recSince;
+    private string lastWarning = "";
 
     private void ShowRecordingTime()
     {

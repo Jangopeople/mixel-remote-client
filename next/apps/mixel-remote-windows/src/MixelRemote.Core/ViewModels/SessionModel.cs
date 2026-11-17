@@ -207,6 +207,20 @@ public sealed class SessionModel : Observable
     /// <summary>For screenshots and tests: show this picture without a running engine.</summary>
     public void ShowSample(byte[] data) => Show(VideoFrame.Decode(data));
 
+    /// <summary>
+    /// A session started with a support password ends after 2 hours: "ends in 5 minutes" and "ends in 1 minute"
+    /// (the broker's session_ending, as remote_status.password_session). Empty when there is nothing to say.
+    /// </summary>
+    public string PasswordWarning(DateTimeOffset? now = null)
+    {
+        if (Format.ParseDate(Remote.PasswordSession?.EndsAt) is not { } ends) return "";
+        var seconds = (ends - (now ?? DateTimeOffset.UtcNow)).TotalSeconds;
+        if (seconds <= 0 || seconds > 300) return "";
+        return seconds <= 60
+            ? L("This support session ends in 1 minute (support password limit). Ask for a new password to continue.")
+            : L("This support session ends in %d minutes (support password limit). Ask for a new password to continue.", (int)Math.Ceiling(seconds / 60));
+    }
+
     // ---- Input ----
 
     /// <summary>Queues an input event; pointer moves and wheel scrolls coalesce with the previous unsent one.</summary>

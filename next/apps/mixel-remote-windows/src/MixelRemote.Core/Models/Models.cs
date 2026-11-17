@@ -92,6 +92,8 @@ public sealed record RemoteStatus
     public bool JoinedSession { get; init; }
     public bool Switched { get; init; }
     public List<string> PeerFeatures { get; init; } = [];
+    /// <summary>The session was started with a support password: when it ends (docs/mixel-remote-ui-engine-requests.md item 3; null until the engine reports it).</summary>
+    public PasswordSession? PasswordSession { get; init; }
 
     public static readonly RemoteStatus Offline = new();
 
@@ -102,6 +104,11 @@ public sealed record RemoteStatus
     /// <summary>This app views and (maybe) controls another computer right now.</summary>
     public bool Viewing => Phase == "active" && !Sharing && Session is not null;
     public bool Offers(string action) => HostActions.Contains(action);
+}
+
+public sealed record PasswordSession
+{
+    public string? EndsAt { get; init; }
 }
 
 public sealed record PairingPrompt

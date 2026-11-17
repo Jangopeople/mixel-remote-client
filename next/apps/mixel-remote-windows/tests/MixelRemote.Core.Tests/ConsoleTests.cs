@@ -204,3 +204,45 @@ public sealed class AppearanceTests
         Assert.AreEqual("system", new AppModel(new MockEngine(), preferences).Settings.Appearance);
     }
 }
+
+[TestClass]
+public sealed class PasswordSessionTests
+{
+    [TestInitialize]
+    public void English() => Translator.Shared.Choice = "en";
+
+    private static async Task<AppModel> Viewing(DateTimeOffset? ends)
+    {
+        var engine = new MockEngine();
+        DemoFixtures.Viewing(engine);
+        engine.ReplyValue("remote_status", new RemoteStatus
+        {
+            Phase = "active", Host = DemoFixtures.ThisComputer, Session = DemoFixtures.SessionId, Peer = 731_204_118, Control = true,
+            PasswordSession = ends is null ? null : new PasswordSession { EndsAt = ends.Value.ToString("o") },
+        });
+        var app = new AppModel(engine);
+        await app.RefreshAccount();
+        await app.RefreshRemote();
+        return app;
+    }
+
+    [TestMethod]
+    public async Task The_warning_comes_at_five_minutes_and_one_minute()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var app = await Viewing(now.AddMinutes(4).AddSeconds(30));
+        StringAssert.Contains(app.Session.PasswordWarning(now), "ends in 5 minutes");
+        StringAssert.Contains(app.Session.PasswordWarning(now.AddMinutes(3).AddSeconds(45)), "ends in 1 minute");
+        Assert.AreEqual("", app.Session.PasswordWarning(now.AddMinutes(-10)), "10 minutes before: nothing yet");
+        Assert.AreEqual("", app.Session.PasswordWarning(now.AddMinutes(10)), "after the end: nothing");
+        app.Session.Clear();
+    }
+
+    [TestMethod]
+    public async Task Without_a_password_session_there_is_no_warning()
+    {
+        var app = await Viewing(null);
+        Assert.AreEqual("", app.Session.PasswordWarning());
+        app.Session.Clear();
+    }
+}
