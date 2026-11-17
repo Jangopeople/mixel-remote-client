@@ -46,3 +46,24 @@ Mock engine: `queue(frame:session:)`, `sentInputSessions`, `videoFetches`.
 - The engine now keeps `sessions[].session` stable too; the app keys by `id` and tolerates either.
 - Lab core rebuilt with `FEATURES=qa-session ARM_ONLY=1 scripts/build-core.sh macos` (needed the engine's qa trace fix d8bfc9c).
 - Results: swift build ok, swift test 90 executed / 0 failures, xcodebuild Debug MixelRemoteMac BUILD SUCCEEDED.
+
+## 2.1.0 build-complete: per-session flags, reconnect, window close, row menu
+- **Per-session flags.** `RemoteSessionItem` decodes `password_session {ends_at, seconds_left}`, `unattended_session`,
+  `reconnecting` and `reconnect_failed` (all optional). `describing(item)` no longer hands the status's single value to the
+  oldest session: each session reads its own, so a password session's 5-minute and 1-minute warnings show only in that
+  session. An engine without `sessions[]` still gets one synthesized item carrying the status's own flags.
+- **Reconnect.** A session that is retrying keeps its tab/window (`SessionTab.state` = `reconnecting`, then
+  `reconnect_failed`; `SessionModel.link` = `.live/.reconnecting/.failed`) and shows "Reconnecting..." in the stage; after
+  the engine gives up it shows "Could not reconnect" with Retry (`remote_reconnect {session: stable id}`) and End
+  (`remote_close {session: stable id}`, also while the top-level `session` is empty). A retrying session is not a new
+  request (`RemoteSessionItem.isNewRequest`): `requesting`, the connecting message and `cancelRequests()` ignore it.
+- **Closing a session window** (red button, Cmd-W) asks "End session with <device>?" and ends the session on confirm
+  (`WorkspaceModel.windowCloseRequested` + `confirmEnd`; the NSAlert and the window delegate guard are in
+  `SessionWindowView`). Cancel keeps window and session. "Back into a tab" still docks. A window whose session is
+  already gone closes without a question.
+- **Row menu.** "Send files..." (connects first when needed, then opens the file picker and sends over the session's
+  file channel; says so when the host did not allow files): `WorkspaceModel.sendFiles`. "Move to group..." already
+  existed in the row menu (company `saas_move_device`); a test now covers it. The engine's `remote_admin_move_device`
+  (group id + name) is not wired: the company command already covers the same move.
+- Tests: `swift test` 104 executed, 0 failures. Mac Debug build (xcodegen + xcodebuild, scheme MixelRemoteMac, existing
+  xcframework) BUILD SUCCEEDED. Not run: a live window close with the real NSAlert and a live reconnect (needs the lab).
