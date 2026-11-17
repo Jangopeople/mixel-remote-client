@@ -215,6 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             case "window": model.workspace.popOut(id)
             case "tab": model.workspace.dock(id)
             case "show": model.workspace.show(id)
+            case "retry": model.sessionModels[id]?.retryReconnect()
             case "select": model.workspace.selected = id == 0 ? .console : .session(id)
             default: break
             }
