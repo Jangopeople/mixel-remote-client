@@ -6,7 +6,7 @@ set -eu
 L=$(cd "$(dirname "$0")" && pwd); NAME=$1; COUNT=$2; LABEL=$3
 mkdir -p "$L/xfer"
 R=/tmp/qa-mint-$LABEL.json
-ssh -p 2222 mixel-vps "sudo python3 /tmp/qa-linux.py mint $NAME $R $COUNT" >/dev/null
+ssh -p 2222 mixel-vps "sudo python3 /tmp/qa-linux.py mint $NAME $R $COUNT && sudo chown \$(id -un) $R*" >/dev/null
 for n in $(seq 0 $((COUNT-1))); do
   SUF=""; [ $n -gt 0 ] && SUF=".$n"
   ( umask 077; scp -q -P 2222 mixel-vps:$R$SUF "$L/xfer/qa-session-$LABEL$SUF.json" )

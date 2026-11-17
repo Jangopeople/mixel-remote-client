@@ -8,6 +8,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 RUN=$1; LABEL=$2; BIN=$3; MIN=${4:-30}
 X=http://${LAB_BIND:-10.124.1.97}:${LAB_PORT:-8771}; P=/root/lab-host-$RUN
 command -v Xvfb >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y -q xvfb x11-xserver-utils >/dev/null
+command -v xdotool >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y -q xdotool >/dev/null
 rm -rf $P; mkdir -p $P/home $P/work; chmod 700 $P $P/home
 curl -fsS -o $P/mixel-remote $X/$BIN && chmod 755 $P/mixel-remote || { echo "download failed"; echo LN_DONE; exit 1; }
 curl -fsS -o $P/session.json $X/qa-session-$LABEL.json; chmod 600 $P/session.json

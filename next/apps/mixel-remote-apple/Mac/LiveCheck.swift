@@ -267,6 +267,17 @@ enum LiveCheck {
         guard let engine = try? CoreEngine(dataDirectory: folder.appendingPathComponent("engine")) else { check("engine starts", false); return }
         check("sign-in with the QA session", await signIn(engine))
         guard let a = await read("host-id-a.txt", seconds: 600).flatMap({ Int($0) }), let b = await read("host-id-b.txt", seconds: 600).flatMap({ Int($0) }) else { check("both lab computers are online", false); return }
+        // This Mac joins the QA login's company (its own key) and goes online, as a technician needs.
+        let rows = (try? await call(engine, "saas_my_tenants").get()) as? [[String: Any]] ?? []
+        let tenant = rows.first?["tenant_id"] as? String ?? ""
+        check("QA company of the login", !tenant.isEmpty)
+        let added = (try? await call(engine, "saas_add_this_device", ["tenant": tenant, "name": "QA Mac lab multi", "group": NSNull()]).get()) as? [String: Any]
+        let mine = added?["connection_id"] as? Int ?? 0
+        check("this Mac added to the company (its own key)", mine > 0, "\(String(describing: added))")
+        let registerStart = Date()
+        _ = await call(engine, "remote_register")
+        let ready = await wait(engine, seconds: 60) { ($0["phase"] as? String) == "ready" }
+        check("this Mac online (\(Int(Date().timeIntervalSince(registerStart) * 1000)) ms after asking to register)", ready != nil)
         func sessions(_ status: [String: Any]) -> [[String: Any]] { status["sessions"] as? [[String: Any]] ?? [] }
         func item(_ status: [String: Any], _ host: Int) -> [String: Any]? { sessions(status).first { ($0["peer"] as? Int) == host } }
         func status() async -> [String: Any] { ((try? await call(engine, "remote_status").get()) as? [String: Any]) ?? [:] }
@@ -277,9 +288,11 @@ enum LiveCheck {
             if online.contains(a), online.contains(b) { break }
             try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
-        let idA = (try? await call(engine, "remote_request", ["host": a, "password": NSNull(), "unattended": false]).get()) as? String
-        let idB = (try? await call(engine, "remote_request", ["host": b, "password": NSNull(), "unattended": false]).get()) as? String
-        check("two requests accepted (stable ids)", idA != nil && idB != nil && idA != idB, "\(String(describing: idA)) \(String(describing: idB))")
+        let requestA = await call(engine, "remote_request", ["host": a, "password": NSNull(), "unattended": false])
+        let requestB = await call(engine, "remote_request", ["host": b, "password": NSNull(), "unattended": false])
+        let idA = (try? requestA.get()) as? String, idB = (try? requestB.get()) as? String
+        let presence = await status()["online"]
+        check("two requests accepted (stable ids)", idA != nil && idB != nil && idA != idB, "\(requestA) \(requestB) presence \(String(describing: presence))")
         guard let idA, let idB else { return }
         let both = await wait(engine, seconds: 90) { status in
             let list = (status["sessions"] as? [[String: Any]] ?? []).filter { ($0["phase"] as? String) == "active" }
@@ -324,6 +337,12 @@ enum LiveCheck {
         _ = await call(engine, "remote_close", ["session": idB])
         let none = await wait(engine, seconds: 30) { (($0["sessions"] as? [[String: Any]]) ?? []).isEmpty }
         check("ending B leaves no session", none != nil)
+        _ = await call(engine, "remote_disconnect")
+        _ = await wait(engine, seconds: 15) { ["offline", "error"].contains($0["phase"] as? String ?? "") }
+        if let device = added?["device_id"] as? String {
+            let removal = await call(engine, "device_self_remove", ["confirmed": true, "registration": ["device": device, "connection_id": mine, "generation": added?["generation"] ?? 0]])
+            check("this Mac removes itself again", ((try? removal.get()) as? String) == "removed", "\(removal)")
+        }
         try? await engine.shutdown()
     }
 
