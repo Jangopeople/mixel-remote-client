@@ -170,6 +170,7 @@ pub struct SessionItem {
     pub files: bool,
     pub recording_permitted: bool,
     pub recording: Option<RecordingView>,
+    pub recording_parts: Vec<String>,
     pub displays: u16,
     pub display: u16,
     pub display_all: bool,

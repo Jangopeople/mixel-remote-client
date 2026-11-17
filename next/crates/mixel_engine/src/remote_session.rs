@@ -80,6 +80,8 @@ pub struct Status {
     pub files: bool,
     pub recording_permitted: bool,
     pub recording: Option<crate::remote_recording::View>,
+    /// Files of the running or last recording, in order (more than one after a size change).
+    pub recording_parts: Vec<String>,
     pub previous_recording: Option<crate::remote_recording::View>,
     pub input_access: bool,
     pub unattended_enabled: bool,
@@ -233,6 +235,7 @@ impl Default for Status {
             files: false,
             recording_permitted: false,
             recording: None,
+            recording_parts: Vec::new(),
             previous_recording: None,
             input_access: false,
             unattended_enabled: false,
@@ -396,6 +399,7 @@ impl Status {
         self.files = view.files;
         self.recording_permitted = view.recording_permitted;
         self.recording = view.recording.clone();
+        self.recording_parts = view.recording_parts.clone();
         self.displays = view.displays;
         self.display = view.display;
         self.display_all = view.display_all;
@@ -890,6 +894,7 @@ impl RemoteSession {
         let mut status = inner.status.clone();
         if status.phase == "active" && !status.sharing {
             status.recording = status.session.and_then(|session| self.recording_hub().view(session));
+            status.recording_parts = status.session.map(|session| self.recording_hub().parts(session)).unwrap_or_default();
         }
         // Technician sessions: each one's own state; a stopped session shows as closing.
         let account_stopped = inner.cancel.load(Ordering::Acquire);
@@ -900,6 +905,7 @@ impl RemoteSession {
                 let mut view = slot.snapshot();
                 if view.phase == "active" {
                     view.recording = view.session.and_then(|session| self.recording_hub().view(session));
+                    view.recording_parts = view.session.map(|session| self.recording_hub().parts(session)).unwrap_or_default();
                 }
                 view.password_session = if view.password_flag || view.password_ends.is_some() {
                     let left = view.password_ends.map(|end| end.saturating_duration_since(std::time::Instant::now()).as_secs());

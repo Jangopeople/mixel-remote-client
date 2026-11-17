@@ -657,6 +657,10 @@ impl SessionView {
         if !recording.is_empty() {
             inner.append(&caption(&recording));
         }
+        if remote.recording_parts.len() > 1 {
+            // The picture size changed: the recording went on in the next file (name-part2.mp4, ...).
+            inner.append(&caption(&tf("The recording is in %d files: name, then name-part2, ...", &[&remote.recording_parts.len()])));
+        }
         let (a, close) = (app.clone(), pop.clone());
         inner.append(&button(&t("Renew connection"), move || {
             close.popdown();

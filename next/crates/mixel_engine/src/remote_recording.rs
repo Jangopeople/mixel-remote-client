@@ -39,6 +39,9 @@ struct Frame {
     ticks: u64,
     size: (u16, u16),
     arrived: Instant,
+    /// The scope (transport) the picture came from; a change of it is a renewal or reconnect: the
+    /// recording goes on and the timeline continues by the wall clock.
+    segment: u64,
 }
 
 struct Job {
@@ -46,6 +49,11 @@ struct Job {
     view: Arc<Mutex<View>>,
     partial: Arc<AtomicBool>,
     stopped: Arc<Mutex<Option<Instant>>>,
+    /// Set when the stream under a running recording was replaced (renewal) or its picture size changed:
+    /// the next picture sent is a key picture, the writer skips anything before it.
+    awaiting_key: Arc<AtomicBool>,
+    /// The files of this recording, in order: the chosen name, then `<name>-part2.mp4`, ...
+    parts: Arc<Mutex<Vec<PathBuf>>>,
 }
 
 impl Job {
@@ -111,9 +119,15 @@ impl RecordingHub {
         }
         // A recording of the grant before (a transport of this session that was just replaced) is
         // finished, never dropped unfinished.
+        // A recording that is still running goes on under the renewed transport (same file, or the next
+        // part when the picture size changes); a finished one is dropped from the list as before.
+        let mut carried = None;
         for before in entry.iter_mut().filter(|grant| grant.session == session) {
-            if let Some(job) = before.job.as_mut() {
-                job.finish();
+            if let Some(job) = before.job.take() {
+                if job.output.is_some() {
+                    job.awaiting_key.store(true, Ordering::Release);
+                    carried = Some(job);
+                }
             }
         }
         entry.retain(|grant| grant.session != session);
@@ -122,7 +136,7 @@ impl RecordingHub {
             session,
             scope,
             live,
-            job: None,
+            job: carried,
         });
         Ok(RecordingScope {
             hub: self.clone(),
@@ -182,10 +196,14 @@ impl RecordingHub {
         let worker_partial = partial.clone();
         let stopped = Arc::new(Mutex::new(None));
         let worker_stopped = stopped.clone();
+        let awaiting_key = Arc::new(AtomicBool::new(false));
+        let worker_key = awaiting_key.clone();
+        let parts = Arc::new(Mutex::new(Vec::new()));
+        let worker_parts = parts.clone();
         let worker = std::thread::Builder::new()
             .name("mixel-session-recording".into())
             .spawn(move || {
-                let next = match save(&destination, input, &result, &worker_stopped) {
+                let next = match save(&destination, input, &result, &worker_stopped, &worker_key, &worker_parts) {
                     Ok(limited) if limited || worker_partial.load(Ordering::Acquire) => {
                         View::SavedPartial
                     }
@@ -203,6 +221,8 @@ impl RecordingHub {
             view,
             partial,
             stopped,
+            awaiting_key,
+            parts,
         });
         Ok(())
     }
@@ -216,6 +236,17 @@ impl RecordingHub {
             .ok_or("There is no recording to stop")?;
         job.finish();
         Ok(())
+    }
+
+    /// The files of the session's current or last recording (more than one when the picture size changed).
+    pub fn parts(&self, session: Uuid) -> Vec<String> {
+        let Ok(entry) = self.grant.lock() else { return Vec::new() };
+        entry
+            .iter()
+            .find(|grant| grant.session == session)
+            .and_then(|grant| grant.job.as_ref())
+            .and_then(|job| job.parts.lock().ok().map(|parts| parts.iter().map(|path| path.to_string_lossy().into_owned()).collect()))
+            .unwrap_or_default()
     }
 
     pub fn last_view(&self) -> Option<View> {
@@ -252,7 +283,13 @@ impl RecordingHub {
 impl RecordingScope {
     pub fn needs_keyframe(&self) -> bool {
         self.hub.grant.lock().is_ok_and(|entry| entry.iter().any(|grant| grant.scope == self.scope))
-            && matches!(self.hub.view(self.session), Some(View::WaitingForVideo))
+            && (matches!(self.hub.view(self.session), Some(View::WaitingForVideo))
+                || self.hub.grant.lock().is_ok_and(|entry| {
+                    entry.iter().any(|grant| {
+                        grant.scope == self.scope
+                            && grant.job.as_ref().is_some_and(|job| job.output.is_some() && job.awaiting_key.load(Ordering::Acquire))
+                    })
+                }))
     }
     pub fn submit(&self, annex_b: &[u8], ticks: u64, size: (u16, u16)) {
         let Ok(mut entry) = self.hub.grant.lock() else {
@@ -275,6 +312,7 @@ impl RecordingScope {
             ticks,
             size,
             arrived: Instant::now(),
+            segment: self.scope,
         });
         if matches!(queued, Err(TrySendError::Full(_))) {
             job.partial.store(true, Ordering::Release);
@@ -286,12 +324,66 @@ impl RecordingScope {
     }
 }
 
+/// How one file of a recording ended.
+enum PartEnd {
+    /// The recording is over (stopped, consent ended, or a size/time limit was reached).
+    Done { limited: bool },
+    /// The picture size or the video parameters changed: the recording goes on in the next file,
+    /// starting with this picture.
+    Next(Frame),
+}
+
+/// `<folder>/<name>.mp4` for part 1, `<folder>/<name>-part2.mp4`, ... for the following ones.
+fn part_path(destination: &Path, number: u32) -> PathBuf {
+    if number <= 1 {
+        return destination.to_path_buf();
+    }
+    let stem = destination.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
+    destination.with_file_name(format!("{stem}-part{number}.mp4"))
+}
+
 fn save(
     destination: &Path,
     input: Receiver<Frame>,
     view: &Mutex<View>,
     stopped: &Mutex<Option<Instant>>,
+    awaiting_key: &AtomicBool,
+    parts: &Mutex<Vec<PathBuf>>,
 ) -> Result<bool, String> {
+    let mut number = 1;
+    let mut carried: Option<Frame> = None;
+    let mut any_limit = false;
+    loop {
+        let path = part_path(destination, number);
+        match save_part(&path, &input, view, stopped, awaiting_key, carried.take())? {
+            PartEnd::Done { limited } => {
+                any_limit |= limited;
+                if let Ok(mut list) = parts.lock() {
+                    list.push(path);
+                }
+                return Ok(any_limit);
+            }
+            PartEnd::Next(frame) => {
+                if let Ok(mut list) = parts.lock() {
+                    list.push(path);
+                }
+                // The next file starts with the first key picture of the new size.
+                awaiting_key.store(true, Ordering::Release);
+                carried = Some(frame);
+                number += 1;
+            }
+        }
+    }
+}
+
+fn save_part(
+    destination: &Path,
+    input: &Receiver<Frame>,
+    view: &Mutex<View>,
+    stopped: &Mutex<Option<Instant>>,
+    awaiting_key: &AtomicBool,
+    carried: Option<Frame>,
+) -> Result<PartEnd, String> {
     let parent = destination.parent().ok_or("Choose a recording filename")?;
     if !destination.is_absolute()
         || !destination
@@ -300,10 +392,14 @@ fn save(
     {
         return Err("Choose a filename ending in .mp4".into());
     }
-    let (first, first_frame) = loop {
-        let frame = input
-            .recv()
-            .map_err(|_| "Recording ended before a complete video frame arrived")?;
+    let mut candidate = carried;
+    let (first, first_frame, first_segment) = loop {
+        let frame = match candidate.take() {
+            Some(frame) => frame,
+            None => input
+                .recv()
+                .map_err(|_| "Recording ended before a complete video frame arrived")?,
+        };
         let access =
             annex_b_to_avcc(&frame.annex_b).map_err(|_| "The recording received invalid video")?;
         if access.keyframe
@@ -319,9 +415,11 @@ fn save(
                     frame.arrived,
                 ),
                 access.bytes,
+                frame.segment,
             );
         }
     };
+    awaiting_key.store(false, Ordering::Release);
     let (start, size, sps, pps, mut last_arrived) = first;
     let file = tempfile::Builder::new()
         .prefix(".mixel-recording-")
@@ -367,19 +465,34 @@ fn save(
     let mut samples = 1;
     let mut last_duration = TIMESCALE / 30;
     let mut limited = false;
+    let mut next_part = None;
+    // The picture clock of one transport; a renewed transport has its own, so the timeline of the
+    // file continues by the wall clock at the change (`base` is where the segment starts in the file).
+    let (mut segment, mut segment_start, mut base) = (first_segment, start, 0u64);
+    // After a renewal, pictures before the first key picture of the new transport are skipped (below).
     for frame in input {
-        let elapsed = frame
-            .ticks
-            .checked_sub(start)
-            .filter(|&ticks| ticks > pending.start_time);
-        let Some(elapsed) = elapsed else { continue };
-        if elapsed >= MAX_TICKS || samples >= MAX_SAMPLES || frame.size != size {
-            limited = true;
-            break;
-        }
         let access =
             annex_b_to_avcc(&frame.annex_b).map_err(|_| "The recording received invalid video")?;
-        if changed_parameters(&access, &sps, &pps) {
+        if frame.segment != segment {
+            if !access.keyframe {
+                continue;
+            }
+            let gap = frame.arrived.saturating_duration_since(last_arrived).as_millis() * u128::from(TIMESCALE / 1000);
+            let gap = gap.clamp(u128::from(TIMESCALE / 30), u128::from(MAX_TICKS)) as u64;
+            base = pending.start_time + gap;
+            segment = frame.segment;
+            segment_start = frame.ticks;
+            awaiting_key.store(false, Ordering::Release);
+        }
+        if frame.size != size || changed_parameters(&access, &sps, &pps) {
+            next_part = Some(frame);
+            break;
+        }
+        let elapsed = base + frame.ticks.saturating_sub(segment_start);
+        if elapsed <= pending.start_time {
+            continue;
+        }
+        if elapsed >= MAX_TICKS || samples >= MAX_SAMPLES {
             limited = true;
             break;
         }
@@ -404,7 +517,7 @@ fn save(
         last_arrived = frame.arrived;
         samples += 1;
     }
-    let tail = if limited {
+    let tail = if limited || next_part.is_some() {
         u64::from(last_duration.clamp(1, TIMESCALE))
     } else {
         let ended = stopped
@@ -427,7 +540,10 @@ fn save(
         .map_err(|_| "Could not flush the recording to disk")?;
     file.persist_noclobber(destination)
         .map_err(|_| "Could not save the recording. Choose a new filename in a writable folder.")?;
-    Ok(limited)
+    Ok(match next_part {
+        Some(frame) => PartEnd::Next(frame),
+        None => PartEnd::Done { limited },
+    })
 }
 
 fn changed_parameters(access: &AvccAccessUnit<'_>, sps: &[u8], pps: &[u8]) -> bool {
@@ -438,11 +554,25 @@ fn changed_parameters(access: &AvccAccessUnit<'_>, sps: &[u8], pps: &[u8]) -> bo
 mod renewal_tests {
     use super::*;
 
+    fn key(sps: u8) -> Vec<u8> {
+        vec![0, 0, 0, 1, 0x67, sps, 1, 2, 3, 0, 0, 0, 1, 0x68, 4, 5, 0, 0, 0, 1, 0x65, 9, 9, 9]
+    }
+    fn delta() -> Vec<u8> {
+        vec![0, 0, 0, 1, 0x41, 7, 7, 7]
+    }
+    fn samples(path: &std::path::Path) -> (u32, u16, u16) {
+        let file = std::fs::File::open(path).unwrap();
+        let length = file.metadata().unwrap().len();
+        let movie = mp4::Mp4Reader::read_header(std::io::BufReader::new(file), length).unwrap();
+        let track = &movie.tracks()[&1];
+        (track.sample_count(), track.width(), track.height())
+    }
+
     /// A session keeps its ID when its transport is renewed. The scope of the transport before
-    /// may neither finish nor feed the renewed transport's grant, and its running recording is
-    /// finished (saved), not dropped, when the renewed transport takes over.
+    /// may neither finish nor feed the renewed transport's grant; a RUNNING recording goes on under
+    /// the renewed transport (same file), skipping pictures until its first key picture.
     #[tokio::test]
-    async fn a_renewed_transport_gets_its_own_grant_and_the_old_recording_is_finished() {
+    async fn a_running_recording_goes_on_across_a_renewal_in_the_same_file() {
         let directory = tempfile::tempdir().unwrap();
         let hub = RecordingHub::default();
         let session = Uuid::new_v4();
@@ -450,21 +580,62 @@ mod renewal_tests {
         let allowed = old_live.clone();
         let old = hub.attach(session, Arc::new(move || allowed.load(Ordering::Acquire))).unwrap();
         assert!(hub.attach(session, Arc::new(|| true)).is_err(), "no second grant while the first is live");
-        hub.start(session, directory.path().join("before.mp4")).unwrap();
+        let file = directory.path().join("long.mp4");
+        hub.start(session, file.clone()).unwrap();
         assert!(old.needs_keyframe());
+        old.submit(&key(1), 0, (2, 2));
+        old.submit(&delta(), 3000, (2, 2));
+        old.submit(&delta(), 6000, (2, 2));
+        std::thread::sleep(Duration::from_millis(50));
         // The old transport was replaced: its authorization ends, the renewed one attaches.
         old_live.store(false, Ordering::Release);
         let renewed = hub.attach(session, Arc::new(|| true)).unwrap();
-        assert!(matches!(hub.view(session), Some(View::Ready)), "the renewed grant starts without a recording");
+        assert!(matches!(hub.view(session), Some(View::Recording)), "the recording is still running");
         assert!(!old.needs_keyframe(), "the old scope no longer asks for pictures");
-        old.submit(&[0, 0, 0, 1, 0x65], 3000, (2, 2));
+        assert!(renewed.needs_keyframe(), "the renewed transport must send a key picture first");
+        old.submit(&delta(), 9000, (2, 2));
         drop(old);
-        assert!(matches!(hub.view(session), Some(View::Ready)), "the old scope's end leaves the renewed grant alone");
-        hub.finish().await.unwrap();
-        hub.start(session, directory.path().join("after.mp4")).unwrap();
+        assert!(matches!(hub.view(session), Some(View::Recording)), "the old scope's end leaves the recording running");
+        renewed.submit(&delta(), 50, (2, 2)); // not usable before a key picture
         assert!(renewed.needs_keyframe());
-        drop(renewed);
+        std::thread::sleep(Duration::from_millis(50));
+        renewed.submit(&key(1), 100, (2, 2));
+        renewed.submit(&delta(), 3100, (2, 2));
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!renewed.needs_keyframe());
+        hub.stop(session).unwrap();
         hub.finish().await.unwrap();
+        assert!(matches!(hub.last_view(), Some(View::Saved)));
+        assert_eq!(samples(&file), (5, 2, 2), "3 pictures before, 2 after the renewal, nothing lost or doubled");
+        assert_eq!(hub.parts(session), vec![file.to_string_lossy().into_owned()]);
+        drop(renewed);
+    }
+
+    /// A change of the picture size (a display switch) starts the next part, named clearly; the
+    /// recording itself goes on.
+    #[tokio::test]
+    async fn a_size_change_starts_the_next_part_automatically() {
+        let directory = tempfile::tempdir().unwrap();
+        let hub = RecordingHub::default();
+        let session = Uuid::new_v4();
+        let scope = hub.attach(session, Arc::new(|| true)).unwrap();
+        let file = directory.path().join("screen.mp4");
+        hub.start(session, file.clone()).unwrap();
+        scope.submit(&key(1), 0, (2, 2));
+        scope.submit(&delta(), 3000, (2, 2));
+        scope.submit(&delta(), 6000, (4, 4)); // size changed, not a key picture: waits
+        std::thread::sleep(Duration::from_millis(50));
+        scope.submit(&key(2), 9000, (4, 4));
+        scope.submit(&delta(), 12000, (4, 4));
+        std::thread::sleep(Duration::from_millis(50));
+        hub.stop(session).unwrap();
+        hub.finish().await.unwrap();
+        let second = directory.path().join("screen-part2.mp4");
+        assert_eq!(samples(&file), (2, 2, 2));
+        assert_eq!(samples(&second), (2, 4, 4));
+        assert_eq!(hub.parts(session).len(), 2);
+        assert!(matches!(hub.last_view(), Some(View::Saved)));
+        drop(scope);
     }
 }
 
