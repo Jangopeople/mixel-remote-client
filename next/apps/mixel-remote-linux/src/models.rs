@@ -88,6 +88,7 @@ pub struct RemoteStatus {
     pub files: bool,
     pub recording_permitted: bool,
     pub recording: Option<RecordingView>,
+    pub recording_parts: Vec<String>,
     pub previous_recording: Option<RecordingView>,
     pub input_access: bool,
     pub unattended_enabled: bool,
