@@ -533,7 +533,7 @@ msgid "End the current session first."
 msgstr "Beenden Sie zuerst die laufende Sitzung."
 
 msgid "End-to-end encrypted, hosted in Switzerland"
-msgstr "Ende-zu-Ende-verschlüsselt, in der Schweiz gehostet"
+msgstr "Ende-zu-Ende verschlüsselt, gehostet in der Schweiz"
 
 msgid "Ending the session…"
 msgstr "Sitzung wird beendet…"
@@ -614,7 +614,7 @@ msgid "Generated %@"
 msgstr "Erstellt am %@"
 
 msgid "Get a support ID for your technician"
-msgstr "Support-ID für Ihren Techniker erhalten"
+msgstr "Support-ID für Ihre Technikerin oder Ihren Techniker holen"
 
 msgid "Get remote clipboard"
 msgstr "Entfernte Zwischenablage holen"
@@ -1049,7 +1049,7 @@ msgid "Quit Mixel Remote"
 msgstr "Mixel Remote beenden"
 
 msgid "Reach every company device in seconds, run several sessions side by side, and file the report without leaving the session."
-msgstr "Erreichen Sie jedes Firmengerät in Sekunden, führen Sie mehrere Sitzungen nebeneinander und schreiben Sie den Bericht, ohne die Sitzung zu verlassen."
+msgstr "Erreichen Sie jedes Firmengerät in Sekunden, führen Sie mehrere Sitzungen nebeneinander und erfassen Sie den Bericht, ohne die Sitzung zu verlassen."
 
 msgid "Reaching device"
 msgstr "Gerät wird erreicht"
@@ -1071,6 +1071,9 @@ msgstr "Jetzt neu verbinden"
 
 msgid "Reconnecting automatically."
 msgstr "Verbindet sich automatisch neu."
+
+msgid "Reconnecting… the session stays open"
+msgstr "Verbindung wird wiederhergestellt… die Sitzung bleibt offen"
 
 msgid "Record"
 msgstr "Aufzeichnen"
@@ -1459,6 +1462,9 @@ msgstr "Die Sitzung ist bereit."
 msgid "The technician wants to show you their screen."
 msgstr "Der Techniker möchte Ihnen seinen Bildschirm zeigen."
 
+msgid "The time limit of this password session is reached. The session ends now."
+msgstr "Die Zeitgrenze dieser Passwort-Sitzung ist erreicht. Die Sitzung endet jetzt."
+
 msgid "The update could not be installed: %@"
 msgstr "Das Update konnte nicht installiert werden: %@"
 
@@ -1531,6 +1537,12 @@ msgstr "Dies ist die neueste Version."
 msgid "This session was opened with a one-time password. Continue only if the person at the other computer gave it to you; either side can end it at any time."
 msgstr "Diese Sitzung wurde mit einem Einmalpasswort geöffnet. Fahren Sie nur fort, wenn die Person am anderen Computer es Ihnen gegeben hat; jede Seite kann sie jederzeit beenden."
 
+msgid "This support session ends in %d minutes (support password limit). Ask for a new password to continue."
+msgstr "Diese Support-Sitzung endet in %d Minuten (Limit des Support-Passworts). Fragen Sie nach einem neuen Passwort, um fortzufahren."
+
+msgid "This support session ends in 1 minute (support password limit). Ask for a new password to continue."
+msgstr "Diese Support-Sitzung endet in 1 Minute (Limit des Support-Passworts). Fragen Sie nach einem neuen Passwort, um fortzufahren."
+
 msgid "Ticket number"
 msgstr "Ticketnummer"
 
@@ -1588,6 +1600,9 @@ msgstr "Update verfügbar"
 msgid "Update now"
 msgstr "Jetzt aktualisieren"
 
+msgid "Update ready, installs after this session"
+msgstr "Update bereit, wird nach dieser Sitzung installiert"
+
 msgid "Update sign-in screen access"
 msgstr "Zugriff auf den Anmeldebildschirm aktualisieren"
 
@@ -1604,7 +1619,7 @@ msgid "Use another browser"
 msgstr "Anderen Browser verwenden"
 
 msgid "Use your Mixel ID. Your company decides which sign-in methods its members may use."
-msgstr "Verwenden Sie Ihre Mixel ID. Ihre Firma bestimmt, welche Anmeldemethoden ihre Mitglieder nutzen dürfen."
+msgstr "Verwenden Sie Ihre Mixel ID. Ihr Unternehmen bestimmt, welche Anmeldemethoden seine Mitglieder nutzen dürfen."
 
 msgid "Valid for (days)"
 msgstr "Gültig (Tage)"

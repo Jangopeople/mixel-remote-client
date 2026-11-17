@@ -8999,6 +8999,28 @@
         }
       }
     },
+    "Reconnecting… the session stays open": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbindung wird wiederhergestellt… die Sitzung bleibt offen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reconnexion… la session reste ouverte"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Riconnessione… la sessione resta aperta"
+          }
+        }
+      }
+    },
     "Record": {
       "localizations": {
         "de": {
@@ -13549,6 +13571,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Aggiorna ora"
+          }
+        }
+      }
+    },
+    "Update ready, installs after this session": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update bereit, wird nach dieser Sitzung installiert"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mise à jour prête, installation après cette session"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aggiornamento pronto, verrà installato dopo questa sessione"
           }
         }
       }

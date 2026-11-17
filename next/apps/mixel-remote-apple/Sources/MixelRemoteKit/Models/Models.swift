@@ -112,6 +112,9 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
     /// The session was opened with a one-time support password (docs/mixel-remote-ui-engine-requests.md,
     /// item 3). Absent until the engine reports it; the app then relies on what it sent itself.
     public var passwordSession: PasswordSessionView?
+    /// The connection to the connection service was lost; the session itself continues and is resumed (engine 2.1.0).
+    public var reconnecting: Bool?
+    public var isReconnecting: Bool { reconnecting == true }
 
     public static let offline = RemoteStatus(phase: "offline")
 
@@ -158,6 +161,7 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
         self.switched = switched
         self.peerFeatures = peerFeatures
         self.passwordSession = nil
+        self.reconnecting = nil
     }
 
     /// Connected to Mixel (this computer can be reached and can connect).

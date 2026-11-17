@@ -17,6 +17,8 @@ LANGS = ['de', 'fr', 'it']
 
 # English: (German (Swiss spelling), French, Italian) — texts only the Linux app shows.
 LINUX = {
+    'This support session ends in 1 minute (support password limit). Ask for a new password to continue.': ('Diese Support-Sitzung endet in 1 Minute (Limit des Support-Passworts). Fragen Sie nach einem neuen Passwort, um fortzufahren.', 'Cette session de support se termine dans 1 minute (limite du mot de passe de support). Demandez un nouveau mot de passe pour continuer.', 'Questa sessione di supporto termina tra 1 minuto (limite della password di supporto). Chieda una nuova password per continuare.'),
+    'This support session ends in %d minutes (support password limit). Ask for a new password to continue.': ('Diese Support-Sitzung endet in %d Minuten (Limit des Support-Passworts). Fragen Sie nach einem neuen Passwort, um fortzufahren.', 'Cette session de support se termine dans %d minutes (limite du mot de passe de support). Demandez un nouveau mot de passe pour continuer.', 'Questa sessione di supporto termina tra %d minuti (limite della password di supporto). Chieda una nuova password per continuare.'),
     "Add computer": ("Computer hinzufügen", "Ajouter un ordinateur", "Aggiungi computer"),
     "%@ is in its own window": ("%@ ist in einem eigenen Fenster", "%@ est dans sa propre fenêtre", "%@ è in una finestra separata"),
     "Account & security": ("Konto und Sicherheit", "Compte et sécurité", "Account e sicurezza"),

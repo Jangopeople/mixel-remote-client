@@ -13,6 +13,8 @@ TABLES = json.load(open(os.path.join(HERE, 'Sources/MixelRemoteKit/Resources/eng
 
 # English key: (German (Swiss spelling), French, Italian)
 NATIVE = {
+    "Update ready, installs after this session": ("Update bereit, wird nach dieser Sitzung installiert", "Mise à jour prête, installation après cette session", "Aggiornamento pronto, verrà installato dopo questa sessione"),
+    "Reconnecting… the session stays open": ("Verbindung wird wiederhergestellt… die Sitzung bleibt offen", "Reconnexion… la session reste ouverte", "Riconnessione… la sessione resta aperta"),
     # --- Mac console 2.1: reports, settings, sign-in screen, session notices, device administration ---
     '%@ (%@) is signed out of Mixel Remote and can no longer be reached. You can add it again later from that computer.': ('%@ (%@) wird von Mixel Remote abgemeldet und ist nicht mehr erreichbar. Sie können es später an diesem Computer wieder hinzufügen.', '%@ (%@) est déconnecté de Mixel Remote et n’est plus joignable. Vous pourrez le rajouter plus tard depuis cet ordinateur.', '%@ (%@) viene disconnesso da Mixel Remote e non è più raggiungibile. Potrà aggiungerlo di nuovo più tardi da quel computer.'),
     '%d company devices are not on %@': ('%d Firmengeräte haben nicht die Version %@', '%d appareils de l’entreprise ne sont pas en version %@', '%d dispositivi aziendali non hanno la versione %@'),

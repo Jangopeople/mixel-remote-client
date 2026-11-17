@@ -211,6 +211,8 @@ public sealed class SessionModel : Observable
     /// A session started with a support password ends after 2 hours: "ends in 5 minutes" and "ends in 1 minute"
     /// (the broker's session_ending, as remote_status.password_session). Empty when there is nothing to say.
     /// </summary>
+    public string ReconnectingNotice() => Remote.Reconnecting ? L("Reconnecting… the session stays open") : "";
+
     public string PasswordWarning(DateTimeOffset? now = null)
     {
         if (Format.ParseDate(Remote.PasswordSession?.EndsAt) is not { } ends) return "";

@@ -3941,3 +3941,30 @@ mod unattended_choice {
         }
     }
 }
+
+#[cfg(test)]
+mod countdown_tests {
+    use super::*;
+
+    #[test]
+    fn the_end_time_is_written_as_iso_8601_utc() {
+        assert_eq!(iso_utc(0), "1970-01-01T00:00:00Z");
+        assert_eq!(iso_utc(1_794_900_000), "2026-11-17T07:20:00Z");
+        assert_eq!(iso_utc(1_794_986_400), "2026-11-18T07:20:00Z");
+        assert_eq!(iso_utc(951_868_799), "2000-02-29T23:59:59Z", "leap day");
+    }
+
+    #[test]
+    fn the_warnings_say_five_minutes_and_one_minute() {
+        assert!(ending_message(300).starts_with("This support session ends in 5 minutes (support password limit)."));
+        assert!(ending_message(60).starts_with("This support session ends in 1 minute (support password limit)."));
+        assert!(ending_message(61).contains("2 minutes"));
+        assert!(ending_message(300).ends_with("Ask for a new password to continue."));
+    }
+
+    #[test]
+    fn the_platform_is_a_short_lowercase_word_the_broker_accepts() {
+        let platform = app_platform();
+        assert!(signaling_server::protocol::valid_app_version(crate::agent::APP_VERSION, &platform), "{platform}");
+    }
+}

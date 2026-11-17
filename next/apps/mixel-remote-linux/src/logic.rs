@@ -63,6 +63,25 @@ pub fn picture_cursor(pointer_mode: bool) -> &'static str {
     if pointer_mode { "crosshair" } else { "default" }
 }
 
+/// Lines for the session view: the registration is being restored (the session stays open), and the
+/// 5-minute and 1-minute warnings of a session opened with a support password (D2).
+pub fn session_warnings(remote: &RemoteStatus) -> Vec<String> {
+    let mut lines = Vec::new();
+    if remote.reconnecting {
+        lines.push(t("Reconnecting… the session stays open"));
+    }
+    if let Some(left) = remote.password_session.as_ref().and_then(|session| session.seconds_left) {
+        if left == 0 {
+            lines.push(t("The time limit of this password session is reached. The session ends now."));
+        } else if left <= 60 {
+            lines.push(t("This support session ends in 1 minute (support password limit). Ask for a new password to continue."));
+        } else if left <= 300 {
+            lines.push(tf("This support session ends in %d minutes (support password limit). Ask for a new password to continue.", &[&left.div_ceil(60)]));
+        }
+    }
+    lines
+}
+
 /// The status line of the connection, as the desktop app words it.
 pub fn connection_message(signed_in: bool, remote: &RemoteStatus, stopping: bool) -> String {
     if stopping {
@@ -722,6 +741,32 @@ pub fn report_day(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn a_password_session_warns_at_five_minutes_and_one_minute_and_says_when_it_ends() {
+        let at = |left: Option<u64>| {
+            let remote = RemoteStatus { password_session: Some(PasswordSessionView { ends_at: None, seconds_left: left }), ..Default::default() };
+            session_warnings(&remote)
+        };
+        assert!(at(Some(7000)).is_empty(), "nothing to say until 5 minutes before");
+        assert!(at(None).is_empty());
+        assert!(at(Some(300))[0].contains("5 minutes"));
+        assert!(at(Some(61))[0].contains("2 minutes"));
+        assert!(at(Some(60))[0].contains("1 minute"));
+        assert!(at(Some(0))[0].contains("time limit"));
+        assert!(session_warnings(&RemoteStatus::default()).is_empty());
+    }
+
+    #[test]
+    fn a_session_whose_registration_is_restored_says_so_and_stays_active() {
+        let remote: RemoteStatus = serde_json::from_str(r#"{"phase":"active","reconnecting":true}"#).unwrap();
+        assert_eq!(remote.phase, "active");
+        assert_eq!(session_warnings(&remote), vec!["Reconnecting… the session stays open".to_owned()]);
+        let old: RemoteStatus = serde_json::from_str(r#"{"phase":"active"}"#).unwrap();
+        assert!(!old.reconnecting && old.password_session.is_none());
+    }
+
     #[test]
     fn the_picture_has_one_cursor_and_no_pointer_overlay() {
         assert_eq!(super::picture_cursor(false), "default");

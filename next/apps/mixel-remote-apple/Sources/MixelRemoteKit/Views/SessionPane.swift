@@ -51,6 +51,16 @@ struct SessionStage: View {
                 SessionBar(app: app, session: session, drawing: drawing, workspace: workspace, tab: tab, inWindow: inWindow, compact: true, tool: $tool, inviting: $inviting)
             }
             Rectangle().fill(Theme.hairline).frame(height: 1)
+            if app.remote.isReconnecting {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(verbatim: L("Reconnecting… the session stays open")).font(.system(size: 12, weight: .medium))
+                    Spacer()
+                }
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(Theme.updateSoft)
+                .accessibilityElement(children: .combine)
+            }
             SessionNoticeBanner(app: app, session: session)
             HStack(spacing: 0) {
                 screen

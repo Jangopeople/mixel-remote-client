@@ -94,6 +94,8 @@ public sealed record RemoteStatus
     public List<string> PeerFeatures { get; init; } = [];
     /// <summary>The session was started with a support password: when it ends (docs/mixel-remote-ui-engine-requests.md item 3; null until the engine reports it).</summary>
     public PasswordSession? PasswordSession { get; init; }
+    /// <summary>The connection to the connection service was lost; the session continues and is resumed (engine 2.1.0).</summary>
+    public bool Reconnecting { get; init; }
 
     public static readonly RemoteStatus Offline = new();
 

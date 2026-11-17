@@ -104,6 +104,18 @@ pub struct RemoteStatus {
     pub joined_session: bool,
     pub switched: bool,
     pub peer_features: Vec<String>,
+    /// The connection to the connection service was lost; the session continues and is resumed (engine 2.1.0).
+    pub reconnecting: bool,
+    /// A session opened with a support password ends by itself after 2 hours (engine 2.1.0).
+    pub password_session: Option<PasswordSessionView>,
+}
+
+/// `remote_status.password_session`: when the broker's limit ends the session, once known.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct PasswordSessionView {
+    pub ends_at: Option<String>,
+    pub seconds_left: Option<u64>,
 }
 
 /// The one-time password of this computer: the engine sends the code (or an object with it).
@@ -442,6 +454,8 @@ pub struct UpdateInfo {
     pub silent: bool,
     /// Installing asks for the administrator password (always on Linux).
     pub needs_password: bool,
+    /// A session is running (or ended a moment ago): the update is ready and installs after it.
+    pub waits_for_session: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
