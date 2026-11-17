@@ -2,15 +2,15 @@
 # sync.sh: copies the Windows app sources to the build VM "win-build" and runs one step there. No secrets: ssh uses the
 # host alias and key already set up on this Mac (~/.ssh/config).
 #
-#   tools/lab/windows/sync.sh test            # dotnet test of MixelRemote.Core.Tests
-#   tools/lab/windows/sync.sh build           # dotnet build of MixelRemote.App (Release, x64)
-#   tools/lab/windows/sync.sh all             # both
-#   tools/lab/windows/sync.sh sync            # copy only
+#   next/tools/lab/windows/sync.sh test            # dotnet test of MixelRemote.Core.Tests
+#   next/tools/lab/windows/sync.sh build           # dotnet build of MixelRemote.App (Release, x64)
+#   next/tools/lab/windows/sync.sh all             # both
+#   next/tools/lab/windows/sync.sh sync            # copy only
 #
 # The copy goes to W:\MixelRemoteBuild\<WIN_WORK> (default win-210), next/apps/mixel-remote-windows inside it; bin and obj are
 # not copied, so the VM keeps its own build output (fast rebuilds). Output of each step is also kept in <WIN_WORK>\logs.
 set -euo pipefail
-HERE="$(cd "$(dirname "$0")/../../.." && pwd)"
+HERE="$(cd "$(dirname "$0")/../../../apps/mixel-remote-windows" && pwd)"
 WORK="${WIN_WORK:-win-210}"
 HOST="${WIN_HOST:-win-build}"
 STEP="${1:-all}"
