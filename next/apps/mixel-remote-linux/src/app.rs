@@ -10,6 +10,8 @@ use crate::{
     models::*,
     store::{Registration, Store, Unattended},
     video,
+    view::{self, Filters},
+    workspace::{Effect, Observed, OpenIn, WhenReady, Workspace},
 };
 use gtk::{gdk, glib, prelude::*};
 use serde::de::DeserializeOwned;
@@ -46,6 +48,10 @@ pub struct DevicesState {
     pub server_presence: HashMap<u32, SaasPresence>,
     pub deploy_link: Option<DeployLinkCreated>,
     pub checked: HashSet<u32>,
+    /// What the console shows of the list: the sidebar view, the chips, the search and the sort.
+    pub filters: Filters,
+    /// Version and unattended setting per Remote ID (device administration API; empty until read).
+    pub meta: HashMap<u32, AdminDevice>,
     cursors: Vec<Option<u32>>,
     next_cursor: Option<u32>,
     company_all: Vec<Device>,
@@ -162,6 +168,8 @@ pub struct SessionState {
     pub tool: Option<Tool>,
     pub invite_link: Option<MeetingRoom>,
     pub last_request_unattended: bool,
+    /// The running session was opened with a one-time password (the session view warns about it).
+    pub password_session: bool,
     pub assistant: AssistantState,
     /// After a controlled session with a company device: offer a session note for this Remote ID.
     pub note_for: Option<u32>,
@@ -175,6 +183,9 @@ pub struct SessionState {
 #[derive(Clone, Debug, Default)]
 pub struct State {
     pub section: Section,
+    pub workspace: Workspace,
+    /// "Stay signed in on this computer" as chosen on the sign-in screen; applied once after sign-in.
+    pub signin_stay: Option<bool>,
     pub account: AccountStatus,
     pub remote: RemoteStatus,
     pub error: String,
@@ -282,6 +293,7 @@ impl App {
         state.enrollment.current = store.settings.this_computer.clone();
         state.session.sound = true;
         state.session.draw_width = 2;
+        state.workspace = Workspace::new(WhenReady::from_id(&store.settings.when_ready), OpenIn::from_id(&store.settings.open_in));
         Rc::new(Self {
             engine,
             info,
@@ -453,6 +465,7 @@ impl App {
             self.changed();
         }
         self.session_status_changed(&previous, &next);
+        self.sync_workspace();
         self.host_status_changed(&previous, &next);
         self.devices_status_changed(&previous, &next);
         if !next.host_macs.is_empty()
@@ -501,6 +514,14 @@ impl App {
                 app.check_enrollment().await;
                 app.load_devices(0).await;
                 app.load_settings().await;
+                // The choice made on the sign-in screen ("Stay signed in on this computer").
+                let wish = app.state.borrow_mut().signin_stay.take();
+                let remembered = app.state.borrow().settings.startup.as_ref().is_some_and(|startup| startup.remembered);
+                if let Some(wish) = wish
+                    && wish != remembered
+                {
+                    app.set_stay_signed_in(wish);
+                }
             });
         }
     }
@@ -611,14 +632,22 @@ impl App {
     /// Connects to a Remote ID: brings this computer online first if needed; for a phone with Mixel
     /// Quick Support it claims the phone and waits until it is online, so one click is enough.
     pub fn connect(self: &Rc<Self>, id: u32, password: Option<String>, unattended: bool) {
-        if self.state.borrow().busy {
+        let busy = self.state.borrow().busy;
+        {
+            // The connecting card: the person stays in Devices while the connection is prepared.
+            let (name, os) = self.peer_label(id);
+            let mut state = self.state.borrow_mut();
+            state.workspace.connect(id, &name, &os, unattended, clock(), busy.then(|| t("Please wait a moment, the previous step is still running.")).as_deref());
+        }
+        if busy {
             self.edit(|state| state.progress = t("Please wait a moment, the previous step is still running."));
             return;
         }
         self.edit(|state| {
             state.busy = true;
             state.error.clear();
-            state.section = Section::Remote;
+            state.section = Section::Devices;
+            state.session.password_session = password.is_some();
         });
         let app = self.clone();
         self.spawn(async move {
@@ -631,7 +660,181 @@ impl App {
                 }
             });
             app.refresh_remote().await;
+            app.sync_workspace();
         });
+    }
+
+    /// The name and system of a Remote ID for the tab and the connecting card.
+    fn peer_label(&self, id: u32) -> (String, String) {
+        let state = self.state.borrow();
+        match state.devices.devices.iter().find(|device| device.connection_id == id) {
+            Some(device) => (device.name.clone(), device.os.clone()),
+            None => (format::remote_id(Some(id)), String::new()),
+        }
+    }
+
+    fn observed(&self) -> Observed {
+        let peer = self.state.borrow().remote.peer;
+        let (name, os) = peer.map(|peer| self.peer_label(peer)).unwrap_or_default();
+        let state = self.state.borrow();
+        let remote = &state.remote;
+        Observed {
+            peer,
+            sharing: remote.sharing,
+            has_session: remote.session.is_some(),
+            phase: remote.phase.clone(),
+            frame_shown: state.session.has_frame,
+            in_session: remote.in_session(),
+            busy: state.busy,
+            error: state.error.clone(),
+            declined: self.declined_text(&state),
+            name,
+            os,
+        }
+    }
+
+    fn declined_text(&self, state: &State) -> String {
+        if state.remote.message.is_empty() || state.remote.phase == "ready" {
+            t("The connection was not established. The other side declined, did not answer, or unattended access is not allowed.")
+        } else {
+            i18n::engine(&state.remote.message)
+        }
+    }
+
+    /// Reads the engine's state into the workspace (tabs, the connecting card, the "ready" notice) and
+    /// carries out what it asks for (open, raise or close a session window).
+    pub fn sync_workspace(self: &Rc<Self>) {
+        let observed = self.observed();
+        let (effects, differs) = {
+            let mut state = self.state.borrow_mut();
+            let before = state.workspace.clone();
+            let effects = state.workspace.refresh(&observed);
+            (effects, state.workspace != before)
+        };
+        if differs {
+            self.changed();
+        }
+        self.apply_effects(effects);
+    }
+
+    pub fn apply_effects(self: &Rc<Self>, effects: Vec<Effect>) {
+        if effects.is_empty() {
+            return;
+        }
+        if let Some(ui) = self.ui.borrow().clone() {
+            for effect in effects {
+                ui.apply(self, effect);
+            }
+        }
+    }
+
+    /// Cancel while connecting (ends the request for both sides), or close a failed attempt.
+    pub fn cancel_attempt(self: &Rc<Self>) {
+        let in_session = self.state.borrow().remote.peer.filter(|_| self.state.borrow().remote.in_session());
+        let end = self.state.borrow_mut().workspace.cancel_attempt(in_session);
+        if end.is_some() {
+            self.end_session();
+        }
+        self.changed();
+    }
+
+    pub fn open_attempt_in_window(self: &Rc<Self>) {
+        self.edit(|state| state.workspace.open_attempt_in_window());
+    }
+
+    pub fn show_session(self: &Rc<Self>, peer: u32) {
+        let effects = self.state.borrow_mut().workspace.show(peer, None);
+        self.changed();
+        self.apply_effects(effects);
+    }
+
+    pub fn pop_out(self: &Rc<Self>, peer: u32) {
+        let effects = self.state.borrow_mut().workspace.pop_out(peer);
+        self.changed();
+        self.apply_effects(effects);
+    }
+
+    /// Back into a tab; `close_window`: false when the window is being closed by the person already.
+    pub fn dock(self: &Rc<Self>, peer: u32, close_window: bool) {
+        let effects = self.state.borrow_mut().workspace.dock(peer, true, close_window);
+        self.changed();
+        self.apply_effects(effects);
+    }
+
+    pub fn dismiss_notice(self: &Rc<Self>, peer: u32) {
+        self.edit(|state| state.workspace.dismiss_notice(peer));
+    }
+
+    pub fn select_tab(self: &Rc<Self>, tab: crate::workspace::Tab) {
+        self.edit(|state| state.workspace.selected = tab);
+    }
+
+    pub fn set_when_ready(self: &Rc<Self>, value: WhenReady) {
+        {
+            let mut store = self.store.borrow_mut();
+            store.settings.when_ready = value.id().to_owned();
+            store.save();
+        }
+        self.edit(|state| state.workspace.when_ready = value);
+    }
+
+    pub fn set_open_in(self: &Rc<Self>, value: OpenIn) {
+        {
+            let mut store = self.store.borrow_mut();
+            store.settings.open_in = value.id().to_owned();
+            store.save();
+        }
+        self.edit(|state| state.workspace.open_in = value);
+    }
+
+    /// `system`, `light` or `dark`.
+    pub fn set_appearance(self: &Rc<Self>, value: &str) {
+        {
+            let mut store = self.store.borrow_mut();
+            store.settings.appearance = if value == "system" { String::new() } else { value.to_owned() };
+            store.save();
+        }
+        crate::ui::apply_appearance(value);
+        self.changed();
+    }
+
+    /// Version and unattended setting of the listed devices from the device administration API
+    /// (docs/mixel-remote-device-admin-api.md, `remote_admin_devices`). The engine has no such command
+    /// yet: the call fails, nothing is stored and the table shows no version or unattended badges.
+    /// When the engine has it, this is the only place to wire.
+    async fn load_device_meta(self: &Rc<Self>) {
+        let rows: Vec<AdminDevice> = match self.run("remote_admin_devices", json!({ "company": Value::Null, "search": Value::Null })).await {
+            Ok(rows) => rows,
+            Err(_) => return,
+        };
+        self.edit(|state| state.devices.meta = rows.into_iter().map(|row| (row.connection_id, row)).collect());
+    }
+
+    /// The table's rows as the filters read them.
+    pub fn console_rows(&self, state: &State) -> Vec<view::Row> {
+        let latest = state.devices.meta.values().filter_map(|meta| meta.app_version.as_deref()).chain(std::iter::once(self.info.version.as_str())).fold("", |best, version| if view::version_older(best, version) { version } else { best }).to_owned();
+        state
+            .devices
+            .devices
+            .iter()
+            .map(|device| {
+                let presence = state.presence(device);
+                let meta = state.devices.meta.get(&device.connection_id);
+                view::Row {
+                    id: device.connection_id,
+                    name: device.name.clone(),
+                    os: device.os.clone(),
+                    online: matches!(presence, Presence::Online | Presence::This),
+                    this_computer: presence == Presence::This,
+                    favourite: state.devices.favorites.contains(&device.device),
+                    recent: state.devices.recent.iter().position(|id| *id == device.device),
+                    group: device.group_id.clone(),
+                    unattended: meta.and_then(|meta| meta.unattended_allowed).unwrap_or(false),
+                    update: meta.and_then(|meta| meta.app_version.as_deref()).is_some_and(|version| view::version_older(version, &latest)),
+                    note: meta.and_then(|meta| meta.note.clone()).unwrap_or_default(),
+                }
+            })
+            .collect()
     }
 
     async fn status(&self) -> Option<RemoteStatus> {
@@ -731,6 +934,7 @@ impl App {
             }
         });
         self.check_presence(true).await;
+        self.load_device_meta().await;
     }
 
     async fn load_devices_page(self: &Rc<Self>, wanted: usize) -> Result<(), String> {
@@ -1828,6 +2032,7 @@ impl App {
                 state.session.size = (frame.width, frame.height);
                 state.session.has_frame = true;
             });
+            self.sync_workspace();
         }
     }
 

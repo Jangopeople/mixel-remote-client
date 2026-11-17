@@ -563,3 +563,18 @@ pub struct SessionRow {
     pub colleague: bool,
     pub note: Option<String>,
 }
+
+/// What the device administration API (`remote_admin_devices`, docs/mixel-remote-device-admin-api.md)
+/// reports about a device beyond the list: the app version and the unattended-access setting. Read in
+/// one place (`App::load_device_meta`); until the engine has the command the table shows no badges.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct AdminDevice {
+    pub connection_id: u32,
+    pub app_version: Option<String>,
+    pub unattended_allowed: Option<bool>,
+    pub unattended_setting: Option<String>,
+    pub note: Option<String>,
+    pub can_admin: bool,
+    pub last_seen: Option<String>,
+}

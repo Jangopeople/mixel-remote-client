@@ -123,7 +123,7 @@ pub struct Observed {
     pub os: String,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Workspace {
     pub when_ready: WhenReady,
     pub open_in: OpenIn,

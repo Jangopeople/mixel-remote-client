@@ -1,25 +1,33 @@
-//! The window: a sidebar with the sections and this computer's connection, the section pages, and
-//! the session, which takes the whole window while it runs. libadwaita's look in Mixel's colours,
-//! light or dark as the system is. The consent dialog appears over everything.
+//! The window (Pro Console): a title bar with the session tabs (Devices and one tab per session), the
+//! console (sidebar and section pages) in the Devices tab, each session in its own tab or popped out
+//! into its own window, floating cards for a connection being prepared and for a session that is ready,
+//! and the sign-in screen while nobody is signed in. libadwaita's look in Mixel's colours, light or
+//! dark as the system or the Appearance setting says. The consent dialog appears over everything.
 mod account;
+mod cards;
 mod consent;
 mod devices;
 pub mod dialogs;
 mod remote;
 mod reports;
 mod session;
+mod sessions;
 mod settings;
+mod sidebar;
+mod signin;
 pub mod widgets;
 
 use crate::{
     app::{App, Shell, State},
     i18n::{t, tf},
-    logic::{self, Section},
+    logic::Section,
+    workspace::{Effect, Tab},
 };
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use std::{
     cell::{Cell, RefCell},
+    collections::HashMap,
     future::Future,
     pin::Pin,
     rc::Rc,
@@ -29,19 +37,35 @@ use widgets::*;
 const CSS: &str = include_str!("style.css");
 const CSS_DARK: &str = include_str!("style-dark.css");
 
+/// One session's tab: its page in the tab bar, the slot the session view sits in, and the note shown
+/// instead while the session is in its own window.
+struct SessionTab {
+    peer: u32,
+    page: adw::TabPage,
+    slot: gtk::Box,
+    popped: gtk::Box,
+}
+
 struct Parts {
     root: gtk::Stack,
+    signin: signin::SigninPage,
+    chrome: gtk::Box,
     leaflet: adw::Leaflet,
-    sidebar: gtk::ListBox,
-    footer: gtk::Box,
-    footer_key: RefCell<String>,
+    sidebar: sidebar::Sidebar,
     title: adw::WindowTitle,
     back: gtk::Button,
+    tabs: adw::TabView,
+    console_page: adw::TabPage,
+    session_tabs: Rc<RefCell<Vec<SessionTab>>>,
+    forced_close: Rc<Cell<bool>>,
     pages: gtk::Stack,
     banner: gtk::Box,
     banner_key: RefCell<String>,
-    remote: remote::RemotePage,
+    floating: gtk::Box,
+    floating_key: RefCell<String>,
+    computer: remote::RemotePage,
     devices: devices::DevicesPage,
+    sessions: sessions::SessionsPage,
     account: account::AccountPage,
     settings: settings::SettingsPage,
     reports: reports::ReportsPage,
@@ -59,6 +83,7 @@ pub struct Ui {
     quitting: Cell<bool>,
     fullscreen_session: Cell<bool>,
     session_keys: Cell<bool>,
+    popouts: RefCell<HashMap<u32, adw::Window>>,
 }
 
 /// The window's own way to ask the person (file panels) and to open links.
@@ -117,6 +142,7 @@ pub fn install(app: &Rc<App>, application: &adw::Application, autostart: bool) {
     let ui = Ui::new(app, application);
     app.ui.replace(Some(ui.clone()));
     app.shell.replace(Some(Rc::new(GtkShell { window: ui.window.clone(), toasts: ui.toasts.clone() })));
+    apply_appearance(&app.store.borrow().settings.appearance);
     ui.install_actions(app);
     if let Some(runtime) = app.engine.runtime() {
         let tray = crate::tray::Tray::start(app, &runtime);
@@ -151,8 +177,19 @@ impl Ui {
             quitting: Cell::new(false),
             fullscreen_session: Cell::new(false),
             session_keys: Cell::new(false),
+            popouts: RefCell::new(HashMap::new()),
         });
         ui.rebuild(app);
+        // Full screen shows the session alone: no title bar, tabs or sidebar.
+        let weak = Rc::downgrade(&ui);
+        ui.window.connect_fullscreened_notify(move |window| {
+            if let Some(ui) = weak.upgrade()
+                && let Some(parts) = ui.parts.borrow().as_ref()
+            {
+                parts.chrome.set_visible(!window.is_fullscreen());
+                parts.sidebar_visible(!window.is_fullscreen());
+            }
+        });
         let weak = Rc::downgrade(&ui);
         let close_app = app.clone();
         ui.window.connect_close_request(move |window| {
@@ -175,6 +212,14 @@ impl Ui {
     /// Builds every screen again (after a language change, and at the start).
     pub fn rebuild(&self, app: &Rc<App>) {
         let section = self.parts.borrow().as_ref().map(|parts| parts.section.get()).unwrap_or_else(|| app.state.borrow().section);
+        // Session windows hold the old session view: they go back into tabs of the new screens.
+        let windows: Vec<adw::Window> = self.popouts.borrow_mut().drain().map(|(_, window)| window).collect();
+        if !windows.is_empty() {
+            app.state.borrow_mut().workspace.windows.clear();
+            for window in windows {
+                window.destroy();
+            }
+        }
         let parts = Parts::new(app);
         parts.section.set(section);
         parts.select(section);
@@ -216,12 +261,13 @@ impl Ui {
                 }),
             );
         }
-        let viewing = state.remote.session_window();
+        // The app's own shortcuts go to the remote computer while its screen is in front.
+        let viewing = state.remote.viewing() && (state.workspace.is_in_window(state.remote.peer.unwrap_or(0)) || matches!(state.workspace.selected, Tab::Session(_)));
         if viewing != self.session_keys.get() {
             self.session_keys.set(viewing);
             self.session_shortcuts(viewing);
         }
-        if !viewing && self.fullscreen_session.replace(false) {
+        if !state.remote.viewing() && self.fullscreen_session.replace(false) {
             self.window.unfullscreen();
         }
     }
@@ -232,10 +278,88 @@ impl Ui {
         }
     }
 
+    /// Full screen for the session in front: its own window when popped out, else this window.
     pub fn toggle_fullscreen(&self) {
+        if let Some(window) = self.popouts.borrow().values().find(|window| window.is_active()).cloned() {
+            if window.is_fullscreen() { window.unfullscreen() } else { window.fullscreen() }
+            return;
+        }
         let on = !self.window.is_fullscreen();
         self.fullscreen_session.set(on);
         if on { self.window.fullscreen() } else { self.window.unfullscreen() }
+    }
+
+    /// The Connect-by-ID field of the Devices page (the "+" tab).
+    pub fn focus_connect(&self) {
+        if let Some(parts) = self.parts.borrow().as_ref() {
+            parts.devices.focus_connect();
+        }
+    }
+
+    pub fn focus_search(&self) {
+        if let Some(parts) = self.parts.borrow().as_ref() {
+            parts.devices.focus_search();
+        }
+    }
+
+    /// Carries out what the workspace asked for: open, raise or close a session window.
+    pub fn apply(self: &Rc<Self>, app: &Rc<App>, effect: Effect) {
+        match effect {
+            Effect::OpenWindow(peer) => self.open_popout(app, peer),
+            Effect::FocusWindow(peer) => {
+                if let Some(window) = self.popouts.borrow().get(&peer) {
+                    window.present();
+                }
+            }
+            Effect::CloseWindow(peer) => {
+                let window = self.popouts.borrow_mut().remove(&peer);
+                if let Some(window) = window {
+                    // The session view goes back to its tab (the next render puts it there).
+                    if let Some(parts) = self.parts.borrow().as_ref() {
+                        adopt(&parts.session.widget);
+                    }
+                    window.destroy();
+                }
+            }
+        }
+    }
+
+    fn open_popout(self: &Rc<Self>, app: &Rc<App>, peer: u32) {
+        if let Some(window) = self.popouts.borrow().get(&peer) {
+            window.present();
+            return;
+        }
+        let name = app.state.borrow().workspace.tab(peer).map(|tab| tab.name.clone()).unwrap_or_default();
+        let window = adw::Window::builder().application(&self.application).title(&name).default_width(1100).default_height(720).build();
+        window.set_icon_name(Some(crate::APP_ID));
+        let content = vbox(0);
+        let header = adw::HeaderBar::new();
+        let title = adw::WindowTitle::new(&name, &tf("Session with %@", &[&crate::format::remote_id(Some(peer))]));
+        header.set_title_widget(Some(&title));
+        let a = app.clone();
+        let back = gtk::Button::with_label(&t("Back into a tab"));
+        back.set_tooltip_text(Some(&t("Move this session back into a tab of the main window")));
+        back.connect_clicked(move |_| a.dock(peer, true));
+        header.pack_start(&back);
+        content.append(&header);
+        if let Some(parts) = self.parts.borrow().as_ref() {
+            let widget = adopt(&parts.session.widget);
+            widget.set_vexpand(true);
+            content.append(&widget);
+        }
+        window.set_content(Some(&content));
+        let (a, weak) = (app.clone(), Rc::downgrade(self));
+        window.connect_close_request(move |_| {
+            // Closing the window puts the session back into its tab; the session goes on.
+            if let Some(ui) = weak.upgrade() {
+                ui.popouts.borrow_mut().remove(&peer);
+            }
+            let a = a.clone();
+            glib::idle_add_local_once(move || a.dock(peer, false));
+            glib::Propagation::Proceed
+        });
+        self.popouts.borrow_mut().insert(peer, window.clone());
+        window.present();
     }
 
     /// Quit: ends sessions and goes offline first (at most 15 s), then closes.
@@ -272,9 +396,11 @@ impl Ui {
             ("app.help".into(), vec!["F1".into()]),
             ("app.shortcuts".into(), vec!["<Control>question".into()]),
         ];
-        for (index, section) in Section::ALL.iter().enumerate() {
+        for (index, section) in Section::NAV.iter().enumerate() {
             local.push((format!("app.section-{}", section.id()), vec![format!("<Control>{}", index + 1)]));
         }
+        local.push(("app.search".into(), vec!["<Control>f".into()]));
+        local.push(("app.new-tab".into(), vec!["<Control>t".into()]));
         for (action, accels) in local {
             let accels: Vec<&str> = if viewing { Vec::new() } else { accels.iter().map(String::as_str).collect() };
             application.set_accels_for_action(&action, &accels);
@@ -312,11 +438,34 @@ impl Ui {
         add("fullscreen", &["F11"], Rc::new(move || if let Some(ui) = u.upgrade() { ui.toggle_fullscreen() }));
         let a = app.clone();
         add("refresh", &["<Control>r", "F5"], Rc::new(move || a.reload_devices()));
-        for (index, section) in Section::ALL.iter().enumerate() {
+        for (index, section) in Section::NAV.iter().enumerate() {
             let (a, section) = (app.clone(), *section);
             let accel = format!("<Control>{}", index + 1);
-            add(&format!("section-{}", section.id()), &[accel.as_str()], Rc::new(move || a.edit(|state| state.section = section)));
+            add(&format!("section-{}", section.id()), &[accel.as_str()], Rc::new(move || a.edit(|state| {
+                state.section = section;
+                state.workspace.selected = Tab::Console;
+            })));
         }
+        let (a, u) = (app.clone(), Rc::downgrade(self));
+        add("search", &["<Control>f"], Rc::new(move || {
+            a.edit(|state| {
+                state.section = Section::Devices;
+                state.workspace.selected = Tab::Console;
+            });
+            if let Some(ui) = u.upgrade() {
+                ui.focus_search();
+            }
+        }));
+        let (a, u) = (app.clone(), Rc::downgrade(self));
+        add("new-tab", &["<Control>t"], Rc::new(move || {
+            a.edit(|state| {
+                state.section = Section::Devices;
+                state.workspace.selected = Tab::Console;
+            });
+            if let Some(ui) = u.upgrade() {
+                ui.focus_connect();
+            }
+        }));
         let a = app.clone();
         add("preferences", &["<Control>comma"], Rc::new(move || a.edit(|state| state.section = Section::Settings)));
         let a = app.clone();
@@ -330,67 +479,66 @@ impl Ui {
     }
 }
 
+/// `system`, `light` or `dark` (empty is `system`).
+pub fn apply_appearance(value: &str) {
+    adw::StyleManager::default().set_color_scheme(match value {
+        "light" => adw::ColorScheme::ForceLight,
+        "dark" => adw::ColorScheme::ForceDark,
+        _ => adw::ColorScheme::Default,
+    });
+}
+
+fn os_icon_of(os: &str) -> gio::ThemedIcon {
+    gio::ThemedIcon::new(crate::format::os_icon(os))
+}
+
 impl Parts {
     fn new(app: &Rc<App>) -> Self {
-        // Sidebar: brand, sections, this computer's connection.
-        let sidebar_box = vbox(0);
-        sidebar_box.add_css_class("mixel-sidebar");
-        sidebar_box.set_size_request(232, -1);
-        // Its natural width, not half of the window (stops expansion from inside the sidebar).
-        sidebar_box.set_hexpand(false);
-        let sidebar_header = adw::HeaderBar::new();
-        sidebar_header.set_show_end_title_buttons(false);
-        let brand = hbox(8);
-        brand.append(&mark(26));
-        let name = gtk::Label::new(None);
-        name.set_markup("<b>Mixel</b> Remote");
-        name.add_css_class("title-4");
-        brand.append(&name);
-        brand.update_property(&[gtk::accessible::Property::Label("Mixel Remote")]);
-        sidebar_header.set_title_widget(Some(&brand));
+        // The title bar: back (narrow window), the connection line, the main menu.
+        let header = adw::HeaderBar::new();
+        let title = adw::WindowTitle::new("Mixel Remote", "");
+        header.set_title_widget(Some(&title));
+        let back = gtk::Button::from_icon_name("go-previous-symbolic");
+        back.set_tooltip_text(Some(&t("Sections")));
+        back.update_property(&[gtk::accessible::Property::Label(&t("Sections"))]);
+        header.pack_start(&back);
         let menu = gio::Menu::new();
         menu.append(Some(&t("Keyboard shortcuts")), Some("app.shortcuts"));
         menu.append(Some(&t("Mixel Remote Help")), Some("app.help"));
         menu.append(Some(&t("About Mixel Remote")), Some("app.about"));
         menu.append(Some(&t("Quit Mixel Remote")), Some("app.quit"));
         let menu_button = gtk::MenuButton::builder().icon_name("open-menu-symbolic").menu_model(&menu).tooltip_text(t("Main menu")).build();
-        sidebar_header.pack_end(&menu_button);
-        sidebar_box.append(&sidebar_header);
-        let sidebar = gtk::ListBox::new();
-        sidebar.add_css_class("navigation-sidebar");
-        sidebar.set_vexpand(true);
-        for section in Section::ALL {
-            let row = hbox(12);
-            row.set_margin_top(8);
-            row.set_margin_bottom(8);
-            row.set_margin_start(6);
-            row.append(&gtk::Image::from_icon_name(section.icon()));
-            row.append(&gtk::Label::new(Some(&section.title())));
-            let item = gtk::ListBoxRow::new();
-            item.set_child(Some(&row));
-            item.update_property(&[gtk::accessible::Property::Label(&section.title())]);
-            sidebar.append(&item);
-        }
-        sidebar_box.append(&sidebar);
-        sidebar_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-        let footer = vbox(4);
-        footer.set_margin_top(12);
-        footer.set_margin_bottom(14);
-        footer.set_margin_start(14);
-        footer.set_margin_end(14);
-        sidebar_box.append(&footer);
+        menu_button.update_property(&[gtk::accessible::Property::Label(&t("Main menu"))]);
+        header.pack_end(&menu_button);
 
-        // Content: header, update banner, pages.
+        // The tabs: Devices, one per session, and "+".
+        let tabs = adw::TabView::new();
+        tabs.set_vexpand(true);
+        let tab_bar = adw::TabBar::new();
+        tab_bar.set_view(Some(&tabs));
+        tab_bar.set_autohide(false);
+        tab_bar.set_expand_tabs(false);
+        let plus = gtk::Button::from_icon_name("list-add-symbolic");
+        plus.add_css_class("flat");
+        plus.set_tooltip_text(Some(&t("Connect by ID (Ctrl+T)")));
+        plus.update_property(&[gtk::accessible::Property::Label(&t("New connection"))]);
+        let a = app.clone();
+        plus.connect_clicked(move |_| {
+            a.edit(|state| {
+                state.section = Section::Devices;
+                state.workspace.selected = Tab::Console;
+            });
+            let ui = a.ui.borrow().clone();
+            if let Some(ui) = ui {
+                ui.focus_connect();
+            }
+        });
+        tab_bar.set_end_action_widget(Some(&plus));
+
+        // The console: sidebar and the section pages.
+        let sidebar = sidebar::Sidebar::new();
         let content = vbox(0);
         content.set_hexpand(true);
-        let header = adw::HeaderBar::new();
-        let title = adw::WindowTitle::new("", "");
-        header.set_title_widget(Some(&title));
-        let back = gtk::Button::from_icon_name("go-previous-symbolic");
-        back.set_tooltip_text(Some(&t("Sections")));
-        back.update_property(&[gtk::accessible::Property::Label(&t("Sections"))]);
-        header.pack_start(&back);
-        content.append(&header);
         let banner = hbox(10);
         banner.add_css_class("mixel-banner");
         banner.set_visible(false);
@@ -398,25 +546,24 @@ impl Parts {
         let pages = gtk::Stack::new();
         pages.set_transition_type(gtk::StackTransitionType::Crossfade);
         pages.set_vexpand(true);
-        let remote = remote::RemotePage::new(app);
+        let computer = remote::RemotePage::new(app);
         let devices = devices::DevicesPage::new(app);
+        let sessions = sessions::SessionsPage::new();
         let account = account::AccountPage::new(app);
         let settings = settings::SettingsPage::new(app);
         let reports = reports::ReportsPage::new(app);
-        pages.add_named(&remote.widget, Some("remote"));
-        pages.add_named(&devices.widget, Some("devices"));
-        pages.add_named(&account.widget, Some("account"));
-        pages.add_named(&reports.widget, Some("reports"));
-        pages.add_named(&settings.widget, Some("settings"));
+        pages.add_named(&devices.widget, Some(Section::Devices.id()));
+        pages.add_named(&sessions.widget, Some(Section::Sessions.id()));
+        pages.add_named(&reports.widget, Some(Section::Reports.id()));
+        pages.add_named(&settings.widget, Some(Section::Settings.id()));
+        pages.add_named(&computer.widget, Some(Section::Computer.id()));
+        pages.add_named(&account.widget, Some(Section::Account.id()));
         content.append(&pages);
-
-        // The sidebar keeps its own width (a scrolled window reports its minimum width as natural).
-        let sidebar_pane = gtk::ScrolledWindow::builder().hscrollbar_policy(gtk::PolicyType::Never).vscrollbar_policy(gtk::PolicyType::Automatic).min_content_width(240).propagate_natural_width(false).child(&sidebar_box).build();
+        let sidebar_pane = gtk::ScrolledWindow::builder().hscrollbar_policy(gtk::PolicyType::Never).vscrollbar_policy(gtk::PolicyType::Automatic).min_content_width(250).propagate_natural_width(false).child(&sidebar.widget).build();
         let leaflet = adw::Leaflet::new();
         leaflet.set_can_navigate_back(true);
         leaflet.append(&sidebar_pane);
-        let separator = gtk::Separator::new(gtk::Orientation::Vertical);
-        leaflet.append(&separator).set_navigatable(false);
+        leaflet.append(&gtk::Separator::new(gtk::Orientation::Vertical)).set_navigatable(false);
         leaflet.append(&content);
         leaflet.set_visible_child(&content);
         let fold_back = back.clone();
@@ -424,96 +571,219 @@ impl Parts {
         back.set_visible(leaflet.is_folded());
         let to_sidebar = (leaflet.clone(), sidebar_pane.clone());
         back.connect_clicked(move |_| to_sidebar.0.set_visible_child(&to_sidebar.1));
+        // Choosing a section on a narrow window shows the page.
+        let console_page = tabs.append(&leaflet);
+        console_page.set_title(&t("Devices"));
+        console_page.set_icon(Some(&gio::ThemedIcon::new("computer-symbolic")));
+        console_page.set_tooltip(&t("Devices"));
 
         let session = session::SessionView::new(app);
+        let session_tabs: Rc<RefCell<Vec<SessionTab>>> = Rc::new(RefCell::new(Vec::new()));
+        let forced_close = Rc::new(Cell::new(false));
+        {
+            let (a, list) = (app.clone(), session_tabs.clone());
+            tabs.connect_selected_page_notify(move |view| {
+                if a.rendering.get() {
+                    return;
+                }
+                let Some(page) = view.selected_page() else { return };
+                let tab = list.borrow().iter().find(|entry| entry.page == page).map(|entry| Tab::Session(entry.peer)).unwrap_or(Tab::Console);
+                a.select_tab(tab);
+            });
+            let (a, list, forced) = (app.clone(), session_tabs.clone(), forced_close.clone());
+            // The close button of a session tab ends the session; the Devices tab cannot be closed.
+            // (A tab the app removes itself, because its session ended, closes without asking.)
+            tabs.connect_close_page(move |view, page| {
+                if forced.get() {
+                    view.close_page_finish(page, true);
+                    return glib::Propagation::Stop;
+                }
+                if list.borrow().iter().any(|entry| entry.page == *page) {
+                    a.end_session();
+                }
+                view.close_page_finish(page, false);
+                glib::Propagation::Stop
+            });
+        }
+
+        // Floating cards over the window: connecting, and "session is ready".
+        let overlay = gtk::Overlay::new();
+        overlay.set_child(Some(&tabs));
+        let floating = vbox(10);
+        floating.set_halign(gtk::Align::End);
+        floating.set_valign(gtk::Align::End);
+        floating.set_margin_end(18);
+        floating.set_margin_bottom(18);
+        floating.set_visible(false);
+        overlay.add_overlay(&floating);
+
+        let chrome = vbox(0);
+        chrome.append(&header);
+        chrome.append(&tab_bar);
+        let shell = vbox(0);
+        shell.append(&chrome);
+        shell.append(&overlay);
+
+        let signin = signin::SigninPage::new();
         let root = gtk::Stack::new();
         root.set_transition_type(gtk::StackTransitionType::Crossfade);
-        root.add_named(&leaflet, Some("main"));
-        root.add_named(&session.widget, Some("session"));
-
-        let select_app = app.clone();
-        let select_leaflet = leaflet.clone();
-        let select_content = content.clone();
-        sidebar.connect_row_activated(move |_, row| {
-            let index = row.index().max(0) as usize;
-            if let Some(section) = Section::ALL.get(index) {
-                let section = *section;
-                select_app.edit(|state| state.section = section);
-                select_leaflet.set_visible_child(&select_content);
-            }
-        });
+        root.add_named(&shell, Some("shell"));
+        let signin_shell = vbox(0);
+        let signin_header = adw::HeaderBar::new();
+        signin_header.set_title_widget(Some(&adw::WindowTitle::new("Mixel Remote", "")));
+        signin_header.add_css_class("flat");
+        signin_header.pack_end(&gtk::MenuButton::builder().icon_name("open-menu-symbolic").menu_model(&menu).tooltip_text(t("Main menu")).build());
+        signin_shell.append(&signin_header);
+        signin.widget.set_vexpand(true);
+        signin_shell.append(&signin.widget);
+        root.add_named(&signin_shell, Some("signin"));
         Self {
             root,
+            signin,
+            chrome,
             leaflet,
             sidebar,
-            footer,
-            footer_key: RefCell::new(String::new()),
             title,
             back,
+            tabs,
+            console_page,
+            session_tabs,
+            forced_close,
             pages,
             banner,
             banner_key: RefCell::new(String::new()),
-            remote,
+            floating,
+            floating_key: RefCell::new(String::new()),
+            computer,
             devices,
+            sessions,
             account,
             settings,
             reports,
             session,
-            section: Cell::new(Section::Remote),
+            section: Cell::new(Section::Devices),
+        }
+    }
+
+    fn sidebar_visible(&self, visible: bool) {
+        if let Some(pane) = self.sidebar.widget.parent().and_then(|viewport| viewport.parent()) {
+            pane.set_visible(visible);
         }
     }
 
     fn select(&self, section: Section) {
         self.pages.set_visible_child_name(section.id());
-        if let Some(row) = self.sidebar.row_at_index(Section::ALL.iter().position(|item| *item == section).unwrap_or(0) as i32) {
-            self.sidebar.select_row(Some(&row));
-        }
-        self.title.set_title(&section.title());
     }
 
     fn render(&self, app: &Rc<App>, state: &State, ui: &Ui) {
-        if self.section.get() != state.section {
-            self.section.set(state.section);
-            self.select(state.section);
-        }
-        let viewing = state.remote.session_window();
-        self.root.set_visible_child_name(if viewing { "session" } else { "main" });
-        self.title.set_subtitle(&if state.section == Section::Remote { String::new() } else { state.connection_message() });
-        self.render_footer(app, state);
-        self.render_banner(app, state);
-        match state.section {
-            Section::Remote => self.remote.render(app, state),
-            Section::Devices => self.devices.render(app, state),
-            Section::Account => self.account.render(app, state),
-            Section::Reports => self.reports.render(app, state),
-            Section::Settings => self.settings.render(app, state),
-        }
-        if viewing {
-            self.session.render(app, state, ui);
-        }
-        let _ = &self.leaflet;
-        let _ = &self.back;
-    }
-
-    fn render_footer(&self, app: &Rc<App>, state: &State) {
-        let (kind, text) = logic::connection_badge(&state.remote);
-        let key = format!("{kind:?}{text}{:?}{}", state.remote.host, state.signed_in());
-        if *self.footer_key.borrow() == key {
+        if !state.signed_in() {
+            self.root.set_visible_child_name("signin");
+            self.signin.render(app, state);
             return;
         }
-        self.footer_key.replace(key);
-        clear(&self.footer);
-        self.footer.append(&badge(kind, &text));
-        if state.signed_in()
-            && let Some(host) = state.remote.host
-        {
-            let id = id_text(Some(host));
-            id.add_css_class("mixel-id-small");
-            self.footer.append(&id);
-        } else if !state.signed_in() {
-            let a = app.clone();
-            self.footer.append(&link(&t("Sign in"), move || a.edit(|state| state.section = Section::Account)));
+        self.root.set_visible_child_name("shell");
+        if self.section.get() != state.section {
+            self.section.set(state.section);
         }
+        self.select(state.section);
+        self.title.set_subtitle(&state.connection_message());
+        self.sync_tabs(app, state);
+        self.sidebar.render(app, state);
+        self.render_banner(app, state);
+        self.render_floating(app, state);
+        match state.section {
+            Section::Devices => self.devices.render(app, state),
+            Section::Sessions => self.sessions.render(app, state),
+            Section::Reports => self.reports.render(app, state),
+            Section::Settings => self.settings.render(app, state),
+            Section::Computer => self.computer.render(app, state),
+            Section::Account => self.account.render(app, state),
+        }
+        if state.remote.viewing() || !state.workspace.tabs.is_empty() {
+            self.session.render(app, state, ui);
+        }
+        let _ = (&self.leaflet, &self.back);
+    }
+
+    /// Brings the tab bar in line with the workspace: one tab per session, the selected one in front,
+    /// the session view in its tab (or a note while it is in its own window).
+    fn sync_tabs(&self, app: &Rc<App>, state: &State) {
+        let workspace = &state.workspace;
+        let mut list = self.session_tabs.borrow_mut();
+        // Ended sessions lose their tab.
+        let gone: Vec<usize> = list.iter().enumerate().filter(|(_, entry)| !workspace.has_tab(entry.peer)).map(|(index, _)| index).collect();
+        for index in gone.into_iter().rev() {
+            let entry = list.remove(index);
+            if entry.slot.first_child().is_some() {
+                adopt(&self.session.widget);
+            }
+            self.forced_close.set(true);
+            self.tabs.close_page(&entry.page);
+            self.forced_close.set(false);
+        }
+        for tab in &workspace.tabs {
+            if !list.iter().any(|entry| entry.peer == tab.peer) {
+                let holder = vbox(0);
+                let slot = vbox(0);
+                slot.set_vexpand(true);
+                let popped = vbox(10);
+                popped.set_valign(gtk::Align::Center);
+                popped.set_halign(gtk::Align::Center);
+                popped.set_vexpand(true);
+                popped.set_visible(false);
+                holder.append(&slot);
+                holder.append(&popped);
+                let page = self.tabs.append(&holder);
+                list.push(SessionTab { peer: tab.peer, page, slot, popped });
+            }
+        }
+        for tab in &workspace.tabs {
+            let Some(entry) = list.iter().find(|entry| entry.peer == tab.peer) else { continue };
+            entry.page.set_title(&tab.name);
+            entry.page.set_icon(Some(&os_icon_of(&tab.os)));
+            entry.page.set_tooltip(&tf("Session with %@", &[&tab.name]));
+            entry.page.set_loading(tab.state == crate::workspace::TabState::Starting);
+            let in_window = workspace.is_in_window(tab.peer);
+            entry.slot.set_visible(!in_window);
+            entry.popped.set_visible(in_window);
+            clear(&entry.popped);
+            if in_window {
+                entry.popped.append(&heading(&tf("%@ is in its own window", &[&tab.name])));
+                let (a, peer) = (app.clone(), tab.peer);
+                entry.popped.append(&button(&t("Show the window"), move || a.show_session(peer)));
+                let (a, peer) = (app.clone(), tab.peer);
+                entry.popped.append(&primary(&t("Move back into a tab"), move || a.dock(peer, true)));
+            } else if self.session.widget.parent().as_ref() != Some(entry.slot.upcast_ref::<gtk::Widget>()) {
+                adopt(&self.session.widget);
+                entry.slot.append(&self.session.widget);
+            }
+        }
+        let wanted = match workspace.selected {
+            Tab::Session(peer) => list.iter().find(|entry| entry.peer == peer).map(|entry| entry.page.clone()),
+            Tab::Console => None,
+        }
+        .unwrap_or_else(|| self.console_page.clone());
+        if self.tabs.selected_page().as_ref() != Some(&wanted) {
+            self.tabs.set_selected_page(&wanted);
+        }
+    }
+
+    fn render_floating(&self, app: &Rc<App>, state: &State) {
+        let workspace = &state.workspace;
+        let notices: Vec<(u32, String, String)> = workspace.ready_notices.iter().filter_map(|peer| workspace.tab(*peer).map(|tab| (*peer, tab.name.clone(), tab.os.clone()))).collect();
+        let key = format!("{:?}{:?}{}", workspace.attempt, notices, crate::i18n::choice());
+        if *self.floating_key.borrow() == key {
+            return;
+        }
+        self.floating_key.replace(key);
+        clear(&self.floating);
+        if let Some(attempt) = &workspace.attempt {
+            self.floating.append(&cards::attempt_card(app, state, attempt));
+        }
+        for (peer, name, os) in notices {
+            self.floating.append(&cards::ready_card(app, peer, &name, &os));
+        }
+        self.floating.set_visible(self.floating.first_child().is_some());
     }
 
     fn render_banner(&self, app: &Rc<App>, state: &State) {

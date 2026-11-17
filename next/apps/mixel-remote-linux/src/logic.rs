@@ -9,46 +9,58 @@ use crate::{
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 
-/// The sections of the app.
+/// The sections of the app. The sidebar lists `NAV`; `Computer` (this computer's page) and `Account`
+/// open from the this-computer card and the account row.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Section {
     #[default]
-    Remote,
     Devices,
-    Account,
+    Sessions,
     Reports,
     Settings,
+    Computer,
+    Account,
 }
 
 impl Section {
-    pub const ALL: [Section; 5] = [Section::Remote, Section::Devices, Section::Account, Section::Reports, Section::Settings];
+    pub const NAV: [Section; 4] = [Section::Devices, Section::Sessions, Section::Reports, Section::Settings];
     pub fn title(self) -> String {
         match self {
-            Self::Remote => t("Remote control"),
             Self::Devices => t("Devices"),
-            Self::Account => t("Account"),
-            Self::Reports => t("Session reports"),
+            Self::Sessions => t("Sessions"),
+            Self::Reports => t("Reports"),
             Self::Settings => t("Settings"),
+            Self::Computer => t("This computer"),
+            Self::Account => t("Account"),
         }
     }
     pub fn icon(self) -> &'static str {
         match self {
-            Self::Remote => "network-transmit-receive-symbolic",
             Self::Devices => "computer-symbolic",
-            Self::Account => "avatar-default-symbolic",
+            Self::Sessions => "view-dual-symbolic",
             Self::Reports => "x-office-spreadsheet-symbolic",
             Self::Settings => "emblem-system-symbolic",
+            Self::Computer => "computer-symbolic",
+            Self::Account => "avatar-default-symbolic",
         }
     }
     pub fn id(self) -> &'static str {
         match self {
-            Self::Remote => "remote",
             Self::Devices => "devices",
-            Self::Account => "account",
+            Self::Sessions => "sessions",
             Self::Reports => "reports",
             Self::Settings => "settings",
+            Self::Computer => "computer",
+            Self::Account => "account",
         }
     }
+}
+
+/// The pointer cursor over the remote picture. There is exactly one pointer in the session view: the
+/// remote computer's own pointer is part of the picture, and this app only changes the shape of the
+/// local cursor (a crosshair in "Show pointer" mode). It draws no pointer of its own.
+pub fn picture_cursor(pointer_mode: bool) -> &'static str {
+    if pointer_mode { "crosshair" } else { "default" }
 }
 
 /// The status line of the connection, as the desktop app words it.
@@ -710,6 +722,17 @@ pub fn report_day(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_picture_has_one_cursor_and_no_pointer_overlay() {
+        assert_eq!(super::picture_cursor(false), "default");
+        assert_eq!(super::picture_cursor(true), "crosshair");
+        // The session view draws no pointer of its own: the only overlays on the picture are the
+        // drawings, the wait text and the notes (a second pointer would double the remote one).
+        let source = include_str!("ui/session.rs");
+        assert!(!source.contains("draw_pointer") && !source.contains("fake_cursor"));
+        assert_eq!(source.matches("set_cursor_from_name").count(), 1);
+    }
+
     use super::*;
 
     fn remote(phase: &str) -> RemoteStatus {

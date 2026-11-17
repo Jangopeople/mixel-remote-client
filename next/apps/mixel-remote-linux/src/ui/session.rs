@@ -21,9 +21,9 @@ use std::{
 
 pub struct SessionView {
     pub widget: gtk::Box,
-    title: adw::WindowTitle,
-    end: gtk::Button,
     toolbar: gtk::Box,
+    drawbar: gtk::Box,
+    warn: gtk::Box,
     toolbar_key: RefCell<String>,
     picture: gtk::Picture,
     wait: gtk::Box,
@@ -73,27 +73,20 @@ struct Pressed {
 impl SessionView {
     pub fn new(app: &Rc<App>) -> Self {
         let widget = vbox(0);
-        let header = adw::HeaderBar::new();
-        let title = adw::WindowTitle::new("", "");
-        header.set_title_widget(Some(&title));
-        let a = app.clone();
-        let end = destructive(&t("End session"), move || a.end_session());
-        end.set_tooltip_text(Some(&format!("{} (Ctrl+.)", t("End session"))));
-        header.pack_end(&end);
-        let a = app.clone();
-        header.pack_end(&icon_button("view-fullscreen-symbolic", &t("Full screen"), move || {
-            if let Some(ui) = a.ui.borrow().as_ref() {
-                ui.toggle_fullscreen();
-            }
-        }));
-        for (tool, icon, text) in [(Tool::Assistant, "help-browser-symbolic", t("AI assistant")), (Tool::Clipboard, "edit-paste-symbolic", t("Clipboard")), (Tool::Files, "folder-symbolic", t("Files")), (Tool::Chat, "mail-message-new-symbolic", t("Chat"))] {
-            let a = app.clone();
-            header.pack_end(&icon_button(icon, &text, move || a.set_tool(Some(tool))));
-        }
-        widget.append(&header);
+        // One bar: the device, picture quality, Files, Chat, Draw, More … Full screen, Window, End.
+        let bar = vbox(0);
+        bar.add_css_class("mixel-session-bar");
         let toolbar = hbox(6);
-        toolbar.add_css_class("toolbar");
-        widget.append(&toolbar);
+        let drawbar = hbox(6);
+        drawbar.set_visible(false);
+        bar.append(&toolbar);
+        bar.append(&drawbar);
+        widget.append(&bar);
+        // A session opened with a one-time password says so, for the whole session.
+        let warn = hbox(8);
+        warn.add_css_class("mixel-warn-strip");
+        warn.set_visible(false);
+        widget.append(&warn);
 
         let content = hbox(0);
         content.set_vexpand(true);
@@ -249,9 +242,9 @@ impl SessionView {
             ai_answer,
             ticket,
             widget,
-            title,
-            end,
             toolbar,
+            drawbar,
+            warn,
             toolbar_key: RefCell::new(String::new()),
             picture,
             wait,
@@ -446,16 +439,11 @@ impl SessionView {
     pub fn render(&self, app: &Rc<App>, state: &State, ui: &super::Ui) {
         let remote = &state.remote;
         let session = &state.session;
-        self.title.set_title(&tf("Computer %@", &[&format::remote_id(remote.peer)]));
-        let mut subtitle = if remote.control { t("View and control") } else { t("View only") };
-        if session.fps > 0 {
-            subtitle.push_str(&format!(" · {} × {} · {} fps", session.size.0, session.size.1, session.fps));
-        }
-        self.title.set_subtitle(&subtitle);
-        self.end.set_sensitive(!session.stopping);
         self.wait.set_visible(!session.has_frame);
         self.wait_text.set_text(&if remote.phase == "outgoing" { t("Waiting for the other person to accept your request.") } else { t("Connecting securely…") });
-        self.picture.set_cursor_from_name(Some(if session.pointer_mode { "crosshair" } else { "default" }));
+        // The one pointer of the session view: the remote computer's own is in the picture.
+        self.picture.set_cursor_from_name(Some(logic::picture_cursor(session.pointer_mode)));
+        self.render_warning(state);
         if session.has_frame && state.controllable() && !self.picture.has_focus() && self.picture.root().and_then(|root| root.focus()).is_none() {
             self.picture.grab_focus();
         }
@@ -465,18 +453,57 @@ impl SessionView {
         let _ = ui;
     }
 
+    fn render_warning(&self, state: &State) {
+        let on = state.session.password_session && state.remote.viewing();
+        if on == self.warn.is_visible() && (!on || self.warn.first_child().is_some()) {
+            return;
+        }
+        clear(&self.warn);
+        self.warn.set_visible(on);
+        if on {
+            self.warn.append(&gtk::Image::from_icon_name("dialog-warning-symbolic"));
+            let text = label(&t("This session was opened with a one-time password. Continue only if the person at the other computer gave it to you; either side can end it at any time."));
+            text.set_wrap(true);
+            text.set_xalign(0.0);
+            self.warn.append(&text);
+        }
+    }
+
     fn render_toolbar(&self, app: &Rc<App>, state: &State) {
         let remote = &state.remote;
         let session = &state.session;
+        let peer = remote.peer.unwrap_or(0);
+        let in_window = state.workspace.is_in_window(peer);
+        let name = state.workspace.tab(peer).map(|tab| tab.name.clone()).unwrap_or_else(|| format::remote_id(remote.peer));
+        let os = state.workspace.tab(peer).map(|tab| tab.os.clone()).unwrap_or_default();
         let key = format!(
             "{:?}",
-            ((remote.control, remote.displays, remote.display, remote.display_all, &remote.host_actions, &remote.recording), (remote.phase.as_str(), remote.switched, &remote.peer_features, session.privacy, session.block_input, session.lock_when_done), (session.pointer_mode, session.sound, session.restart_armed, session.recording_pending, session.has_frame, state.busy), (session.drawing, session.draw_tool, session.draw_color, session.draw_width))
+            (
+                (remote.control, remote.displays, remote.display, remote.display_all, &remote.host_actions, &remote.recording),
+                (remote.phase.as_str(), remote.switched, &remote.peer_features, session.privacy, session.block_input, session.lock_when_done),
+                (session.pointer_mode, session.sound, session.restart_armed, session.recording_pending, session.has_frame, state.busy),
+                (session.drawing, session.draw_tool, session.draw_color, session.draw_width, session.tool, session.stopping),
+                (in_window, &name, &os, session.fps, session.size, crate::i18n::choice()),
+            )
         );
         if *self.toolbar_key.borrow() == key {
             return;
         }
         self.toolbar_key.replace(key);
         clear(&self.toolbar);
+        clear(&self.drawbar);
+
+        // The device.
+        let chip = hbox(8);
+        chip.add_css_class("mixel-bar-chip");
+        chip.append(&gtk::Image::from_icon_name(format::os_icon(&os)));
+        let title = gtk::Label::new(Some(&name));
+        title.add_css_class("heading");
+        chip.append(&title);
+        chip.update_property(&[gtk::accessible::Property::Label(&tf("Session with %@", &[&name]))]);
+        self.toolbar.append(&chip);
+        self.toolbar.append(&caption(&if remote.control { t("View and control") } else { t("View only") }));
+
         if remote.control && remote.displays > 1 {
             let names: Vec<String> = (0..remote.displays)
                 .map(|index| if remote.display_all && index == remote.displays - 1 { t("All screens") } else { tf("Display %d", &[&(index + 1)]) })
@@ -490,49 +517,71 @@ impl SessionView {
             pick.update_property(&[gtk::accessible::Property::Label(&t("Display"))]);
             self.toolbar.append(&pick);
         }
+
+        // Picture quality: the pictures per second and the size, and a way to renew the connection.
+        let quality_title = tf("%d fps", &[&session.fps]);
+        let bars = if session.fps >= 20 {
+            "network-cellular-signal-excellent-symbolic"
+        } else if session.fps >= 8 {
+            "network-cellular-signal-good-symbolic"
+        } else if session.fps > 0 {
+            "network-cellular-signal-weak-symbolic"
+        } else {
+            "network-cellular-signal-none-symbolic"
+        };
+        let quality_box = hbox(6);
+        quality_box.append(&gtk::Image::from_icon_name(bars));
+        quality_box.append(&gtk::Label::new(Some(&quality_title)));
+        let quality = gtk::MenuButton::new();
+        quality.set_child(Some(&quality_box));
+        quality.add_css_class("flat");
+        quality.set_tooltip_text(Some(&t("Picture quality")));
+        quality.update_property(&[gtk::accessible::Property::Label(&t("Picture quality")), gtk::accessible::Property::Description(&quality_title)]);
+        let pop = gtk::Popover::new();
+        let inner = vbox(8);
+        inner.set_margin_top(12);
+        inner.set_margin_bottom(12);
+        inner.set_margin_start(12);
+        inner.set_margin_end(12);
+        inner.append(&heading(&t("Picture quality")));
+        let size_text = if session.size.0 > 0 { format!("{} × {}", session.size.0, session.size.1) } else { "—".into() };
+        for (title, value) in [(t("Pictures per second"), quality_title.clone()), (t("Picture size"), size_text)] {
+            let row = hbox(16);
+            let k = dim(&title);
+            k.set_hexpand(true);
+            k.set_xalign(0.0);
+            row.append(&k);
+            row.append(&label(&value));
+            inner.append(&row);
+        }
+        let recording = logic::recording_text(remote.recording.as_ref());
+        if !recording.is_empty() {
+            inner.append(&caption(&recording));
+        }
+        let (a, close) = (app.clone(), pop.clone());
+        inner.append(&button(&t("Renew connection"), move || {
+            close.popdown();
+            a.renew();
+        }));
+        pop.set_child(Some(&inner));
+        quality.set_popover(Some(&pop));
+        self.toolbar.append(&quality);
+        self.toolbar.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+
         let busy = state.busy;
         let add = |widget: gtk::Button| {
             widget.add_css_class("flat");
             widget.set_sensitive(!busy && widget.is_sensitive());
             self.toolbar.append(&widget);
         };
-        let offers = |name: &str| remote.control && remote.offers(name);
-        if offers("privacy") {
+        // Files, Chat, Draw, Record.
+        let a = app.clone();
+        add(toggle_tool("folder-symbolic", &t("Files"), session.tool == Some(Tool::Files), move || a.set_tool(Some(Tool::Files))));
+        let a = app.clone();
+        add(toggle_tool("mail-message-new-symbolic", &t("Chat"), session.tool == Some(Tool::Chat), move || a.set_tool(Some(Tool::Chat))));
+        if drawing_offered(state) {
             let a = app.clone();
-            add(toggle_tool("view-conceal-symbolic", &t("Privacy screen"), session.privacy, move || a.toggle_privacy()));
-        }
-        if offers("block") {
-            let a = app.clone();
-            add(toggle_tool("action-unavailable-symbolic", &t("Block input"), session.block_input, move || a.toggle_block_input()));
-        }
-        if offers("pointer") {
-            let a = app.clone();
-            add(toggle_tool("find-location-symbolic", &t("Show pointer"), session.pointer_mode, move || a.toggle_pointer()));
-        }
-        if offers("lock") {
-            let a = app.clone();
-            add(icon_button("system-lock-screen-symbolic", &t("Lock computer"), move || a.lock_now()));
-        }
-        if offers("lockend") {
-            let a = app.clone();
-            add(toggle_tool("appointment-soon-symbolic", &t("Lock when done"), session.lock_when_done, move || a.toggle_lock_when_done()));
-        }
-        if offers("sas") {
-            let a = app.clone();
-            add(icon_button("input-keyboard-symbolic", &t("Ctrl+Alt+Del"), move || a.ctrl_alt_del()));
-        }
-        if offers("restart") {
-            let a = app.clone();
-            let text = if session.restart_armed { t("Click again to restart") } else { t("Restart computer") };
-            let restart = icon_button("system-reboot-symbolic", &text, move || a.restart_computer());
-            if session.restart_armed {
-                restart.add_css_class("mixel-on");
-            }
-            add(restart);
-        }
-        if remote.offers("sound") {
-            let a = app.clone();
-            add(toggle_tool(if session.sound { "audio-volume-high-symbolic" } else { "audio-volume-muted-symbolic" }, &t("Sound"), session.sound, move || a.toggle_sound()));
+            add(toggle_tool("document-edit-symbolic", &t("Draw on the screen"), session.drawing, move || a.toggle_drawing()));
         }
         if let Some(recording) = &remote.recording {
             let a = app.clone();
@@ -541,88 +590,185 @@ impl SessionView {
             record.set_sensitive(!session.recording_pending && recording.phase != "saving" && session.has_frame);
             add(record);
         }
+        self.toolbar.append(&self.more_menu(app, state));
+        self.toolbar.append(&spacer());
+
+        // Full screen, Window (pop out) or Back into a tab, End.
+        let a = app.clone();
+        add(icon_button("view-fullscreen-symbolic", &t("Full screen"), move || {
+            if let Some(ui) = a.ui.borrow().as_ref() {
+                ui.toggle_fullscreen();
+            }
+        }));
+        let a = app.clone();
+        if in_window {
+            add(icon_button("window-restore-symbolic", &t("Back into a tab"), move || a.dock(peer, true)));
+        } else {
+            add(icon_button("window-new-symbolic", &t("Open in its own window"), move || a.pop_out(peer)));
+        }
+        let a = app.clone();
+        let end = destructive(&t("End"), move || a.end_session());
+        end.set_tooltip_text(Some(&format!("{} (Ctrl+.)", t("End session"))));
+        end.update_property(&[gtk::accessible::Property::Label(&t("End session"))]);
+        end.set_sensitive(!session.stopping);
+        self.toolbar.append(&end);
+
+        // Drawing tools in a second row while drawing.
+        let drawing = drawing_offered(state) && session.drawing;
+        self.drawbar.set_visible(drawing);
+        if drawing {
+            let tools: Vec<String> = logic::DrawTool::ALL.iter().map(|tool| tool.title()).collect();
+            let a = app.clone();
+            let pick = choice(&tools, logic::DrawTool::ALL.iter().position(|tool| *tool == session.draw_tool).unwrap_or(0), move |index| {
+                a.set_draw(|session| session.draw_tool = logic::DrawTool::ALL[index.min(2)]);
+            });
+            pick.update_property(&[gtk::accessible::Property::Label(&t("Drawing tool"))]);
+            self.drawbar.append(&pick);
+            let colors: Vec<String> = (0..5).map(logic::draw_color_name).collect();
+            let a = app.clone();
+            let pick = choice(&colors, usize::from(session.draw_color), move |index| a.set_draw(|session| session.draw_color = index.min(4) as u8));
+            pick.update_property(&[gtk::accessible::Property::Label(&t("Colour"))]);
+            self.drawbar.append(&pick);
+            let sizes: Vec<String> = (1..=4).map(|size| tf("Size %d", &[&size])).collect();
+            let a = app.clone();
+            let pick = choice(&sizes, usize::from(session.draw_width.clamp(1, 4) - 1), move |index| a.set_draw(|session| session.draw_width = index.min(3) as u8 + 1));
+            pick.update_property(&[gtk::accessible::Property::Label(&t("Line width"))]);
+            self.drawbar.append(&pick);
+            let (a, board, ink) = (app.clone(), self.board.clone(), self.ink.clone());
+            let undo = icon_button("edit-undo-symbolic", &t("Undo the last drawing"), move || {
+                {
+                    let mut board = board.borrow_mut();
+                    board.strokes.pop();
+                    board.current = None;
+                }
+                ink.queue_draw();
+                a.draw(serde_json::json!({ "kind": "undo" }));
+            });
+            undo.add_css_class("flat");
+            self.drawbar.append(&undo);
+            let (a, board, ink) = (app.clone(), self.board.clone(), self.ink.clone());
+            let clear_all = icon_button("edit-clear-all-symbolic", &t("Clear the drawings"), move || {
+                {
+                    let mut board = board.borrow_mut();
+                    board.strokes.clear();
+                    board.current = None;
+                }
+                ink.queue_draw();
+                a.draw(serde_json::json!({ "kind": "clear" }));
+            });
+            clear_all.add_css_class("flat");
+            self.drawbar.append(&clear_all);
+        }
+    }
+
+    /// "More": everything the other computer offers beyond the main tools, one list.
+    fn more_menu(&self, app: &Rc<App>, state: &State) -> gtk::MenuButton {
+        let remote = &state.remote;
+        let session = &state.session;
+        let more = gtk::MenuButton::new();
+        more.set_icon_name("view-more-symbolic");
+        more.add_css_class("flat");
+        more.set_tooltip_text(Some(&t("More")));
+        more.update_property(&[gtk::accessible::Property::Label(&t("More"))]);
+        let pop = gtk::Popover::new();
+        let list = vbox(2);
+        list.set_margin_top(6);
+        list.set_margin_bottom(6);
+        list.set_margin_start(6);
+        list.set_margin_end(6);
+        // One row: icon, title and a check while the option is on.
+        let row = |icon: &str, title: &str, on: Option<bool>, action: Box<dyn Fn()>| {
+            let inner = hbox(10);
+            inner.append(&gtk::Image::from_icon_name(icon));
+            let text = gtk::Label::new(Some(title));
+            text.set_xalign(0.0);
+            text.set_hexpand(true);
+            inner.append(&text);
+            if on == Some(true) {
+                inner.append(&gtk::Image::from_icon_name("object-select-symbolic"));
+            }
+            let entry = gtk::Button::new();
+            entry.set_child(Some(&inner));
+            entry.add_css_class("flat");
+            entry.set_sensitive(!state.busy);
+            if let Some(on) = on {
+                entry.update_property(&[gtk::accessible::Property::Label(title), gtk::accessible::Property::Description(&if on { t("on") } else { t("off") })]);
+            }
+            let pop = pop.clone();
+            entry.connect_clicked(move |_| {
+                pop.popdown();
+                action();
+            });
+            list.append(&entry);
+        };
+        let offers = |name: &str| remote.control && remote.offers(name);
+        if offers("privacy") {
+            let a = app.clone();
+            row("view-conceal-symbolic", &t("Privacy screen"), Some(session.privacy), Box::new(move || a.toggle_privacy()));
+        }
+        if offers("block") {
+            let a = app.clone();
+            row("action-unavailable-symbolic", &t("Block input"), Some(session.block_input), Box::new(move || a.toggle_block_input()));
+        }
+        if offers("pointer") {
+            let a = app.clone();
+            row("find-location-symbolic", &t("Show pointer"), Some(session.pointer_mode), Box::new(move || a.toggle_pointer()));
+        }
+        if remote.offers("sound") {
+            let a = app.clone();
+            row(if session.sound { "audio-volume-high-symbolic" } else { "audio-volume-muted-symbolic" }, &t("Sound"), Some(session.sound), Box::new(move || a.toggle_sound()));
+        }
+        if offers("lock") {
+            let a = app.clone();
+            row("system-lock-screen-symbolic", &t("Lock computer"), None, Box::new(move || a.lock_now()));
+        }
+        if offers("lockend") {
+            let a = app.clone();
+            row("appointment-soon-symbolic", &t("Lock when done"), Some(session.lock_when_done), Box::new(move || a.toggle_lock_when_done()));
+        }
+        if offers("restart") {
+            let a = app.clone();
+            row("system-reboot-symbolic", &if session.restart_armed { t("Click again to restart") } else { t("Restart computer") }, Some(session.restart_armed), Box::new(move || a.restart_computer()));
+        }
+        if offers("sas") {
+            let a = app.clone();
+            row("input-keyboard-symbolic", &t("Ctrl+Alt+Del"), None, Box::new(move || a.ctrl_alt_del()));
+        }
+        list.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        let a = app.clone();
+        row("edit-paste-symbolic", &t("Clipboard"), Some(session.tool == Some(Tool::Clipboard)), Box::new(move || a.set_tool(Some(Tool::Clipboard))));
+        let a = app.clone();
+        row("help-browser-symbolic", &t("AI assistant"), Some(session.tool == Some(Tool::Assistant)), Box::new(move || a.set_tool(Some(Tool::Assistant))));
         if remote.phase == "active" && !remote.switched {
             let a = app.clone();
-            add(icon_button("contact-new-symbolic", &t("Invite a colleague"), move || invite_dialog(&a)));
+            row("contact-new-symbolic", &t("Invite a colleague"), None, Box::new(move || invite_dialog(&a)));
         }
         if state.can_switch_sides() {
             let a = app.clone();
-            add(icon_button("object-flip-horizontal-symbolic", &t("Switch sides"), move || a.switch_sides()));
+            row("object-flip-horizontal-symbolic", &t("Switch sides"), None, Box::new(move || a.switch_sides()));
         } else if remote.offers("meet") {
             let a = app.clone();
-            add(icon_button("video-display-symbolic", &t("Show my screen"), move || a.show_my_screen()));
+            row("video-display-symbolic", &t("Show my screen"), None, Box::new(move || a.show_my_screen()));
         }
         if remote.control {
             // Key combinations this computer's desktop would keep for itself.
-            let combos: [(String, u16, &[u16]); 6] = [
-                (t("Ctrl+Alt+Del"), keymap::DELETE, &[keymap::CONTROL, keymap::ALT]),
+            list.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+            let combos: [(String, u16, &[u16]); 5] = [
                 ("Alt+Tab".into(), keymap::TAB, &[keymap::ALT]),
                 ("Alt+F4".into(), keymap::F4, &[keymap::ALT]),
                 (t("Windows / Super key"), keymap::META, &[]),
                 ("Ctrl+Shift+Esc".into(), keymap::ESCAPE, &[keymap::CONTROL, keymap::SHIFT]),
                 (t("Print screen"), keymap::PRINT, &[]),
             ];
-            let items = combos
-                .into_iter()
-                .map(|(title, usage, modifiers)| {
-                    let a = app.clone();
-                    Some((title, true, Box::new(move || a.press(usage, modifiers)) as Box<dyn Fn()>))
-                })
-                .collect();
-            let keys = menu(&t("Keys"), items);
-            keys.add_css_class("flat");
-            keys.set_tooltip_text(Some(&t("Send a key combination")));
-            self.toolbar.append(&keys);
-        }
-        if drawing_offered(state) {
-            let a = app.clone();
-            add(toggle_tool("document-edit-symbolic", &t("Draw on the screen"), session.drawing, move || a.toggle_drawing()));
-            if session.drawing {
-                let tools: Vec<String> = logic::DrawTool::ALL.iter().map(|tool| tool.title()).collect();
+            for (title, usage, modifiers) in combos {
                 let a = app.clone();
-                let pick = choice(&tools, logic::DrawTool::ALL.iter().position(|tool| *tool == session.draw_tool).unwrap_or(0), move |index| {
-                    a.set_draw(|session| session.draw_tool = logic::DrawTool::ALL[index.min(2)]);
-                });
-                pick.update_property(&[gtk::accessible::Property::Label(&t("Drawing tool"))]);
-                self.toolbar.append(&pick);
-                let colors: Vec<String> = (0..5).map(logic::draw_color_name).collect();
-                let a = app.clone();
-                let pick = choice(&colors, usize::from(session.draw_color), move |index| a.set_draw(|session| session.draw_color = index.min(4) as u8));
-                pick.update_property(&[gtk::accessible::Property::Label(&t("Colour"))]);
-                self.toolbar.append(&pick);
-                let sizes: Vec<String> = (1..=4).map(|size| tf("Size %d", &[&size])).collect();
-                let a = app.clone();
-                let pick = choice(&sizes, usize::from(session.draw_width.clamp(1, 4) - 1), move |index| a.set_draw(|session| session.draw_width = index.min(3) as u8 + 1));
-                pick.update_property(&[gtk::accessible::Property::Label(&t("Line width"))]);
-                self.toolbar.append(&pick);
-                let (a, board, ink) = (app.clone(), self.board.clone(), self.ink.clone());
-                add(icon_button("edit-undo-symbolic", &t("Undo the last drawing"), move || {
-                    {
-                        let mut board = board.borrow_mut();
-                        board.strokes.pop();
-                        board.current = None;
-                    }
-                    ink.queue_draw();
-                    a.draw(serde_json::json!({ "kind": "undo" }));
-                }));
-                let (a, board, ink) = (app.clone(), self.board.clone(), self.ink.clone());
-                add(icon_button("edit-clear-all-symbolic", &t("Clear the drawings"), move || {
-                    {
-                        let mut board = board.borrow_mut();
-                        board.strokes.clear();
-                        board.current = None;
-                    }
-                    ink.queue_draw();
-                    a.draw(serde_json::json!({ "kind": "clear" }));
-                }));
+                row("input-keyboard-symbolic", &tf("Send %@", &[&title]), None, Box::new(move || a.press(usage, modifiers)));
             }
         }
-        let a = app.clone();
-        add(icon_button("view-refresh-symbolic", &t("Renew connection"), move || a.renew()));
-        let status = caption(&logic::recording_text(remote.recording.as_ref()));
-        status.set_hexpand(true);
-        status.set_xalign(1.0);
-        self.toolbar.append(&status);
+        let scroll = gtk::ScrolledWindow::builder().hscrollbar_policy(gtk::PolicyType::Never).propagate_natural_height(true).max_content_height(460).child(&list).build();
+        pop.set_child(Some(&scroll));
+        more.set_popover(Some(&pop));
+        more
     }
 
     fn render_notes(&self, state: &State) {
@@ -909,7 +1055,7 @@ fn release_all(app: &Rc<App>, held: &Rc<RefCell<Pressed>>) {
 }
 
 /// Invite a colleague into this session: by the Remote ID of their computer, or with a meeting link.
-fn invite_dialog(app: &Rc<App>) {
+pub fn invite_dialog(app: &Rc<App>) {
     let Some(parent) = app.ui.borrow().as_ref().map(|ui| ui.window.clone()) else { return };
     let (dialog, content, actions) = dialogs::window(&parent, &t("Invite a colleague"), 460);
     let native = app.state.borrow().remote.peer_features.iter().any(|feature| feature == "join");

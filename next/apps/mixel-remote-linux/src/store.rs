@@ -15,6 +15,12 @@ pub struct Settings {
     pub macs: BTreeMap<u32, Vec<String>>,
     /// The company's own AI server for the session assistant.
     pub ai: Option<AiServer>,
+    /// "When a session is ready": `stay` (an Open notice, the default) or `open`.
+    pub when_ready: String,
+    /// "Open sessions in": `tab` (the default) or `window`.
+    pub open_in: String,
+    /// `system` (empty), `light` or `dark`.
+    pub appearance: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

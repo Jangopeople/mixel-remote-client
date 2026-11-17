@@ -40,7 +40,7 @@ impl SetupInputs {
 
 impl RemotePage {
     pub fn new(app: &Rc<App>) -> Self {
-        let (widget, body) = page(&t("Remote control"), "");
+        let (widget, body) = page(&t("This computer"), "");
         let partner = id_entry(&t("Partner connection ID"));
         let password = password("");
         password.update_property(&[gtk::accessible::Property::Label(&t("One-time password, if provided"))]);
