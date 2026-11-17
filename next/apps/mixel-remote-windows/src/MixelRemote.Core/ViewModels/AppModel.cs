@@ -495,6 +495,19 @@ public sealed class AppModel : Observable
     public bool SetupOffer { get => setupOffer; set => Set(ref setupOffer, value); }
     private bool setupOffer;
 
+    /// <summary>Set by the "Add this computer" button of the failed-connect panel; the Devices page opens its dialog and clears it.</summary>
+    public bool AddThisRequested { get => addThisRequested; set => Set(ref addThisRequested, value); }
+    private bool addThisRequested;
+
+    /// <summary>The failed-connect panel's "Add this computer": closes the failed attempt, goes to Devices and asks for the dialog.</summary>
+    public async Task AddThisFromFailure()
+    {
+        SetupOffer = false;
+        await Workspace.CancelAttempt();
+        Section = AppSection.Devices;
+        AddThisRequested = true;
+    }
+
     private async Task ConnectSteps(uint id, string? password, bool unattended, bool checkPhone = true)
     {
         WentOffline = false;

@@ -192,6 +192,23 @@ public sealed class ViewModelTests
     }
 
     [TestMethod]
+    public async Task The_failed_connect_panel_button_closes_the_attempt_and_asks_for_the_add_dialog()
+    {
+        var engine = new MockEngine();
+        DemoFixtures.Company(engine, phase: "offline");
+        engine.Fail("remote_register", "No saved device identity. Choose Create device identity to generate one locally.");
+        var app = await DemoFixtures.App(engine);
+        await app.Connect(731_204_118, unattended: true, checkPhone: false);
+        Assert.IsTrue(app.SetupOffer);
+        app.Section = AppSection.Remote;
+        await app.AddThisFromFailure();
+        Assert.IsFalse(app.SetupOffer);
+        Assert.IsTrue(app.AddThisRequested);
+        Assert.AreEqual(AppSection.Devices, app.Section);
+        Assert.IsNull(app.Workspace.Attempt);
+    }
+
+    [TestMethod]
     public async Task A_stale_identity_shows_the_real_reason_not_the_network()
     {
         var engine = new MockEngine();

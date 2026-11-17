@@ -24,6 +24,12 @@ internal sealed class DevicesPage : PageView
         Watch(app.Company);
         Watch(app.Enrollment);
         Watch(app.Workspace);
+        app.PropertyChanged += (_, change) =>
+        {
+            if (change.PropertyName != nameof(AppModel.AddThisRequested) || !app.AddThisRequested) return;
+            app.AddThisRequested = false;
+            DispatcherQueue.TryEnqueue(() => _ = AddThisComputer());
+        };
         SizeChanged += (_, _) =>
         {
             if (WidthClass == widthClass) return;

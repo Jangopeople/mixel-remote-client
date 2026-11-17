@@ -335,7 +335,12 @@ internal sealed partial class MainWindow
             stack.Children.Add(steps);
             if (attempt.Step == 0 && app.Progress.Length > 0) stack.Children.Add(Ui.Caption(app.Progress));
         }
-        else stack.Children.Add(Ui.Message(attempt.Failure) ?? new Grid());
+        else
+        {
+            stack.Children.Add(Ui.Message(attempt.Failure) ?? new Grid());
+            // The first connect of a computer that is not added to the account yet: the fix is one click away (same as the Mac).
+            if (app.SetupOffer) stack.Children.Add(Ui.Primary(L("Add this computer"), () => _ = app.AddThisFromFailure()));
+        }
         var cancel = Ui.Plain(ok ? L("Cancel") : L("Close"), () => _ = workspace.CancelAttempt());
         var buttons = Ui.Split(cancel, ok && !attempt.InWindow ? Ui.Link(L("Open in window instead"), workspace.OpenAttemptInWindow) : null);
         stack.Children.Add(buttons);
