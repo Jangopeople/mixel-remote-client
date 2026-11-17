@@ -99,7 +99,7 @@ pub fn install(app: &Rc<App>) {
                         let (app, note) = (app.clone(), note.clone());
                         app.clone().spawn(async move {
                             let result = app.engine.call(&command, args).await;
-                            note(format!("call {command}: {}", result.map(|value| value.to_string().chars().take(600).collect::<String>()).unwrap_or_else(|error| format!("ERR {error}"))));
+                            note(format!("call {command}: {}", result.map(|value| value.to_string().chars().take(6000).collect::<String>()).unwrap_or_else(|error| format!("ERR {error}"))));
                         });
                     }
                     _ => {}

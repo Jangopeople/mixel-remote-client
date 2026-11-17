@@ -690,7 +690,7 @@ async fn device_id_of(check: &Check<'_>, mine: u64, _tenant: &str) -> Option<Str
 
 /// Lines of the file `<folder>/cmd` (written by the person running the lab, read and deleted here):
 /// `unattended on`, `unattended off`, `copy <text>` (puts a text into this computer's clipboard),
-/// `control off|on` (what the next attended session may do).
+/// `control off|on` (what the next attended session may do), `sendfile <absolute path>` (offers a file to the technician).
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 async fn lab_commands(check: &mut Check<'_>, control: &mut bool, mine: u64, tenant: &str) {
     let path = check.folder.join("cmd");
@@ -750,6 +750,12 @@ async fn lab_commands(check: &mut Check<'_>, control: &mut bool, mine: u64, tena
             other => {
                 if let Some(text) = other.strip_prefix("copy ") {
                     check.print(&format!("copy: {}", session_platform::write_text(text).is_ok()));
+                }
+                // `sendfile <absolute path>`: this computer offers a file to the technician of the running session.
+                if let Some(path) = other.strip_prefix("sendfile ") {
+                    let consent = check.status().await["consent"].clone();
+                    let result = check.call("remote_file_send", json!({ "consent": consent, "path": path })).await;
+                    check.print(&format!("sendfile: {}", result.map(|value| value.to_string().chars().take(200).collect::<String>()).unwrap_or_else(|error| format!("ERR {error}"))));
                 }
             }
         }
