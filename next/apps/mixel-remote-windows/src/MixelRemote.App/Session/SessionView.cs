@@ -29,6 +29,7 @@ internal sealed class SessionView : Grid
     private readonly ToolPanel tools;
     private readonly Border notices = new() { HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Bottom, Margin = new Thickness(12), Padding = new Thickness(10), CornerRadius = new CornerRadius(8) };
     private readonly StackPanel waiting;
+    private readonly Button retry;
     private readonly Border drawBar = new() { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(12), Padding = new Thickness(6), CornerRadius = new CornerRadius(8), BorderThickness = new Thickness(1), Visibility = Visibility.Collapsed };
     private bool pending;
     private bool closed;
@@ -62,7 +63,12 @@ internal sealed class SessionView : Grid
         waiting = Ui.Column(12, new ProgressRing { IsActive = true, Width = 40, Height = 40, Foreground = new SolidColorBrush(Microsoft.UI.Colors.White) }, new TextBlock { Foreground = new SolidColorBrush(Microsoft.UI.Colors.White), Opacity = 0.85 });
         waiting.HorizontalAlignment = HorizontalAlignment.Center;
         waiting.VerticalAlignment = VerticalAlignment.Center;
-        waiting.IsHitTestVisible = false;
+        // Only the Retry button of a session that could not reconnect takes clicks; the rest of the stack lets them through.
+        retry = new Button { Content = L("Retry"), Padding = new Thickness(18, 7, 18, 7), HorizontalAlignment = HorizontalAlignment.Center, Visibility = Visibility.Collapsed, Background = Ui.BrandBrush, Foreground = new SolidColorBrush(Microsoft.UI.Colors.White) };
+        AutomationProperties.SetName(retry, L("Retry"));
+        ToolTipService.SetToolTip(retry, L("Ask the remote computer again"));
+        retry.Click += (_, _) => _ = session.Retry();
+        waiting.Children.Add(retry);
         stage.Children.Add(waiting);
         notices.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0xA6, 0, 0, 0));
         notices.IsHitTestVisible = false;
@@ -169,7 +175,10 @@ internal sealed class SessionView : Grid
         BuildToolbar();
         BuildDrawBar();
         waiting.Visibility = session.Frame is null ? Visibility.Visible : Visibility.Collapsed;
-        ((TextBlock)waiting.Children[1]).Text = session.Remote.Phase == "outgoing" ? L("Waiting for the other person to accept your request.") : L("Starting video");
+        ((TextBlock)waiting.Children[1]).Text = session.WaitingText();
+        ((ProgressRing)waiting.Children[0]).IsActive = !session.ReconnectFailed;
+        ((ProgressRing)waiting.Children[0]).Visibility = session.ReconnectFailed ? Visibility.Collapsed : Visibility.Visible;
+        retry.Visibility = session.ReconnectFailed ? Visibility.Visible : Visibility.Collapsed;
         var lines = new[] { session.ReconnectingNotice(), session.PasswordWarning(), session.Notice, session.MeetingNotice, session.Error, session.RecordingText }.Where(line => line.Length > 0).ToList();
         notices.Visibility = lines.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         notices.Child = Ui.Column(4, [.. lines.Select(line => (UIElement)new TextBlock { Text = line, Foreground = new SolidColorBrush(line == session.Error ? Windows.UI.Color.FromArgb(255, 0xFF, 0xB4, 0xBD) : Microsoft.UI.Colors.White), TextWrapping = TextWrapping.Wrap, MaxWidth = 620 })]);

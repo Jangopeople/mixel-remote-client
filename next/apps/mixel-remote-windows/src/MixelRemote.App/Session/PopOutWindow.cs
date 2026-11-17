@@ -8,8 +8,8 @@ using static MixelRemote.Support.T;
 namespace MixelRemote.App.Session;
 
 /// <summary>
-/// A session in its own window ("Window" in the session toolbar). Closing the window puts the session back
-/// into its tab (it does not end it); "Back into a tab" does the same from the toolbar.
+/// A session in its own window ("Window" in the session toolbar). Closing the window ends the session after
+/// "End session with ...?" (the same as on the Mac); "Back into a tab" in the toolbar docks it.
 /// </summary>
 internal sealed class PopOutWindow
 {
@@ -18,6 +18,7 @@ internal sealed class PopOutWindow
     private readonly Window window;
     private readonly SessionView view;
     private bool closing;
+    private bool asking;
 
     public PopOutWindow(AppModel app, uint peer)
     {
@@ -43,15 +44,35 @@ internal sealed class PopOutWindow
         window.AppWindow.Closing += (sender, args) =>
         {
             if (closing) return;
-            // The close button docks the session back into its tab.
+            // The close button ends the session after a confirmation; the Dock button is what moves it back into a tab.
             args.Cancel = true;
-            app.Workspace.WindowClosed(peer);
+            _ = AskToEnd();
         };
         window.Closed += (_, _) =>
         {
             app.Workspace.WindowDeactivated(peer);
             view.Detach();
         };
+    }
+
+    private async Task AskToEnd()
+    {
+        if (asking) return;
+        var decision = app.Workspace.WindowCloseRequested(peer);
+        if (!decision.Confirm)
+        {
+            // Its session is gone already: nothing to ask, nothing to dock.
+            app.Workspace.WindowGone(peer);
+            Close();
+            return;
+        }
+        asking = true;
+        try
+        {
+            if (await Dialogs.Confirm(window.Content.XamlRoot, decision.Title, decision.Text, decision.Action)) await app.Workspace.ConfirmWindowClose(peer);
+        }
+        catch (Exception failure) { MixelRemote.App.App.Log($"session window close: {failure}"); }
+        finally { asking = false; }
     }
 
     private string Title() => L("%@ — Mixel Remote", app.Workspace.Tab(peer)?.Name ?? MixelRemote.Support.Format.RemoteId(peer));

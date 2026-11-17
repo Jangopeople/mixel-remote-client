@@ -380,9 +380,9 @@ internal sealed class DevicesPage : PageView
             AutomationProperties.SetName(progress, L("Connecting"));
             status = Ui.Column(4, Ui.Row(6, Ui.Spinner(14), Ui.Text(ConnectStepTitle(attempt.Step, attempt.Unattended) + "…", bold: true, wrap: false)), progress);
         }
-        else if (state is "ready" or "starting" or "ending")
+        else if (state is "ready" or "starting" or "ending" or "reconnecting" or "failed")
         {
-            status = Ui.Pill(state == "starting" ? L("Starting video") : L("In session"), "", "MixelSessionText", "MixelSessionSoft");
+            status = Ui.Pill(state switch { "starting" => L("Starting video"), "reconnecting" => L("Reconnecting..."), "failed" => L("Could not reconnect"), _ => L("In session") }, "", "MixelSessionText", "MixelSessionSoft");
         }
         else
         {

@@ -80,16 +80,38 @@ public sealed class WorkspaceTests
     }
 
     [TestMethod]
-    public async Task Closing_the_window_docks_it()
+    public async Task Closing_the_window_asks_and_ends_the_session_instead_of_docking_it()
     {
-        var (app, _) = await Viewing(openIn: OpenIn.Window);
+        var (app, engine) = await Viewing(openIn: OpenIn.Window);
         var ws = app.Workspace;
         ws.OpenWindow = _ => { };
         ws.Show(Peer);
         Assert.IsTrue(ws.IsInWindow(Peer), "default own window");
-        ws.WindowClosed(Peer);
+        var decision = ws.WindowCloseRequested(Peer);
+        Assert.IsTrue(decision.Confirm, "a running session asks first");
+        Assert.AreEqual($"End session with {ws.Tab(Peer)!.Name}?", decision.Title);
+        Assert.IsTrue(ws.IsInWindow(Peer), "asking changes nothing");
+        Assert.AreEqual(0, engine.CallsOf("remote_close").Count, "nothing ended before the answer");
+        await ws.ConfirmWindowClose(Peer);
+        Assert.AreEqual(1, engine.CallsOf("remote_close").Count, "confirmed: the session ends");
+        Assert.AreNotEqual(WorkspaceTab.Session(Peer), ws.Selected, "never docked into a tab");
+        app.Session.Clear();
+    }
+
+    [TestMethod]
+    public async Task A_window_without_a_running_session_closes_without_asking()
+    {
+        var (app, engine) = await Viewing(openIn: OpenIn.Window);
+        var ws = app.Workspace;
+        ws.OpenWindow = _ => { };
+        Assert.IsFalse(ws.WindowCloseRequested(Peer + 1).Confirm, "not a window of this workspace");
+        ws.Show(Peer);
+        engine.ReplyValue("remote_status", new RemoteStatus { Phase = "ready", Host = DemoFixtures.ThisComputer });
+        await app.RefreshRemote();
+        Assert.IsFalse(ws.WindowCloseRequested(Peer).Confirm, "its session is gone");
+        ws.WindowGone(Peer);
         Assert.IsFalse(ws.IsInWindow(Peer));
-        Assert.AreEqual(WorkspaceTab.Session(Peer), ws.Selected);
+        Assert.IsTrue(ws.Selected.IsConsole);
         app.Session.Clear();
     }
 

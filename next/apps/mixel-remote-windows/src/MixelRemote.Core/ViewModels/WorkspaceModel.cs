@@ -18,7 +18,7 @@ public readonly record struct WorkspaceTab(uint? Peer)
     public bool IsConsole => Peer is null;
 }
 
-/// <summary>One session tab: the device's Remote ID, the session's stable engine id (the tab never changes it), name, system and state (starting, ready, ending).</summary>
+/// <summary>One session tab: the device's Remote ID, the session's stable engine id (the tab never changes it), name, system and state (starting, ready, ending, reconnecting, failed).</summary>
 public sealed record SessionTab(uint Peer, string Name, string Os, string State, string Id = "");
 
 /// <summary>A connection being prepared from the Devices list or "Connect by ID".</summary>
@@ -58,6 +58,8 @@ public sealed class WorkspaceModel : Observable
     private WorkspaceTab selected = WorkspaceTab.Console;
     private List<SessionTab> tabs = [];
     private HashSet<uint> windows = [];
+    /// <summary>Sessions that lost their computer and ask again: when one is ready again it is not announced as a new session.</summary>
+    private readonly HashSet<uint> resumed = [];
     private ConnectAttempt? attempt;
     private List<uint> readyNotices = [];
     private readonly HashSet<uint> attemptWindow = [];
@@ -167,6 +169,9 @@ public sealed class WorkspaceModel : Observable
             {
                 "active" => app.SessionFor(item.Peer)?.Frame is not null ? "ready" : "starting",
                 "closing" => "ending",
+                // The remote computer went away: the session stays (tab, window, End) while it is asked again, and after the minute until Retry or End.
+                "outgoing" when item.Reconnecting => "reconnecting",
+                "outgoing" when item.ReconnectFailed => "failed",
                 _ => "",
             };
             if (state.Length == 0) continue;
@@ -188,6 +193,8 @@ public sealed class WorkspaceModel : Observable
             Raise(nameof(Focused));
         }
         var open = next.Select(tab => tab.Peer).ToHashSet();
+        foreach (var tab in next.Where(tab => tab.State is "reconnecting" or "failed")) resumed.Add(tab.Peer);
+        resumed.RemoveWhere(peer => !open.Contains(peer));
         // Ended sessions: their tab, window and notice go away; the Devices list comes back.
         foreach (var peer in before.Keys.Where(peer => !open.Contains(peer)).ToList())
         {
@@ -203,6 +210,7 @@ public sealed class WorkspaceModel : Observable
         UpdateAttempt(status);
         foreach (var tab in next.Where(tab => tab.State == "ready" && !(before.TryGetValue(tab.Peer, out var old) && old.State == "ready")))
         {
+            if (resumed.Remove(tab.Peer)) continue;
             BecameReady(tab.Peer);
         }
     }
@@ -335,12 +343,29 @@ public sealed class WorkspaceModel : Observable
         if (select && tabs.Any(tab => tab.Peer == peer)) Selected = WorkspaceTab.Session(peer);
     }
 
-    /// <summary>The session window was closed by the person (title bar button): it goes back into its tab.</summary>
-    public void WindowClosed(uint peer)
+    /// <summary>What closing a session window (title bar button) does: the session is not docked, it ends after "End session with ...?".</summary>
+    public readonly record struct WindowCloseDecision(bool Confirm, string Title, string Text, string Action);
+
+    /// <summary>
+    /// The person closes a session window. A window whose session still runs asks first and ends that session when confirmed
+    /// (<see cref="ConfirmWindowClose"/>); the separate Dock button (<see cref="Dock"/>) is what puts it back into a tab.
+    /// A window whose session is already gone just closes.
+    /// </summary>
+    public WindowCloseDecision WindowCloseRequested(uint peer)
+    {
+        if (!windows.Contains(peer) || Tab(peer) is not { } tab) return new WindowCloseDecision(false, "", "", "");
+        return new WindowCloseDecision(true, L("End session with %@?", tab.Name), L("The connection ends for both sides."), L("End session"));
+    }
+
+    /// <summary>The person confirmed: ends this session only (remote_close with its stable id); the window closes when the engine no longer lists it.</summary>
+    public Task ConfirmWindowClose(uint peer) => windows.Contains(peer) ? End(peer) : Task.CompletedTask;
+
+    /// <summary>A window without a running session was closed: forget it (no tab to go back to).</summary>
+    public void WindowGone(uint peer)
     {
         if (!windows.Remove(peer)) return;
+        if (focusedWindow == peer) focusedWindow = null;
         Raise(nameof(Windows));
-        if (tabs.Any(tab => tab.Peer == peer)) Selected = WorkspaceTab.Session(peer);
     }
 
     public SessionTab? Tab(uint peer) => tabs.FirstOrDefault(tab => tab.Peer == peer);

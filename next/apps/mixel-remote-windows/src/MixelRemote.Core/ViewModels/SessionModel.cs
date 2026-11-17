@@ -279,10 +279,38 @@ public sealed class SessionModel : Observable
     /// </summary>
     public string ReconnectingNotice() => Remote.Reconnecting ? L("Reconnecting… the session stays open") : "";
 
+    /// <summary>The remote computer went away and this session asks for it again (engine: <c>sessions[].reconnecting</c>).</summary>
+    public bool PeerReconnecting => item is not null && Remote.PeerReconnecting;
+    /// <summary>The minute of asking again is over (<c>sessions[].reconnect_failed</c>): Retry or End.</summary>
+    public bool ReconnectFailed => item is not null && Remote.ReconnectFailed;
+
+    /// <summary>
+    /// What the empty screen says while there is no picture: "Reconnecting...", "Could not reconnect", the wait for the person
+    /// to accept, or "Starting video".
+    /// </summary>
+    public string WaitingText() =>
+        PeerReconnecting ? L("Reconnecting...")
+        : ReconnectFailed ? L("Could not reconnect")
+        : Remote.Phase == "outgoing" ? L("Waiting for the other person to accept your request.")
+        : L("Starting video");
+
+    /// <summary>Asks the remote computer again for another minute (remote_reconnect with the stable id); only after "Could not reconnect".</summary>
+    public async Task Retry()
+    {
+        if (!ReconnectFailed || SessionId is not { } id) return;
+        Error = "";
+        try { await app.Engine.PerformAsync("remote_reconnect", ("session", id)); }
+        catch (EngineFailure failure) { Error = failure.Translated; }
+        await app.RefreshRemote();
+    }
+
     public string PasswordWarning(DateTimeOffset? now = null)
     {
-        if (Format.ParseDate(Remote.PasswordSession?.EndsAt) is not { } ends) return "";
-        var seconds = (ends - (now ?? DateTimeOffset.UtcNow)).TotalSeconds;
+        // Remote is this session's projection: its own password_session, never another session's.
+        double seconds;
+        if (Format.ParseDate(Remote.PasswordSession?.EndsAt) is { } ends) seconds = (ends - (now ?? DateTimeOffset.UtcNow)).TotalSeconds;
+        else if (Remote.PasswordSession?.SecondsLeft is { } left) seconds = left;
+        else return "";
         if (seconds <= 0 || seconds > 300) return "";
         return seconds <= 60
             ? L("This support session ends in 1 minute (support password limit). Ask for a new password to continue.")

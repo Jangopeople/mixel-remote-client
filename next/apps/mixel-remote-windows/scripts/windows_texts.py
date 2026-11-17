@@ -125,4 +125,9 @@ WINDOWS = {
     'This support session ends in %d minutes (support password limit). Ask for a new password to continue.': ('Diese Support-Sitzung endet in %d Minuten (Limit des Support-Passworts). Fragen Sie nach einem neuen Passwort, um fortzufahren.', 'Cette session de support se termine dans %d minutes (limite du mot de passe de support). Demandez un nouveau mot de passe pour continuer.', 'Questa sessione di supporto termina tra %d minuti (limite della password di supporto). Chieda una nuova password per continuare.'),
     'You already have %d sessions open, the most Mixel Remote allows. Close one to start another.': ('Sie haben bereits %d Sitzungen offen, mehr erlaubt Mixel Remote nicht. Schliessen Sie eine, um eine weitere zu starten.', 'Vous avez déjà %d sessions ouvertes, le maximum autorisé par Mixel Remote. Fermez-en une pour en démarrer une autre.', 'Ha già %d sessioni aperte, il massimo consentito da Mixel Remote. Ne chiuda una per avviarne un’altra.'),
     'You are already connected to this computer.': ('Sie sind bereits mit diesem Computer verbunden.', 'Vous êtes déjà connecté à cet ordinateur.', 'È già connesso a questo computer.'),
+    'Reconnecting...': ('Verbindung wird wiederhergestellt…', 'Reconnexion…', 'Riconnessione…'),
+    'Could not reconnect': ('Verbindung konnte nicht wiederhergestellt werden', 'Reconnexion impossible', 'Impossibile riconnettersi'),
+    'Retry': ('Erneut versuchen', 'Réessayer', 'Riprova'),
+    'Ask the remote computer again': ('Den entfernten Computer erneut anfragen', 'Demander de nouveau à l’ordinateur distant', 'Richiedere di nuovo il computer remoto'),
+    'End session with %@?': ('Sitzung mit %@ beenden?', 'Terminer la session avec %@ ?', 'Terminare la sessione con %@?'),
 }

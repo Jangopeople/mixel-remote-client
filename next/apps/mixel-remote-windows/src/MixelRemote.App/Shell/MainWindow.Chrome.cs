@@ -23,7 +23,7 @@ internal sealed partial class MainWindow
         tabs.Children.Add(Tab(devices, L("Devices"), workspace.Selected.IsConsole, () => workspace.Selected = WorkspaceTab.Console, null, null));
         foreach (var tab in workspace.Tabs)
         {
-            var dot = tab.State == "ready" ? "MixelSuccess" : tab.State == "ending" ? "TextFillColorTertiaryBrush" : "MixelWarning";
+            var dot = tab.State == "ready" ? "MixelSuccess" : tab.State is "ending" or "failed" ? "TextFillColorTertiaryBrush" : "MixelWarning";
             var row = Ui.Row(7,
                 new Microsoft.UI.Xaml.Shapes.Ellipse { Width = 7, Height = 7, Fill = Ui.Brush(dot), VerticalAlignment = VerticalAlignment.Center },
                 Ui.OsMark(tab.Os, 13),

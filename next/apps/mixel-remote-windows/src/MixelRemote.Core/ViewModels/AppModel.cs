@@ -255,7 +255,7 @@ public sealed class AppModel : Observable
     public bool CanStartConnection => !Remote.InSession || CanRequestSession(Remote);
 
     /// <summary>Cancels every request that still waits for the other side to accept.</summary>
-    public Task CancelRequests() => Task.WhenAll(Sessions.Where(model => model.Item is { Phase: "outgoing" }).Select(model => model.End()));
+    public Task CancelRequests() => Task.WhenAll(Sessions.Where(model => model.Item is { Asking: true }).Select(model => model.End()));
 
     /// <summary>
     /// A set-up computer goes online by itself once someone is signed in, so the person who needs help

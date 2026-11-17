@@ -55,7 +55,7 @@ internal sealed class RemotePage : PageView
         var password = Keep("password", () => new PasswordBox { Width = 260, HorizontalAlignment = HorizontalAlignment.Left });
         password.IsEnabled = true;
         var ready = !App.Busy && App.SignedIn && (Remote.Phase is "ready" or "offline" or "error" || (Remote.InSession && App.CanStartConnection));
-        var asking = Remote.TechnicianSessions.Any(item => item.Phase == "outgoing");
+        var asking = Remote.TechnicianSessions.Any(item => item.Asking);
         void Go()
         {
             if (Format.ParseRemoteId(partner.Text) is not { } id)

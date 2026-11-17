@@ -100,6 +100,10 @@ public sealed record RemoteStatus
     public int? MaxSessions { get; init; }
     /// <summary>The connection to the connection service was lost; the session continues and is resumed (engine 2.1.0).</summary>
     public bool Reconnecting { get; init; }
+    /// <summary>Projected from <see cref="SessionStatus.Reconnecting"/>: the remote computer of this session went away and is being asked again (not the connection-wide <see cref="Reconnecting"/>).</summary>
+    public bool PeerReconnecting { get; init; }
+    /// <summary>Projected from <see cref="SessionStatus.ReconnectFailed"/>: this session could not reach its computer again.</summary>
+    public bool ReconnectFailed { get; init; }
 
     public static readonly RemoteStatus Offline = new();
 
@@ -125,7 +129,7 @@ public sealed record RemoteStatus
                 Received = Received, Control = Control, Clipboard = Clipboard, Files = Files, RecordingPermitted = RecordingPermitted,
                 Recording = Recording, Displays = Displays, Display = Display, DisplayAll = DisplayAll, PrintJobs = PrintJobs,
                 HostActions = HostActions, SigninId = SigninId, HostMacs = HostMacs, MeetingOffer = MeetingOffer, PeerFeatures = PeerFeatures,
-                JoinedSession = JoinedSession, Switched = Switched,
+                JoinedSession = JoinedSession, Switched = Switched, PasswordSession = PasswordSession, UnattendedSession = UnattendedSession,
             },
         ];
     }
@@ -182,6 +186,16 @@ public sealed record SessionStatus
     public bool Switched { get; init; }
     public SessionQuality Quality { get; init; } = new();
     public ulong StartedAt { get; init; }
+    /// <summary>The remote computer went away and this session asks for it again (phase stays outgoing, 60 seconds).</summary>
+    public bool Reconnecting { get; init; }
+    /// <summary>The minute of asking again passed: the session stays listed until Retry (remote_reconnect) or End (remote_close).</summary>
+    public bool ReconnectFailed { get; init; }
+    /// <summary>This session was started with a support password: when it ends (the 5 and 1 minute warnings belong to this session only).</summary>
+    public PasswordSession? PasswordSession { get; init; }
+    public bool UnattendedSession { get; init; }
+
+    /// <summary>The request waits for the person at the other computer to accept (not a session that asks its computer again).</summary>
+    public bool Asking => Phase == "outgoing" && !Reconnecting && !ReconnectFailed;
 
     /// <summary>The session is shown or being set up (not ended).</summary>
     public bool Running => Phase is "outgoing" or "negotiating" or "active" or "closing";
@@ -197,12 +211,16 @@ public sealed record SessionStatus
         Recording = Recording, Displays = Displays, Display = Display, DisplayAll = DisplayAll, PrintJobs = PrintJobs,
         HostActions = HostActions, SigninId = SigninId, HostMacs = HostMacs, MeetingOffer = MeetingOffer, PeerFeatures = PeerFeatures,
         JoinedSession = JoinedSession, Switched = Switched,
+        // The engine reports these per session: the top-level values (one session) belong to an older engine only.
+        PasswordSession = PasswordSession, UnattendedSession = UnattendedSession,
+        PeerReconnecting = Reconnecting, ReconnectFailed = ReconnectFailed,
     };
 }
 
 public sealed record PasswordSession
 {
     public string? EndsAt { get; init; }
+    public double? SecondsLeft { get; init; }
 }
 
 public sealed record PairingPrompt
