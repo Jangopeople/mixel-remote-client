@@ -74,6 +74,34 @@ internal static class LabHook
                 var files = session.Files;
                 return $"phase={r.Phase} sessions={app.Sessions.Count()} tabs={app.Workspace.Tabs.Count} fps={session.Fps} frame={session.Frame?.Width}x{session.Frame?.Height} displays={r.Displays} display={r.Display} actions={string.Join(",", r.HostActions)} " +
                     $"in={files?.Incoming?.Phase}/{files?.Incoming?.Name} out={files?.Outgoing?.Phase}/{files?.Outgoing?.Progress:0.00} chat={string.Join("|", session.Chat.TakeLast(3).Select(m => (m.Mine ? "me:" : "peer:") + m.Text))} clip={session.ClipboardResult} error={session.Error}";
+            case "framesave":
+            {
+                // framesave <path>: the newest picture of the session as a 32-bit BMP (lab evidence while the window cannot be looked at)
+                var f = session.Frame; if (f is null) return "no frame";
+                var bgra = f.ToBgra(); var head = new byte[54]; var size = 54 + bgra.Length;
+                head[0] = 66; head[1] = 77; BitConverter.GetBytes(size).CopyTo(head, 2); BitConverter.GetBytes(54).CopyTo(head, 10); BitConverter.GetBytes(40).CopyTo(head, 14);
+                BitConverter.GetBytes(f.Width).CopyTo(head, 18); BitConverter.GetBytes(-f.Height).CopyTo(head, 22); head[26] = 1; head[28] = 32; BitConverter.GetBytes(bgra.Length).CopyTo(head, 34);
+                await using (var file = System.IO.File.Create(parts[1])) { await file.WriteAsync(head); await file.WriteAsync(bgra); }
+                return $"saved {f.Width}x{f.Height} seq={f.Sequence}";
+            }
+            case "click":
+            {
+                // click <x> <y> [button]: pointer position in 0..1 of the picture, then a click (button 1 left, 2 middle, 3 right)
+                var args = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                session.MoveTo(double.Parse(args[1], System.Globalization.CultureInfo.InvariantCulture), double.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture));
+                var button = args.Length > 3 ? byte.Parse(args[3]) : (byte)1;
+                session.Send(new MixelRemote.Models.InputEvent.ButtonClick(button, true, 1)); session.Send(new MixelRemote.Models.InputEvent.ButtonClick(button, false, 1));
+                return "clicked";
+            }
+            case "press":
+            {
+                // press <hid usage> [modifier usages...]: a key with modifiers (Alt = 226, Ctrl = 224, Shift = 225, Y = 28, Enter = 40)
+                var args = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                session.Press(ushort.Parse(args[1]), args.Skip(2).Select(ushort.Parse).ToArray());
+                return "pressed";
+            }
+            case "sas": session.CtrlAltDel(); return "sas sent";
+            case "action": session.GetType().GetMethod("Action", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)?.Invoke(session, [parts[1]]); return "action " + parts[1];
             case "attempt": { var a = app.Workspace.Attempt; return a is null ? "no attempt" : $"step={a.Step} unattended={a.Unattended} failure={a.Failure}"; }
             case "grants":
             {
