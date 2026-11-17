@@ -237,10 +237,12 @@ async fn run(config: &mut Config) -> Result<(), String> {
         } else {
             None
         };
+        crate::qa_timeline::mark("file channel set up");
         let chat = control
             .chat
             .take()
             .map(|crypto| crate::remote_chat::ChatTransport::start(config, &mut transport, crypto));
+        crate::qa_timeline::mark("chat channel set up");
         let result = if config.host && config.mirror {
             mirror_media(config, &mut consent, &channel, sender.ok_or("Host video sender unavailable")?, &mut control, &mut transport).await
         } else if config.host {
@@ -991,11 +993,13 @@ async fn host_media(
     )?;
     #[cfg(feature = "qa-session")]
     let capture_ready = setup.elapsed();
+    crate::qa_timeline::mark("screen capture opened");
     let mut shown = config.source.clone();
     // The technician's pointer is placed on the shared display.
     crate::session_guard::set_shared_source(&shown);
     let result = async {
         let encoder = start_encoder(size)?;
+        crate::qa_timeline::mark("encoder started");
         let mut retry_encode = false;
         // The encoder left the last picture out: it is given again although the screen is unchanged.
         let mut encode_again = false;

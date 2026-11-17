@@ -108,6 +108,9 @@ pub struct NativeTransport {
     relay_only: bool,
     streams: Option<Arc<crate::stream_turn::StreamRuntime>>,
 }
+/// How long a relay-only session waits before it accepts a working relay (or peer-reflexive) pair.
+pub const RELAY_ONLY_ACCEPTANCE_WAIT: Duration = Duration::ZERO;
+
 impl NativeTransport {
     pub async fn receive_video(&self) -> Result<(), TransportError> {
         self.peer
@@ -231,6 +234,13 @@ impl NativeTransport {
             builder.with_setting_engine(
                 webrtc::peer_connection::SettingEngineBuilder::new()
                     .with_multicast_dns_mode(rtc::ice::mdns::MulticastDnsMode::Disabled)
+                    // Only relay candidates exist here, so nothing better can turn up: a working
+                    // relay pair is taken at once. With the stack's default (wait 2 s before
+                    // accepting a relay pair, 1 s for a peer-reflexive one) opening a relay-only
+                    // session took about 6 s from offer to the open control channel in the lab
+                    // (82cb321, 14 Nov builds) even on a fast link.
+                    .with_relay_acceptance_min_wait(Some(RELAY_ONLY_ACCEPTANCE_WAIT))
+                    .with_prflx_acceptance_min_wait(Some(RELAY_ONLY_ACCEPTANCE_WAIT))
                     .build(),
             )
         } else {
@@ -293,9 +303,8 @@ impl NativeTransport {
                     break;
                 }
             }
-            match tokio::time::timeout(Duration::from_millis(15), self.gathered.changed()).await {
-                Ok(Err(_)) => return Err(TransportError::Timeout),
-                _ => {}
+            if let Ok(Err(_)) = tokio::time::timeout(Duration::from_millis(15), self.gathered.changed()).await {
+                return Err(TransportError::Timeout);
             }
         }
         let description = self

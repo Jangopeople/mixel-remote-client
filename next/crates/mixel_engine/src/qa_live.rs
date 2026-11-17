@@ -361,6 +361,43 @@ async fn session(check: &mut Check<'_>, suffix: &str, tenant: &str, mine: u64) {
         }
         let _ = std::fs::write(check.folder.join("load-done.txt"), "1");
     }
+    // 5c. Only when the lab script asks for it (`hold-minutes.txt` with a number): the session is
+    // kept that long (through the transport renewal and a sign-in refresh), with one input every
+    // 20 s; every input must be confirmed and the session must stay the same one.
+    if let Some(minutes) = std::fs::read_to_string(check.folder.join("hold-minutes.txt")).ok().and_then(|text| text.trim().parse::<u64>().ok()) {
+        let started = Instant::now();
+        let (mut asked, mut late, mut changed, mut pictures) = (0u32, Vec::new(), None, 0u32);
+        while started.elapsed() < Duration::from_secs(minutes * 60) {
+            while check.picture(id).await {
+                pictures += 1;
+            }
+            let now = check.status().await;
+            if now["phase"] != "active" || now["session"] != active["session"] {
+                changed = Some(format!("after {} s: {} {}", started.elapsed().as_secs(), now["phase"], now["message"]));
+                break;
+            }
+            if control {
+                asked += 1;
+                let sent = Instant::now();
+                let result = check.input(id, InputEvent::Pointer { x: 20000 + (asked % 20) as u16 * 1000, y: 30000 }).await;
+                if result != Ok(true) || sent.elapsed() > PROMPT {
+                    late.push(format!("input {asked} at {} s: {result:?} after {} ms", started.elapsed().as_secs(), sent.elapsed().as_millis()));
+                }
+            }
+            if asked % 15 == 0 {
+                check.print(&format!("holding: {} s, {asked} inputs, {pictures} pictures", started.elapsed().as_secs()));
+            }
+            tokio::time::sleep(Duration::from_secs(20)).await;
+        }
+        if !late.is_empty() {
+            check.print(&format!("late or not confirmed while held: {}", late.join("; ")));
+        }
+        check.check(
+            &format!("the session holds for {minutes} min ({} s held, {asked} inputs, {} late, {pictures} pictures)", started.elapsed().as_secs(), late.len()),
+            changed.is_none() && late.is_empty(),
+            changed.unwrap_or_default(),
+        );
+    }
     // 6. Drawing on the host's screen.
     if active["peer_features"].as_array().is_some_and(|features| features.iter().any(|feature| feature == "draw")) {
         let stroke = json!({ "kind": "stroke", "id": 1, "tool": "arrow", "color": 0, "width": 2, "points": [[12000, 12000], [30000, 26000]], "done": true });

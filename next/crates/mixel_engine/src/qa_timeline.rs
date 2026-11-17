@@ -19,7 +19,7 @@ mod lab {
         let since = START
             .lock()
             .ok()
-            .and_then(|mut start| Some(start.get_or_insert_with(Instant::now).elapsed()))
+            .map(|mut start| start.get_or_insert_with(Instant::now).elapsed())
             .map_or(0, |elapsed| elapsed.as_millis());
         eprintln!("QA connect +{since} {step} (clock {})", crate::remote_control::qa_wall_clock());
     }
