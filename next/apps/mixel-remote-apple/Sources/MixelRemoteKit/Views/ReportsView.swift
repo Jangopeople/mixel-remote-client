@@ -13,6 +13,14 @@ public struct ReportsView: View {
     }
 
     public var body: some View {
+        #if os(macOS)
+        ReportsConsoleView(app: app, reports: reports)
+        #else
+        phoneBody
+        #endif
+    }
+
+    private var phoneBody: some View {
         VStack(alignment: .leading, spacing: 14) {
             PageHeader(L("Session reports"), subtitle: reports.tenant?.name ?? "")
             if reports.tenant == nil {

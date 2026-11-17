@@ -40,6 +40,8 @@ public final class SessionModel: ObservableObject {
     public var useHardwareDecoding = true
 
     var lastRequestUnattended = false
+    /// The request this app sent carried a one-time password (the engine may not report it itself yet).
+    var lastRequestPassword = false
     private var video: Task<Void, Never>?
     private var tools: Task<Void, Never>?
     private var viewingSession: String?

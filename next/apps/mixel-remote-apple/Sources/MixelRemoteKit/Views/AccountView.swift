@@ -39,52 +39,8 @@ public struct AccountView: View {
         Card {
             CardTitle(L("Connect with your Mixel account"), symbol: "person.badge.key")
             switch account.phase {
-            case "profile_setup":
-                Text(verbatim: Translator.shared.translate(account.message)).foregroundStyle(.secondary)
-                FieldRow(L("Your name")) {
-                    TextField(L("First and last name"), text: $profileName).textFieldStyle(.roundedBorder).frame(maxWidth: 320)
-                }
-                HStack {
-                    Button(L("Continue")) { app.completeProfile(name: profileName) }
-                        .buttonStyle(PrimaryButtonStyle()).disabled(profileName.trimmingCharacters(in: .whitespaces).isEmpty || app.busy)
-                    Button(L("Cancel sign-in")) { app.cancelSignIn() }
-                }
-            case "starting", "waiting_browser", "verifying":
-                HStack(spacing: 10) {
-                    ProgressView().controlSize(.small)
-                    Text(verbatim: Translator.shared.translate(account.message))
-                }
-                if let link = app.signInLink {
-                    FieldRow(L("Open this link in your other browser")) {
-                        HStack {
-                            Text(verbatim: link).font(.caption.monospaced()).lineLimit(2).truncationMode(.middle).textSelection(.enabled)
-                            Button { Pasteboard.copy(link) } label: { Label(L("Copy"), systemImage: "doc.on.doc") }.labelStyle(.iconOnly)
-                        }
-                    }
-                }
-                Button(L("Cancel sign-in")) { app.cancelSignIn() }
-            case "mfa_required":
-                Text(verbatim: L("Additional verification is required for this Mixel account")).foregroundStyle(.secondary)
-                let factor = account.factors.first
-                if let name = factor?.friendlyName {
-                    Text(verbatim: L("Enter the code from the authenticator entry “%@”.", name)).font(.callout)
-                }
-                FieldRow(L("Verification code")) {
-                    TextField(text: $app.verificationCode, prompt: Text(verbatim: "123456")) { Text(verbatim: L("Verification code")) }
-                        .textFieldStyle(.roundedBorder)
-                        .font(.title3.monospacedDigit())
-                        .frame(maxWidth: 200)
-                        #if os(iOS)
-                        .keyboardType(.numberPad)
-                        .textContentType(.oneTimeCode)
-                        #endif
-                        .onSubmit { if let factor { app.verify(factor: factor.id) } }
-                }
-                HStack {
-                    Button(L("Verify")) { if let factor { app.verify(factor: factor.id) } }
-                        .buttonStyle(PrimaryButtonStyle()).disabled(factor == nil || app.busy)
-                    Button(L("Cancel sign-in")) { app.cancelSignIn() }
-                }
+            case "profile_setup", "starting", "waiting_browser", "verifying", "mfa_required":
+                SignInProgressView(app: app)
             default:
                 Text(verbatim: L("Sign in with your Mixel ID. Your browser opens; come back here when it says you are signed in.")).foregroundStyle(.secondary)
                 if account.phase == "error" { MessageLine(Translator.shared.translate(account.message)) }
@@ -355,6 +311,69 @@ struct CreateCompanyCard: View {
                 }
             }
             MessageLine(company.error)
+        }
+    }
+}
+
+/// The steps of a sign-in in progress: the name of a new Mixel ID, the browser step (with the link for
+/// another browser), and the second verification step. Used by the Account page and the sign-in screen.
+struct SignInProgressView: View {
+    @ObservedObject var app: AppModel
+    @State private var profileName = ""
+    var account: AccountStatus { app.account }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            switch account.phase {
+            case "profile_setup":
+                Text(verbatim: Translator.shared.translate(account.message)).foregroundStyle(.secondary)
+                FieldRow(L("Your name")) {
+                    TextField(L("First and last name"), text: $profileName).textFieldStyle(.roundedBorder).frame(maxWidth: 320)
+                }
+                HStack {
+                    Button(L("Continue")) { app.completeProfile(name: profileName) }
+                        .buttonStyle(PrimaryButtonStyle()).disabled(profileName.trimmingCharacters(in: .whitespaces).isEmpty || app.busy)
+                    Button(L("Cancel sign-in")) { app.cancelSignIn() }
+                }
+            case "starting", "waiting_browser", "verifying":
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text(verbatim: Translator.shared.translate(account.message))
+                }
+                if let link = app.signInLink {
+                    FieldRow(L("Open this link in your other browser")) {
+                        HStack {
+                            Text(verbatim: link).font(.caption.monospaced()).lineLimit(2).truncationMode(.middle).textSelection(.enabled)
+                            Button { Pasteboard.copy(link) } label: { Label(L("Copy"), systemImage: "doc.on.doc") }.labelStyle(.iconOnly)
+                        }
+                    }
+                }
+                Button(L("Cancel sign-in")) { app.cancelSignIn() }
+            case "mfa_required":
+                Text(verbatim: L("Additional verification is required for this Mixel account")).foregroundStyle(.secondary)
+                let factor = account.factors.first
+                if let name = factor?.friendlyName {
+                    Text(verbatim: L("Enter the code from the authenticator entry “%@”.", name)).font(.callout)
+                }
+                FieldRow(L("Verification code")) {
+                    TextField(text: $app.verificationCode, prompt: Text(verbatim: "123456")) { Text(verbatim: L("Verification code")) }
+                        .textFieldStyle(.roundedBorder)
+                        .font(.title3.monospacedDigit())
+                        .frame(maxWidth: 200)
+                        #if os(iOS)
+                        .keyboardType(.numberPad)
+                        .textContentType(.oneTimeCode)
+                        #endif
+                        .onSubmit { if let factor { app.verify(factor: factor.id) } }
+                }
+                HStack {
+                    Button(L("Verify")) { if let factor { app.verify(factor: factor.id) } }
+                        .buttonStyle(PrimaryButtonStyle()).disabled(factor == nil || app.busy)
+                    Button(L("Cancel sign-in")) { app.cancelSignIn() }
+                }
+            default:
+                EmptyView()
+            }
         }
     }
 }

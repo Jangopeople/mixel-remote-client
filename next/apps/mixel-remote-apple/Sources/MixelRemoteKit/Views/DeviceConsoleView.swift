@@ -12,6 +12,7 @@ public struct DeviceConsoleView: View {
     @State private var editing: Device?
     @State private var moving: Device?
     @State private var removing: Device?
+    @State private var noting: Device?
     @State private var addingOthers = false
     @State private var addingThis = false
     @State private var byId = ""
@@ -38,21 +39,14 @@ public struct DeviceConsoleView: View {
             // "/" puts the cursor into the search field, as in the mockup.
             Button("") { focus = .search }.keyboardShortcut("/", modifiers: []).hidden().accessibilityHidden(true)
         }
-        .sheet(item: $renaming) { device in
-            FormSheet(title: L("Rename device"), fields: [.init(id: "name", label: L("Device name"), value: device.name)], confirm: L("Rename")) { values in
-                await model.rename(device, to: values["name"] ?? "") ? nil : model.error
-            }
-        }
+        .sheet(item: $renaming) { device in RenameDeviceDialog(model: model, device: device, company: model.tenant?.name ?? "") }
+        .sheet(item: $noting) { device in DeviceNotesDialog(model: model, device: device) }
+        .sheet(item: $removing) { device in RemoveDeviceDialog(model: model, device: device, inSession: workspace.state(of: device.connectionId) != nil) }
         .sheet(item: $moving) { device in MoveSheet(model: model, device: device) }
         .sheet(item: $editing) { device in StaffDeviceSheet(model: model, device: device) }
         .sheet(isPresented: $addingOthers) { DeployLinkSheet(model: model) }
         .sheet(isPresented: $addingThis) {
             AddThisComputerSheet(app: app)
-        }
-        .confirmationDialog(L("Remove this device?"), isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), presenting: removing) { device in
-            Button(L("Remove %@", device.name), role: .destructive) { Task { _ = await model.remove(device) } }
-        } message: { _ in
-            Text(verbatim: L("Its running sessions end at once. It can be added again later."))
         }
     }
 
@@ -111,6 +105,9 @@ public struct DeviceConsoleView: View {
                     Chip(system.1, on: model.systems.contains(system.0)) {
                         if model.systems.contains(system.0) { model.systems.remove(system.0) } else { model.systems.insert(system.0) }
                     }
+                }
+                if model.versionsKnown {
+                    Chip(L("Update"), dot: Theme.updateText, on: model.updateOnly) { model.updateOnly.toggle() }
                 }
                 Spacer()
                 if model.tenant != nil, app.signedIn {
@@ -216,14 +213,14 @@ public struct DeviceConsoleView: View {
             .padding(24)
         } else {
             VStack(spacing: 0) {
-                ColumnHeader()
+                ColumnHeader(versions: model.versionsKnown)
                 ScrollView {
                     LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
                         ForEach(groups) { group in
                             Section {
                                 ForEach(group.devices) { device in
                                     DeviceTableRow(app: app, model: model, workspace: workspace, device: device,
-                                                   rename: { renaming = $0 }, move: { moving = $0 }, remove: { removing = $0 }, edit: { editing = $0 })
+                                                   rename: { renaming = $0 }, move: { moving = $0 }, remove: { removing = $0 }, edit: { editing = $0 }, notes: { noting = $0 })
                                 }
                             } header: {
                                 GroupHeader(name: group.name, color: group.id == "-" ? Color.secondary : Theme.groupColor(group.name), count: group.devices.count, online: group.online)
@@ -250,13 +247,13 @@ public struct DeviceConsoleView: View {
     private var emptyTitle: String {
         if model.loading { return L("Loading your devices…") }
         if !app.signedIn { return L("Your devices belong here") }
-        if !model.filterText.isEmpty || model.onlineOnly || !model.systems.isEmpty { return L("No matching devices") }
+        if !model.filterText.isEmpty || model.onlineOnly || model.updateOnly || !model.systems.isEmpty { return L("No matching devices") }
         return L("No devices to display")
     }
 
     private var emptyDetail: String {
         if !app.signedIn { return L("Sign in to see the devices available to your account.") }
-        if !model.filterText.isEmpty || model.onlineOnly || !model.systems.isEmpty { return L("Try another device name or clear the search.") }
+        if !model.filterText.isEmpty || model.onlineOnly || model.updateOnly || !model.systems.isEmpty { return L("Try another device name or clear the search.") }
         if model.tenant != nil {
             return model.manages ? L("Add this computer, or add other computers with a deploy link.") : L("Devices you add appear here. Ask an administrator of your company for access to other devices.")
         }
@@ -302,10 +299,12 @@ enum Columns {
     static let id: CGFloat = 104
     static let status: CGFloat = 150
     static let seen: CGFloat = 84
+    static let version: CGFloat = 112
     static let actions: CGFloat = 112
 }
 
 struct ColumnHeader: View {
+    var versions = false
     var body: some View {
         HStack(spacing: 8) {
             Color.clear.frame(width: Columns.star + Columns.tile, height: 1)
@@ -313,6 +312,7 @@ struct ColumnHeader: View {
             label(L("ID")).frame(width: Columns.id, alignment: .leading)
             label(L("Status")).frame(width: Columns.status, alignment: .leading)
             label(L("Last seen")).frame(width: Columns.seen, alignment: .leading)
+            if versions { label(L("Version")).frame(width: Columns.version, alignment: .leading) }
             label(L("Actions")).frame(width: Columns.actions, alignment: .trailing)
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
@@ -352,6 +352,7 @@ struct DeviceTableRow: View {
     let move: (Device) -> Void
     let remove: (Device) -> Void
     let edit: (Device) -> Void
+    let notes: (Device) -> Void
     @State private var hovering = false
 
     var body: some View {
@@ -372,6 +373,7 @@ struct DeviceTableRow: View {
                 .accessibilityLabel(Text(verbatim: L("Connection ID") + " " + Format.remoteId(device.connectionId)))
             status(presence, state, attempt).frame(width: Columns.status, alignment: .leading)
             Text(verbatim: lastSeen(presence, state)).font(.system(size: 13)).foregroundStyle(.secondary).frame(width: Columns.seen, alignment: .leading)
+            if model.versionsKnown { version.frame(width: Columns.version, alignment: .leading) }
             actions(presence, state).frame(width: Columns.actions, alignment: .trailing)
         }
         .padding(.horizontal, 12)
@@ -411,6 +413,8 @@ struct DeviceTableRow: View {
         var parts = [Format.os(device.os)]
         if model.listView == .all || model.listView == .online || model.listView == .favorites || model.listView == .recent, let group = device.groupName { parts.append(group) }
         if presence == .this { parts.append(L("This computer")) }
+        let note = model.note(of: device)
+        if !note.isEmpty { parts.append(note) }
         return parts.joined(separator: " · ")
     }
 
@@ -424,6 +428,18 @@ struct DeviceTableRow: View {
         if hours < 24 { return L("%d h ago", hours) }
         let days = hours / 24
         return days == 1 ? L("Yesterday") : L("%d days ago", days)
+    }
+
+    /// "2.0.19" and an "Update" pill when the company has a newer version; "—" where the device does not report one.
+    @ViewBuilder private var version: some View {
+        if let value = model.adminRow(device)?.appVersion {
+            HStack(spacing: 6) {
+                Text(verbatim: value).font(.system(size: 13)).monospacedDigit()
+                if model.isOutdated(device) { Pill(L("Update"), foreground: Theme.updateText, background: Theme.updateSoft) }
+            }
+        } else {
+            Text(verbatim: "—").foregroundStyle(.secondary)
+        }
     }
 
     @ViewBuilder private func status(_ presence: DevicesModel.Presence, _ state: String?, _ attempt: WorkspaceModel.Attempt?) -> some View {
@@ -441,6 +457,9 @@ struct DeviceTableRow: View {
         } else {
             HStack(spacing: 6) {
                 StatusBadge(badge(presence), model.label(presence))
+                if model.adminRow(device)?.unattendedOn == true {
+                    Pill(L("Unattended"), symbol: "key.fill", foreground: Theme.infoText, background: Theme.infoSoft).help(L("Unattended access is on"))
+                }
             }
             .help(model.reason(for: device))
         }
@@ -486,6 +505,10 @@ struct DeviceTableRow: View {
         Button(L("Connect and ask the person to accept")) {
             workspace.connect(peer: device.connectionId, name: device.name, os: device.os, unattended: false, checkPhone: false)
         }.disabled(!blocked.isEmpty)
+        Button(L("Connect in new window")) {
+            workspace.connect(peer: device.connectionId, name: device.name, os: device.os, unattended: true, checkPhone: false)
+            workspace.openAttemptInWindow()
+        }.disabled(!blocked.isEmpty)
         if presence == .offline, !model.knownMacs(device).isEmpty {
             Button(L("Wake")) { model.wake(device) }
         }
@@ -493,10 +516,16 @@ struct DeviceTableRow: View {
         if model.tenant != nil {
             Button(model.isFavorite(device) ? L("Remove from favorites") : L("Add to favorites")) { model.toggleFavorite(device) }
         }
-        if model.manages {
+        if model.manages, model.canAdmin(device) {
             Divider()
             Button(L("Rename…")) { rename(device) }.disabled(!model.writable)
             if model.groupsOn { Button(L("Move to group…")) { move(device) }.disabled(!model.writable) }
+            if model.adminAvailable {
+                Button(L("Notes…")) { notes(device) }.disabled(!model.writable)
+                Toggle(isOn: Binding(get: { model.adminRow(device)?.unattendedOn ?? false }, set: { on in Task { _ = await model.setUnattended(device, on: on) } })) {
+                    Text(verbatim: L("Unattended access"))
+                }.disabled(!model.writable)
+            }
             Divider()
             Button(L("Remove…"), role: .destructive) { remove(device) }
         } else if model.managesIsmDevices, ["macos", "windows", "linux"].contains(device.os) {

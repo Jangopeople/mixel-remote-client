@@ -109,6 +109,9 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
     public var joinedSession: Bool
     public var switched: Bool
     public var peerFeatures: [String]
+    /// The session was opened with a one-time support password (docs/mixel-remote-ui-engine-requests.md,
+    /// item 3). Absent until the engine reports it; the app then relies on what it sent itself.
+    public var passwordSession: PasswordSessionView?
 
     public static let offline = RemoteStatus(phase: "offline")
 
@@ -154,6 +157,7 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
         self.joinedSession = false
         self.switched = switched
         self.peerFeatures = peerFeatures
+        self.passwordSession = nil
     }
 
     /// Connected to Mixel (this computer can be reached and can connect).
@@ -196,6 +200,13 @@ public struct Invitation: Codable, Equatable, Sendable, Identifiable {
     public var unattended: Bool
     public var expiresAt: UInt64
     public var id: String { invitation }
+}
+
+/// `remote_status.password_session`: the session was opened with a one-time password; it ends by itself
+/// at `ends_at` (the broker's 2-hour limit, ISO 8601).
+public struct PasswordSessionView: Codable, Equatable, Sendable {
+    public var endsAt: String?
+    public init(endsAt: String? = nil) { self.endsAt = endsAt }
 }
 
 /// Recording state of the session: `ready`, `waiting_for_video`, `recording`, `saving`, `saved`,

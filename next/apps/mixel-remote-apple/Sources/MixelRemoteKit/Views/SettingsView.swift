@@ -15,6 +15,14 @@ public struct SettingsView: View {
     }
 
     public var body: some View {
+        #if os(macOS)
+        SettingsConsoleView(app: app)
+        #else
+        formBody
+        #endif
+    }
+
+    private var formBody: some View {
         Form {
             Section {
                 Toggle(isOn: Binding(get: { settings.startup?.remembered ?? false }, set: { settings.setStaySignedIn($0) })) {
@@ -182,8 +190,23 @@ struct SignInScreenSection: View {
     @State private var company = ""
     @State private var name = ""
 
+    var embedded = false
+
     var body: some View {
-        Section {
+        if embedded {
+            VStack(alignment: .leading, spacing: 10) { content }.padding(16).task { await prepare() }
+        } else {
+            Section { content } header: { Text(verbatim: L("Sign-in screen")) }.task { await prepare() }
+        }
+    }
+
+    private func prepare() async {
+        if status.availability == .ready, status.connectionId == nil, enrollment.companies.isEmpty { enrollment.loadTeamRecords() }
+        if name.isEmpty { name = enrollment.name }
+    }
+
+    @ViewBuilder private var content: some View {
+        Group {
             switch status.availability {
             case .waitingForApple, .notHere:
                 HStack(alignment: .top, spacing: 10) {
@@ -221,10 +244,6 @@ struct SignInScreenSection: View {
             }
             if settings.signInWorking { ProgressView().controlSize(.small) }
             MessageLine(settings.signInMessage, error: false)
-        } header: { Text(verbatim: L("Sign-in screen")) }
-        .task {
-            if status.availability == .ready, status.connectionId == nil, enrollment.companies.isEmpty { enrollment.loadTeamRecords() }
-            if name.isEmpty { name = enrollment.name }
         }
     }
 }
@@ -237,8 +256,18 @@ struct RolloutSection: View {
     @State private var days = 30
     @State private var computers = 50
 
+    var embedded = false
+
     var body: some View {
-        Section {
+        if embedded {
+            VStack(alignment: .leading, spacing: 10) { content }.padding(16).task { if enrollment.companies.isEmpty { enrollment.loadTeamRecords() } }
+        } else {
+            Section { content } header: { Text(verbatim: L("Rollout for many computers")) }.task { if enrollment.companies.isEmpty { enrollment.loadTeamRecords() } }
+        }
+    }
+
+    @ViewBuilder private var content: some View {
+        Group {
             Picker(selection: $company) {
                 Text(verbatim: L("Choose a company")).tag("")
                 ForEach(enrollment.companies) { Text(verbatim: $0.clientName).tag($0.clientId) }
@@ -275,8 +304,7 @@ struct RolloutSection: View {
                     }
                 }
             }
-        } header: { Text(verbatim: L("Rollout for many computers")) }
-        .task { if enrollment.companies.isEmpty { enrollment.loadTeamRecords() } }
+        }
     }
 }
 

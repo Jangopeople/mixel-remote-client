@@ -33,6 +33,64 @@ public final class DevicesModel: ObservableObject {
 
     init(app: AppModel) { self.app = app }
 
+    // MARK: Device administration (docs/mixel-remote-device-admin-api.md)
+
+    /// The administration commands. The engine has none yet, so this answers "not available" until the
+    /// engine's `remote_admin_*` commands are wired (`EngineDeviceAdminService`).
+    public var admin: DeviceAdminService = UnavailableDeviceAdminService()
+    /// What the administration API reports per device (note, unattended access, version, last seen), by Remote ID.
+    @Published public private(set) var adminRows: [UInt32: AdminDevice] = [:]
+    /// Only the devices with an older version than the newest one in the company ("Update" filter).
+    @Published public var updateOnly = false
+
+    public var adminAvailable: Bool { admin.available }
+    public func adminRow(_ device: Device) -> AdminDevice? { adminRows[device.connectionId] }
+    public func note(of device: Device) -> String { adminRow(device)?.note?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" }
+    /// Versions are known: show the Version column and the "Update" filter.
+    public var versionsKnown: Bool { adminRows.values.contains { $0.appVersion != nil } }
+    /// The newest app version any of the company's devices reports.
+    public var newestVersion: String? { AppVersion.newest(adminRows.values.map(\.appVersion)) }
+    public func isOutdated(_ device: Device) -> Bool { AppVersion.isOlder(adminRow(device)?.appVersion, than: newestVersion) }
+    public var outdatedCount: Int { allDevices.filter(isOutdated).count }
+    /// Whether this person may change the device (the server decides; `nil` answers fall back to the role).
+    public func canAdmin(_ device: Device) -> Bool { adminRow(device)?.canAdmin ?? manages }
+
+    func loadAdmin() async {
+        guard admin.available, app.signedIn else { adminRows = [:]; return }
+        do {
+            let rows = try await admin.devices(company: tenant?.tenantId, search: nil)
+            adminRows = Dictionary(rows.map { ($0.connectionId, $0) }, uniquingKeysWith: { first, _ in first })
+        } catch DeviceAdminError.unavailable {
+            adminRows = [:]
+        } catch {
+            adminRows = [:]
+            self.error = AppModel.message(error)
+        }
+    }
+
+    public func setNote(_ device: Device, to note: String) async -> Bool {
+        let text = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.count <= 500 else { error = L("A note has at most 500 characters."); return false }
+        return await adminChange { _ = try await self.admin.setNote(device: device.device, note: text.isEmpty ? nil : text) }
+    }
+
+    /// Switches unattended access for the device: `on`, or `default` (the company policy decides).
+    public func setUnattended(_ device: Device, on: Bool) async -> Bool {
+        await adminChange { _ = try await self.admin.setUnattended(device: device.device, setting: on ? "on" : "off") }
+    }
+
+    private func adminChange(_ work: @escaping () async throws -> Void) async -> Bool {
+        error = ""
+        do {
+            try await work()
+            await load(page: 0)
+            return true
+        } catch {
+            self.error = AppModel.message(error)
+            return false
+        }
+    }
+
     public var tenant: Tenant? { app.company.tenant }
     public var role: String { app.company.overview?.role ?? tenant?.role ?? "" }
     public var manages: Bool { tenant != nil && ["owner", "admin", "technician"].contains(role) }
@@ -71,6 +129,8 @@ public final class DevicesModel: ObservableObject {
         message = ""
         error = ""
         deployLink = nil
+        adminRows = [:]
+        updateOnly = false
     }
 
     public func load(page wanted: Int = 0) async {
@@ -102,6 +162,7 @@ public final class DevicesModel: ObservableObject {
                 hasNext = result.next != nil
                 if cursors.count <= wanted + 1 { cursors.append(result.next) } else { cursors[wanted + 1] = result.next }
             }
+            await loadAdmin()
             message = devices.isEmpty ? "" : L("Page %d · %d devices.", page + 1, devices.count)
             await checkPresence(force: true)
         } catch {
@@ -160,7 +221,9 @@ public final class DevicesModel: ObservableObject {
         return devices(in: listView).filter { device in
             if onlineOnly, !isOnline(device), app.workspace.state(of: device.connectionId) == nil { return false }
             if !systems.isEmpty, !systems.contains(device.os.lowercased()) { return false }
+            if updateOnly, !isOutdated(device) { return false }
             if text.isEmpty { return true }
+            if note(of: device).lowercased().contains(text) { return true }
             if device.name.lowercased().contains(text) { return true }
             if let group = device.groupName, group.lowercased().contains(text) { return true }
             if !digits.isEmpty, digits.count == text.filter({ !$0.isWhitespace }).count, String(device.connectionId).contains(digits) { return true }
@@ -372,6 +435,10 @@ public final class DevicesModel: ObservableObject {
     }
 
     public func rename(_ device: Device, to name: String) async -> Bool {
+        if admin.available {
+            let expected = adminRow(device)?.updatedAt
+            return await adminChange { _ = try await self.admin.rename(device: device.device, name: name, expectedUpdate: expected) }
+        }
         guard let tenant else { return false }
         return await change { _ = try await self.app.engine.run("saas_rename_device", ["tenant": tenant.tenantId, "device": device.device, "name": name], as: String.self) }
     }
@@ -382,6 +449,9 @@ public final class DevicesModel: ObservableObject {
     }
 
     public func remove(_ device: Device) async -> Bool {
+        if admin.available {
+            return await adminChange { try await self.admin.remove(device: device.device, confirmConnectionId: device.connectionId) }
+        }
         guard let tenant else { return false }
         return await change { try await self.app.engine.perform("saas_remove_device", ["tenant": tenant.tenantId, "device": device.device]) }
     }

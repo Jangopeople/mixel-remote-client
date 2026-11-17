@@ -137,6 +137,12 @@ public final class HostModel: ObservableObject {
         }
     }
 
+    /// The person closed the "turn on" steps without enabling.
+    public func cancelUnattendedSetup() {
+        unattendedSources = []
+        unattendedConfirm = false
+    }
+
     public func disableUnattended() {
         UserDefaults.standard.set(["enabled": false], forKey: Self.unattendedKey)
         app.act { try await self.app.engine.perform("remote_unattended", ["source": nil, "control": false]) }

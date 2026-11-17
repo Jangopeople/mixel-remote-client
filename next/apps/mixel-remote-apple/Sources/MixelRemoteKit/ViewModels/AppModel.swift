@@ -35,6 +35,8 @@ public final class AppModel: ObservableObject {
     @Published public var section: AppSection = .remote
     @Published public private(set) var account = AccountStatus(phase: "signed_out", message: "Sign in with your Mixel account")
     @Published public private(set) var remote = RemoteStatus.offline
+    /// The engine has answered about the account once (so the window does not flash the sign-in screen at launch).
+    @Published public private(set) var accountChecked = false
     /// The last failure of an action, shown near the action.
     @Published public var error = ""
     /// Progress of a connection being prepared ("Looking up this ID…").
@@ -84,6 +86,7 @@ public final class AppModel: ObservableObject {
     /// Starts reading the engine. Idempotent.
     public func start() {
         guard loop == nil else { return }
+        settings.applyAppearance()
         loop = Task { [weak self] in
             await self?.refreshAccount()
             await self?.settings.flushPendingRemoval()
@@ -111,6 +114,7 @@ public final class AppModel: ObservableObject {
     public func refreshAccount() async {
         lastAccountRead = Date()
         guard let next: AccountStatus = try? await engine.run("account_status") else { return }
+        if !accountChecked { accountChecked = true }
         if next != account { account = next }
         let key = next.signedIn ? "\(next.account?.profile ?? "")|\(next.account?.organization ?? "")|\(next.account?.personal ?? false)" : ""
         if !next.signedIn, signInProviders.isEmpty { await loadSignInProviders() }
@@ -159,6 +163,7 @@ public final class AppModel: ObservableObject {
                 await company.load()
                 await enrollment.check()
                 await devices.load()
+                await settings.applySignInChoice()
                 await settings.load()
             }
         }
@@ -332,6 +337,7 @@ public final class AppModel: ObservableObject {
         struct Request: Encodable { var host: UInt32; var password: String?; var unattended: Bool }
         try await engine.perform("remote_request", Request(host: id, password: password?.isEmpty == false ? password : nil, unattended: phone ? false : unattended))
         session.lastRequestUnattended = unattended && !phone
+        session.lastRequestPassword = password?.isEmpty == false
         progress = session.lastRequestUnattended
             ? L("Requesting unattended access…")
             : L("Waiting for the other person to accept your request.")

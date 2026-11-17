@@ -51,6 +51,7 @@ struct SessionStage: View {
                 SessionBar(app: app, session: session, drawing: drawing, workspace: workspace, tab: tab, inWindow: inWindow, compact: true, tool: $tool, inviting: $inviting)
             }
             Rectangle().fill(Theme.hairline).frame(height: 1)
+            SessionNoticeBanner(app: app, session: session)
             HStack(spacing: 0) {
                 screen
                 if let tool {
@@ -118,6 +119,65 @@ struct SessionStage: View {
             }
         }
         .frame(minWidth: 480, minHeight: 320)
+    }
+}
+
+/// The banner under the toolbar for a session opened with a one-time password (with its remaining time and
+/// the 5 minute and 1 minute warnings) or without anyone at the other computer. Nothing for other sessions.
+struct SessionNoticeBanner: View {
+    @ObservedObject var app: AppModel
+    @ObservedObject var session: SessionModel
+
+    var body: some View {
+        let status = app.remote
+        if status.passwordSession != nil || session.lastRequestPassword || status.unattendedSession {
+            TimelineView(.periodic(from: Date(), by: 1)) { context in
+                let ends = status.passwordSession?.endsAt.flatMap(Format.parseDate)
+                if let notice = SessionNotice.make(passwordSession: status.passwordSession != nil, sentPassword: session.lastRequestPassword,
+                                                   unattended: status.unattendedSession, endsAt: ends, now: context.date) {
+                    SessionNoticeBar(notice: notice)
+                }
+            }
+        }
+    }
+}
+
+struct SessionNoticeBar: View {
+    let notice: SessionNotice
+
+    private var text: String {
+        switch notice.kind {
+        case .unattended:
+            return L("Unattended session: nobody at that computer was asked.")
+        case .password(let seconds):
+            guard let seconds else { return L("Opened with a one-time password. Such a session ends by itself after at most 2 hours.") }
+            if seconds == 0 { return L("The time limit of this password session is reached. The session ends now.") }
+            if notice.level == .urgent { return L("This session ends in less than a minute (%@).", SessionNotice.clock(seconds)) }
+            if notice.level == .warning { return L("This session ends in %@. Ask for a new password to continue.", SessionNotice.clock(seconds)) }
+            return L("Opened with a one-time password. The session ends by itself in %@.", SessionNotice.clock(seconds))
+        }
+    }
+
+    private var colors: (Color, Color) {
+        switch notice.level {
+        case .info: (Theme.infoText, Theme.infoSoft)
+        case .warning: (Theme.updateText, Theme.updateSoft)
+        case .urgent: (Theme.brand, Theme.brandSoft)
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: notice.level == .info ? "key.fill" : "clock.badge.exclamationmark")
+            Text(verbatim: text).font(.system(size: 12, weight: .semibold)).monospacedDigit()
+            Spacer()
+        }
+        .foregroundStyle(colors.0)
+        .padding(.horizontal, 14).padding(.vertical, 6)
+        .background(colors.1)
+        .overlay(alignment: .bottom) { Rectangle().fill(Theme.hairline).frame(height: 1) }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(notice.level == .info ? AccessibilityTraits() : .updatesFrequently)
     }
 }
 
@@ -302,9 +362,11 @@ struct SessionBar: View {
                 Button(session.restartArmed ? L("Click again to restart") : L("Restart computer")) { session.restartComputer() }
             }
             Divider()
+            if remote.clipboard { Button(L("Send my clipboard")) { session.clipboard(push: true) } }
             if remote.clipboard || remote.control || !remote.printJobs.isEmpty {
                 Button(L("Clipboard, send text and print jobs")) { tool = .clipboard }
             }
+            if app.assistant.available { Button(L("Explain the screen (AI)")) { tool = .assistant } }
             if remote.phase == "active", !remote.switched {
                 Button(L("Invite a colleague")) { inviting = true }
             }

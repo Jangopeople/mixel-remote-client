@@ -17,7 +17,30 @@ public struct RootView: View {
         self.titleBar = titleBar
     }
 
+    /// Signed out: the sign-in screen takes the whole window (Settings stay reachable from it).
+    private var showsSignIn: Bool { app.accountChecked && !app.signedIn && app.section != .settings }
+
     public var body: some View {
+        Group {
+            if showsSignIn {
+                SignInScreen(app: app)
+            } else if !app.accountChecked {
+                Theme.page
+            } else {
+                shell
+            }
+        }
+        .background(Theme.page)
+        .frame(minWidth: 960, minHeight: 600)
+        .sheet(isPresented: Binding(get: { app.host.asking }, set: { _ in })) {
+            ConsentSheet(app: app).interactiveDismissDisabled()
+        }
+        .sheet(item: Binding(get: { app.host.asking ? nil : app.reports.noteFor.map(NoteTarget.init) }, set: { if $0 == nil { app.reports.noteFor = nil } })) { target in
+            SessionNoteSheet(reports: app.reports, host: target.id, name: app.devices.name(of: target.id))
+        }
+    }
+
+    private var shell: some View {
         VStack(spacing: 0) {
             if titleBar {
                 TitleTabStrip(app: app, workspace: workspace)
@@ -28,14 +51,6 @@ public struct RootView: View {
                 ConnectNotices(app: app, workspace: workspace)
                     .padding(18)
             }
-        }
-        .background(Theme.page)
-        .frame(minWidth: 960, minHeight: 600)
-        .sheet(isPresented: Binding(get: { app.host.asking }, set: { _ in })) {
-            ConsentSheet(app: app).interactiveDismissDisabled()
-        }
-        .sheet(item: Binding(get: { app.host.asking ? nil : app.reports.noteFor.map(NoteTarget.init) }, set: { if $0 == nil { app.reports.noteFor = nil } })) { target in
-            SessionNoteSheet(reports: app.reports, host: target.id, name: app.devices.name(of: target.id))
         }
     }
 
