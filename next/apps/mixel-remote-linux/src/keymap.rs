@@ -39,11 +39,12 @@ pub const CONTROL: u16 = 224;
 pub const SHIFT: u16 = 225;
 pub const ALT: u16 = 226;
 pub const META: u16 = 227;
-pub const DELETE: u16 = 76;
 pub const ESCAPE: u16 = 41;
 pub const TAB: u16 = 43;
 pub const F4: u16 = 61;
 pub const PRINT: u16 = 70;
+#[cfg(test)]
+pub const DELETE: u16 = 76;
 
 #[cfg(test)]
 mod tests {

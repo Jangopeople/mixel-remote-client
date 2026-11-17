@@ -31,7 +31,11 @@ impl Sidebar {
         body.set_margin_end(10);
         body.set_vexpand(true);
         widget.append(&body);
-        Self { widget, body, key: RefCell::new(String::new()) }
+        Self {
+            widget,
+            body,
+            key: RefCell::new(String::new()),
+        }
     }
 
     pub fn render(&self, app: &Rc<App>, state: &State) {
@@ -40,10 +44,36 @@ impl Sidebar {
         let key = format!(
             "{:?}",
             (
-                (state.section, &state.devices.filters.view, counts, state.signed_in(), state.company.data.tenant().map(|tenant| tenant.name.clone())),
-                (state.workspace.tabs.len(), state.remote.host, state.remote.phase.as_str(), state.remote.connected(), &state.account.account.as_ref().map(|account| account.display_name.clone())),
+                (
+                    state.section,
+                    &state.devices.filters.view,
+                    counts,
+                    state.signed_in(),
+                    state
+                        .company
+                        .data
+                        .tenant()
+                        .map(|tenant| tenant.name.clone())
+                ),
+                (
+                    state.workspace.tabs.len(),
+                    state.remote.host,
+                    state.remote.phase.as_str(),
+                    state.remote.connected(),
+                    &state
+                        .account
+                        .account
+                        .as_ref()
+                        .map(|account| account.display_name.clone())
+                ),
                 (&state.devices.groups, crate::i18n::choice()),
-                (state.company.data.manages_devices(), state.company.data.groups_on(), rows.iter().filter_map(|row| row.group.clone()).collect::<Vec<_>>()),
+                (
+                    state.company.data.manages_devices(),
+                    state.company.data.groups_on(),
+                    rows.iter()
+                        .filter_map(|row| row.group.clone())
+                        .collect::<Vec<_>>()
+                ),
             )
         );
         if *self.key.borrow() == key {
@@ -81,27 +111,56 @@ impl Sidebar {
                 _ => None,
             };
             let a = app.clone();
-            self.body.append(&nav_item(section.icon(), &section.title(), count, section == Section::Sessions, state.section == section, move || a.edit(|state| state.section = section)));
+            self.body.append(&nav_item(
+                section.icon(),
+                &section.title(),
+                count,
+                section == Section::Sessions,
+                state.section == section,
+                move || a.edit(|state| state.section = section),
+            ));
         }
 
         // Views.
         self.body.append(&section_label(&t("Views")));
         let views: [(&str, String, View, usize); 4] = [
             ("computer-symbolic", t("All devices"), View::All, counts.all),
-            ("network-transmit-receive-symbolic", t("Online now"), View::Online, counts.online),
-            ("starred-symbolic", t("Favourites"), View::Favourites, counts.favourites),
-            ("document-open-recent-symbolic", t("Recent"), View::Recent, counts.recent),
+            (
+                "network-transmit-receive-symbolic",
+                t("Online now"),
+                View::Online,
+                counts.online,
+            ),
+            (
+                "starred-symbolic",
+                t("Favourites"),
+                View::Favourites,
+                counts.favourites,
+            ),
+            (
+                "document-open-recent-symbolic",
+                t("Recent"),
+                View::Recent,
+                counts.recent,
+            ),
         ];
         for (icon, title, view_kind, count) in views {
             let active = on_devices && state.devices.filters.view == view_kind;
             let a = app.clone();
-            self.body.append(&nav_item(icon, &title, Some(count), false, active, move || {
-                let view_kind = view_kind.clone();
-                a.edit(|state| {
-                    state.devices.filters.view = view_kind;
-                    state.section = Section::Devices;
-                });
-            }));
+            self.body.append(&nav_item(
+                icon,
+                &title,
+                Some(count),
+                false,
+                active,
+                move || {
+                    let view_kind = view_kind.clone();
+                    a.edit(|state| {
+                        state.devices.filters.view = view_kind;
+                        state.section = Section::Devices;
+                    });
+                },
+            ));
         }
 
         // Groups.
@@ -114,7 +173,9 @@ impl Sidebar {
             });
             if company.manages_devices() && company.writable() {
                 let a = app.clone();
-                let add = icon_button("list-add-symbolic", &t("Create group"), move || devices::create_group_dialog(&a));
+                let add = icon_button("list-add-symbolic", &t("Create group"), move || {
+                    devices::create_group_dialog(&a)
+                });
                 add.add_css_class("flat");
                 head.append(&add);
             }
@@ -144,7 +205,10 @@ impl Sidebar {
                 if active {
                     button.add_css_class("active");
                 }
-                button.update_property(&[gtk::accessible::Property::Label(&format!("{}, {count}", group.name))]);
+                button.update_property(&[gtk::accessible::Property::Label(&format!(
+                    "{}, {count}",
+                    group.name
+                ))]);
                 let a = app.clone();
                 button.connect_clicked(move |_| {
                     let id = id.clone();
@@ -192,7 +256,11 @@ fn this_computer(app: &Rc<App>, state: &State) -> gtk::Box {
         logic::Badge::Busy => "busy",
         _ => "off",
     }));
-    let words = if state.signed_in() { format!("{} · {}", t("This computer"), text.to_lowercase()) } else { t("This computer") };
+    let words = if state.signed_in() {
+        format!("{} · {}", t("This computer"), text.to_lowercase())
+    } else {
+        t("This computer")
+    };
     let line = gtk::Label::new(Some(&words));
     line.set_xalign(0.0);
     line.add_css_class("caption");
@@ -203,7 +271,10 @@ fn this_computer(app: &Rc<App>, state: &State) -> gtk::Box {
     open.add_css_class("flat");
     open.set_halign(gtk::Align::Start);
     open.set_tooltip_text(Some(&t("Open this computer's page")));
-    open.update_property(&[gtk::accessible::Property::Label(&format!("{words}. {}", t("Open this computer's page")))]);
+    open.update_property(&[gtk::accessible::Property::Label(&format!(
+        "{words}. {}",
+        t("Open this computer's page")
+    ))]);
     let a = app.clone();
     open.connect_clicked(move |_| a.edit(|state| state.section = Section::Computer));
     card.append(&open);
@@ -216,11 +287,17 @@ fn this_computer(app: &Rc<App>, state: &State) -> gtk::Box {
             id.set_hexpand(true);
             id_row.append(&id);
             let a = app.clone();
-            id_row.append(&icon_button("edit-copy-symbolic", &t("Copy ID"), move || a.copy_id()));
+            id_row.append(&icon_button(
+                "edit-copy-symbolic",
+                &t("Copy ID"),
+                move || a.copy_id(),
+            ));
         }
         None if !state.signed_in() => {
             let a = app.clone();
-            id_row.append(&link(&t("Sign in to get your connection ID."), move || a.edit(|state| state.section = Section::Account)));
+            id_row.append(&link(&t("Sign in to get your connection ID."), move || {
+                a.edit(|state| state.section = Section::Account)
+            }));
         }
         None => id_row.append(&dim(&format::remote_id(None))),
     }
@@ -231,25 +308,56 @@ fn this_computer(app: &Rc<App>, state: &State) -> gtk::Box {
 /// The signed-in person: initials, name, "Account"; a click opens the account.
 fn account_row(app: &Rc<App>, state: &State) -> gtk::Button {
     let row = hbox(10);
-    let name = state.account.account.as_ref().and_then(|account| account.display_name.clone()).filter(|name| !name.is_empty()).unwrap_or_else(|| t("Account"));
-    let initials: String = name.split_whitespace().filter_map(|word| word.chars().next()).take(2).collect::<String>().to_uppercase();
-    let avatar = gtk::Label::new(Some(if state.signed_in() { initials.as_str() } else { "?" }));
+    let name = state
+        .account
+        .account
+        .as_ref()
+        .and_then(|account| account.display_name.clone())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| t("Account"));
+    let initials: String = name
+        .split_whitespace()
+        .filter_map(|word| word.chars().next())
+        .take(2)
+        .collect::<String>()
+        .to_uppercase();
+    let avatar = gtk::Label::new(Some(if state.signed_in() {
+        initials.as_str()
+    } else {
+        "?"
+    }));
     avatar.add_css_class("mixel-avatar");
     avatar.set_size_request(32, 32);
     row.append(&avatar);
     let texts = vbox(0);
     texts.set_valign(gtk::Align::Center);
-    let title = gtk::Label::new(Some(&if state.signed_in() { name.clone() } else { t("Sign in") }));
+    let title = gtk::Label::new(Some(&if state.signed_in() {
+        name.clone()
+    } else {
+        t("Sign in")
+    }));
     title.add_css_class("heading");
     title.set_xalign(0.0);
     title.set_ellipsize(gtk::pango::EllipsizeMode::End);
     texts.append(&title);
-    texts.append(&caption(&if state.signed_in() { t("Account") } else { t("Not signed in") }));
+    texts.append(&caption(&if state.signed_in() {
+        t("Account")
+    } else {
+        t("Not signed in")
+    }));
     row.append(&texts);
     let button = gtk::Button::new();
     button.set_child(Some(&row));
     button.add_css_class("flat");
-    button.update_property(&[gtk::accessible::Property::Label(&format!("{}: {}", t("Account"), if state.signed_in() { name } else { t("Sign in") }))]);
+    button.update_property(&[gtk::accessible::Property::Label(&format!(
+        "{}: {}",
+        t("Account"),
+        if state.signed_in() {
+            name
+        } else {
+            t("Sign in")
+        }
+    ))]);
     let a = app.clone();
     button.connect_clicked(move |_| a.edit(|state| state.section = Section::Account));
     button

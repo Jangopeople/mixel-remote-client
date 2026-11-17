@@ -47,7 +47,11 @@ impl OpenIn {
         }
     }
     pub fn from_id(id: &str) -> Self {
-        if id == "window" { Self::Window } else { Self::Tab }
+        if id == "window" {
+            Self::Window
+        } else {
+            Self::Tab
+        }
     }
 }
 
@@ -97,9 +101,9 @@ pub struct Attempt {
 /// What the window must do after a change.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Effect {
-    OpenWindow(u32),
-    CloseWindow(u32),
-    FocusWindow(u32),
+    Open(u32),
+    Close(u32),
+    Focus(u32),
 }
 
 /// What the engine reports, reduced to what the workspace reads.
@@ -139,13 +143,19 @@ pub struct Workspace {
 
 impl Workspace {
     pub fn new(when_ready: WhenReady, open_in: OpenIn) -> Self {
-        Self { when_ready, open_in, ..Self::default() }
+        Self {
+            when_ready,
+            open_in,
+            ..Self::default()
+        }
     }
 
     /// The sessions this app views as technician. Today the engine runs one session at a time; when
     /// it reports several this is the only place that reads them.
     pub fn session_tabs(observed: &Observed) -> Vec<SessionTab> {
-        let Some(peer) = observed.peer else { return Vec::new() };
+        let Some(peer) = observed.peer else {
+            return Vec::new();
+        };
         if observed.sharing || !observed.has_session {
             return Vec::new();
         }
@@ -157,7 +167,12 @@ impl Workspace {
             // accepted (the picture is coming).
             _ => return Vec::new(),
         };
-        vec![SessionTab { peer, name: observed.name.clone(), os: observed.os.clone(), state }]
+        vec![SessionTab {
+            peer,
+            name: observed.name.clone(),
+            os: observed.os.clone(),
+            state,
+        }]
     }
 
     /// Called when the remote status or the first picture changes.
@@ -171,7 +186,7 @@ impl Workspace {
                 continue;
             }
             if self.windows.remove(&old.peer) {
-                effects.push(Effect::CloseWindow(old.peer));
+                effects.push(Effect::Close(old.peer));
             }
             self.ready_notices.retain(|peer| *peer != old.peer);
             if self.selected == Tab::Session(old.peer) {
@@ -180,7 +195,9 @@ impl Workspace {
         }
         self.update_attempt(observed);
         for tab in &next {
-            let was_ready = before.iter().any(|old| old.peer == tab.peer && old.state == TabState::Ready);
+            let was_ready = before
+                .iter()
+                .any(|old| old.peer == tab.peer && old.state == TabState::Ready);
             if tab.state == TabState::Ready && !was_ready {
                 self.became_ready(tab.peer, &mut effects);
             }
@@ -189,7 +206,9 @@ impl Workspace {
     }
 
     fn update_attempt(&mut self, observed: &Observed) {
-        let Some(mut current) = self.attempt.clone() else { return };
+        let Some(mut current) = self.attempt.clone() else {
+            return;
+        };
         let matches = observed.peer == Some(current.peer);
         let mut step = current.step;
         if matches {
@@ -224,7 +243,10 @@ impl Workspace {
             self.show_into(peer, Some(true), effects);
         } else if self.when_ready == WhenReady::Open {
             self.show_into(peer, None, effects);
-        } else if self.selected != Tab::Session(peer) && !self.windows.contains(&peer) && !self.ready_notices.contains(&peer) {
+        } else if self.selected != Tab::Session(peer)
+            && !self.windows.contains(&peer)
+            && !self.ready_notices.contains(&peer)
+        {
             self.ready_notices.push(peer);
         }
     }
@@ -233,9 +255,26 @@ impl Workspace {
 
     /// Connect from the Devices list or by ID; the person stays in Devices. `busy`: the previous step
     /// is still running.
-    pub fn connect(&mut self, peer: u32, name: &str, os: &str, unattended: bool, started: f64, busy_text: Option<&str>) {
+    pub fn connect(
+        &mut self,
+        peer: u32,
+        name: &str,
+        os: &str,
+        unattended: bool,
+        started: f64,
+        busy_text: Option<&str>,
+    ) {
         self.attempt_window.remove(&peer);
-        let mut next = Attempt { peer, name: name.to_owned(), os: os.to_owned(), started, step: 0, unattended, failure: String::new(), in_window: false };
+        let mut next = Attempt {
+            peer,
+            name: name.to_owned(),
+            os: os.to_owned(),
+            started,
+            step: 0,
+            unattended,
+            failure: String::new(),
+            in_window: false,
+        };
         if let Some(text) = busy_text {
             next.failure = text.to_owned();
         }
@@ -275,7 +314,7 @@ impl Workspace {
         }
         self.ready_notices.retain(|noticed| *noticed != peer);
         if self.windows.contains(&peer) {
-            effects.push(Effect::FocusWindow(peer));
+            effects.push(Effect::Focus(peer));
             return;
         }
         if in_window.unwrap_or(self.open_in == OpenIn::Window) {
@@ -299,7 +338,11 @@ impl Workspace {
         if self.selected == Tab::Session(peer) {
             self.selected = Tab::Console;
         }
-        effects.push(if self.windows.insert(peer) { Effect::OpenWindow(peer) } else { Effect::FocusWindow(peer) });
+        effects.push(if self.windows.insert(peer) {
+            Effect::Open(peer)
+        } else {
+            Effect::Focus(peer)
+        });
     }
 
     /// Puts the session's window back into its tab (also when its window is closed by the person:
@@ -310,7 +353,7 @@ impl Workspace {
             return effects;
         }
         if close_window {
-            effects.push(Effect::CloseWindow(peer));
+            effects.push(Effect::Close(peer));
         }
         if select && self.has_tab(peer) {
             self.selected = Tab::Session(peer);
@@ -342,7 +385,10 @@ impl Workspace {
                 TabState::Ending => "ending",
             });
         }
-        self.attempt.as_ref().filter(|attempt| attempt.peer == peer && attempt.failure.is_empty()).map(|_| "connecting")
+        self.attempt
+            .as_ref()
+            .filter(|attempt| attempt.peer == peer && attempt.failure.is_empty())
+            .map(|_| "connecting")
     }
 }
 
@@ -353,10 +399,22 @@ mod tests {
     const PEER: u32 = 731_204_118;
 
     fn viewing(frame: bool) -> Observed {
-        Observed { peer: Some(PEER), has_session: true, phase: "active".into(), frame_shown: frame, in_session: true, name: "Reception PC".into(), os: "windows".into(), ..Observed::default() }
+        Observed {
+            peer: Some(PEER),
+            has_session: true,
+            phase: "active".into(),
+            frame_shown: frame,
+            in_session: true,
+            name: "Reception PC".into(),
+            os: "windows".into(),
+            ..Observed::default()
+        }
     }
     fn ended() -> Observed {
-        Observed { phase: "ready".into(), ..Observed::default() }
+        Observed {
+            phase: "ready".into(),
+            ..Observed::default()
+        }
     }
     fn ready(when: WhenReady, open_in: OpenIn) -> (Workspace, Vec<Effect>) {
         let mut ws = Workspace::new(when, open_in);
@@ -367,9 +425,16 @@ mod tests {
     #[test]
     fn ready_session_becomes_a_tab_and_stays_in_devices_with_a_notice() {
         let (ws, effects) = ready(WhenReady::Stay, OpenIn::Tab);
-        assert_eq!(ws.tabs.iter().map(|tab| tab.peer).collect::<Vec<_>>(), vec![PEER]);
+        assert_eq!(
+            ws.tabs.iter().map(|tab| tab.peer).collect::<Vec<_>>(),
+            vec![PEER]
+        );
         assert_eq!(ws.tabs[0].state, TabState::Ready);
-        assert_eq!(ws.selected, Tab::Console, "Connect must not jump away from Devices");
+        assert_eq!(
+            ws.selected,
+            Tab::Console,
+            "Connect must not jump away from Devices"
+        );
         assert_eq!(ws.ready_notices, vec![PEER]);
         assert!(effects.is_empty());
     }
@@ -403,19 +468,25 @@ mod tests {
         assert!(Workspace::session_tabs(&observed).is_empty());
         observed.phase = "active".into();
         observed.sharing = true;
-        assert!(Workspace::session_tabs(&observed).is_empty(), "this computer is being viewed");
+        assert!(
+            Workspace::session_tabs(&observed).is_empty(),
+            "this computer is being viewed"
+        );
         observed.sharing = false;
         observed.phase = "closing".into();
-        assert_eq!(Workspace::session_tabs(&observed)[0].state, TabState::Ending);
+        assert_eq!(
+            Workspace::session_tabs(&observed)[0].state,
+            TabState::Ending
+        );
     }
 
     #[test]
     fn pop_out_and_dock() {
         let (mut ws, _) = ready(WhenReady::Open, OpenIn::Tab);
-        assert_eq!(ws.pop_out(PEER), vec![Effect::OpenWindow(PEER)]);
+        assert_eq!(ws.pop_out(PEER), vec![Effect::Open(PEER)]);
         assert!(ws.is_in_window(PEER));
         assert_eq!(ws.selected, Tab::Console);
-        assert_eq!(ws.dock(PEER, true, true), vec![Effect::CloseWindow(PEER)]);
+        assert_eq!(ws.dock(PEER, true, true), vec![Effect::Close(PEER)]);
         assert!(!ws.is_in_window(PEER));
         assert_eq!(ws.selected, Tab::Session(PEER));
         // Docking something that is not in a window does nothing.
@@ -425,7 +496,11 @@ mod tests {
     #[test]
     fn closing_the_window_docks_it() {
         let (mut ws, _) = ready(WhenReady::Stay, OpenIn::Window);
-        assert_eq!(ws.show(PEER, None), vec![Effect::OpenWindow(PEER)], "default own window");
+        assert_eq!(
+            ws.show(PEER, None),
+            vec![Effect::Open(PEER)],
+            "default own window"
+        );
         assert!(ws.is_in_window(PEER));
         ws.window_closed(PEER);
         assert!(!ws.is_in_window(PEER));
@@ -436,8 +511,8 @@ mod tests {
     fn showing_a_session_that_has_a_window_raises_it() {
         let (mut ws, _) = ready(WhenReady::Stay, OpenIn::Tab);
         ws.pop_out(PEER);
-        assert_eq!(ws.show(PEER, None), vec![Effect::FocusWindow(PEER)]);
-        assert_eq!(ws.pop_out(PEER), vec![Effect::FocusWindow(PEER)]);
+        assert_eq!(ws.show(PEER, None), vec![Effect::Focus(PEER)]);
+        assert_eq!(ws.pop_out(PEER), vec![Effect::Focus(PEER)]);
     }
 
     #[test]
@@ -448,7 +523,7 @@ mod tests {
         assert!(ws.tabs.is_empty());
         assert!(!ws.is_in_window(PEER));
         assert_eq!(ws.selected, Tab::Console);
-        assert_eq!(effects, vec![Effect::CloseWindow(PEER)]);
+        assert_eq!(effects, vec![Effect::Close(PEER)]);
 
         let (mut ws, _) = ready(WhenReady::Stay, OpenIn::Tab);
         assert_eq!(ws.ready_notices, vec![PEER]);
@@ -466,8 +541,11 @@ mod tests {
         observed.phase = "outgoing".into();
         ws.refresh(&observed);
         let effects = ws.refresh(&viewing(true));
-        assert_eq!(effects, vec![Effect::OpenWindow(PEER)]);
-        assert!(ws.attempt.is_none(), "the card goes away when the session is ready");
+        assert_eq!(effects, vec![Effect::Open(PEER)]);
+        assert!(
+            ws.attempt.is_none(),
+            "the card goes away when the session is ready"
+        );
         assert!(ws.ready_notices.is_empty());
     }
 
@@ -475,7 +553,14 @@ mod tests {
     fn attempt_steps_follow_the_phase_and_never_go_back() {
         let mut ws = Workspace::new(WhenReady::Stay, OpenIn::Tab);
         ws.connect(PEER, "Reception PC", "windows", false, 1.0, None);
-        let mut observed = Observed { peer: Some(PEER), has_session: true, in_session: true, phase: "outgoing".into(), busy: true, ..Observed::default() };
+        let mut observed = Observed {
+            peer: Some(PEER),
+            has_session: true,
+            in_session: true,
+            phase: "outgoing".into(),
+            busy: true,
+            ..Observed::default()
+        };
         ws.refresh(&observed);
         assert_eq!(ws.attempt.as_ref().unwrap().step, 1);
         observed.phase = "negotiating".into();
@@ -495,7 +580,11 @@ mod tests {
         let mut ws = Workspace::new(WhenReady::Stay, OpenIn::Tab);
         ws.connect(PEER, "Reception PC", "windows", false, 1.0, None);
         // The connect steps stopped with an error.
-        let observed = Observed { phase: "ready".into(), error: "Could not reach".into(), ..Observed::default() };
+        let observed = Observed {
+            phase: "ready".into(),
+            error: "Could not reach".into(),
+            ..Observed::default()
+        };
         ws.refresh(&observed);
         assert_eq!(ws.attempt.as_ref().unwrap().failure, "Could not reach");
         assert_eq!(ws.state_of(PEER), None);
@@ -504,9 +593,19 @@ mod tests {
 
         // Declined after the request was sent.
         ws.connect(PEER, "Reception PC", "windows", false, 1.0, None);
-        let mut observed = Observed { peer: Some(PEER), has_session: true, in_session: true, phase: "outgoing".into(), ..Observed::default() };
+        let mut observed = Observed {
+            peer: Some(PEER),
+            has_session: true,
+            in_session: true,
+            phase: "outgoing".into(),
+            ..Observed::default()
+        };
         ws.refresh(&observed);
-        observed = Observed { phase: "ready".into(), declined: "Declined".into(), ..Observed::default() };
+        observed = Observed {
+            phase: "ready".into(),
+            declined: "Declined".into(),
+            ..Observed::default()
+        };
         ws.refresh(&observed);
         assert_eq!(ws.attempt.as_ref().unwrap().failure, "Declined");
     }
@@ -517,7 +616,11 @@ mod tests {
         ws.connect(PEER, "x", "linux", false, 0.0, Some("Please wait"));
         assert_eq!(ws.attempt.as_ref().unwrap().failure, "Please wait");
         ws.connect(PEER, "x", "linux", false, 0.0, None);
-        assert_eq!(ws.cancel_attempt(Some(PEER)), Some(PEER), "the running request must be ended");
+        assert_eq!(
+            ws.cancel_attempt(Some(PEER)),
+            Some(PEER),
+            "the running request must be ended"
+        );
         ws.connect(PEER, "x", "linux", false, 0.0, None);
         assert_eq!(ws.cancel_attempt(Some(1)), None);
     }

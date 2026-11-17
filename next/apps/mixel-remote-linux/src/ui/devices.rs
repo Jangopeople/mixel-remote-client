@@ -525,6 +525,8 @@ impl DevicesPage {
                 }
             }
         }
+        let reason = logic::presence_reason(device, presence, &state.remote, &state.devices.server_presence, format::now());
+        status.set_tooltip_text((!reason.is_empty()).then_some(reason.as_str()));
         row.append(&status);
 
         // Last seen and version.

@@ -305,13 +305,13 @@ impl Ui {
     /// Carries out what the workspace asked for: open, raise or close a session window.
     pub fn apply(self: &Rc<Self>, app: &Rc<App>, effect: Effect) {
         match effect {
-            Effect::OpenWindow(peer) => self.open_popout(app, peer),
-            Effect::FocusWindow(peer) => {
+            Effect::Open(peer) => self.open_popout(app, peer),
+            Effect::Focus(peer) => {
                 if let Some(window) = self.popouts.borrow().get(&peer) {
                     window.present();
                 }
             }
-            Effect::CloseWindow(peer) => {
+            Effect::Close(peer) => {
                 let window = self.popouts.borrow_mut().remove(&peer);
                 if let Some(window) = window {
                     // The session view goes back to its tab (the next render puts it there).
@@ -355,7 +355,7 @@ impl Ui {
                 ui.popouts.borrow_mut().remove(&peer);
             }
             let a = a.clone();
-            glib::idle_add_local_once(move || a.dock(peer, false));
+            glib::idle_add_local_once(move || a.window_closed(peer));
             glib::Propagation::Proceed
         });
         self.popouts.borrow_mut().insert(peer, window.clone());

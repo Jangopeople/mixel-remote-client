@@ -22,15 +22,6 @@ pub enum Sort {
     Name,
 }
 
-impl Sort {
-    pub fn id(self) -> &'static str {
-        match self {
-            Self::Status => "status",
-            Self::Name => "name",
-        }
-    }
-}
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Filters {
     pub view: View,
@@ -50,7 +41,6 @@ pub struct Row {
     pub name: String,
     pub os: String,
     pub online: bool,
-    pub this_computer: bool,
     pub favourite: bool,
     /// Position among the person's last connections (0 = newest).
     pub recent: Option<usize>,
@@ -86,10 +76,17 @@ pub fn matches(filters: &Filters, row: &Row) -> bool {
         View::Recent => row.recent.is_some(),
         View::Group(id) => row.group.as_deref() == Some(id.as_str()),
     };
-    if !in_view || (filters.online_only && !row.online) || (filters.unattended_only && !row.unattended) || (filters.update_only && !row.update) {
+    if !in_view
+        || (filters.online_only && !row.online)
+        || (filters.unattended_only && !row.unattended)
+        || (filters.update_only && !row.update)
+    {
         return false;
     }
-    if filters.os.is_some_and(|family| os_family(&row.os) != family) {
+    if filters
+        .os
+        .is_some_and(|family| os_family(&row.os) != family)
+    {
         return false;
     }
     let search = filters.search.trim().to_lowercase();
@@ -100,7 +97,9 @@ pub fn matches(filters: &Filters, row: &Row) -> bool {
     row.name.to_lowercase().contains(&search)
         || row.note.to_lowercase().contains(&search)
         || row.os.to_lowercase().contains(&search)
-        || (!wanted_digits.is_empty() && wanted_digits.len() == search.chars().filter(|c| !c.is_whitespace()).count() && row.id.to_string().contains(&wanted_digits))
+        || (!wanted_digits.is_empty()
+            && wanted_digits.len() == search.chars().filter(|c| !c.is_whitespace()).count()
+            && row.id.to_string().contains(&wanted_digits))
 }
 
 /// The rows to show, sorted.
@@ -111,7 +110,11 @@ pub fn visible<'a>(filters: &Filters, rows: &'a [Row]) -> Vec<&'a Row> {
         return shown;
     }
     match filters.sort {
-        Sort::Status => shown.sort_by(|a, b| b.online.cmp(&a.online).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))),
+        Sort::Status => shown.sort_by(|a, b| {
+            b.online
+                .cmp(&a.online)
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        }),
         Sort::Name => shown.sort_by_key(|row| row.name.to_lowercase()),
     }
     shown
@@ -136,12 +139,18 @@ pub fn counts(rows: &[Row]) -> Counts {
 
 /// The number of devices in a group.
 pub fn group_count(rows: &[Row], group: &str) -> usize {
-    rows.iter().filter(|row| row.group.as_deref() == Some(group)).count()
+    rows.iter()
+        .filter(|row| row.group.as_deref() == Some(group))
+        .count()
 }
 
 /// `a` is an older app version than `b` ("2.0.3" < "2.0.18"; anything that is not a number sorts first).
 pub fn version_older(a: &str, b: &str) -> bool {
-    let parts = |text: &str| -> Vec<u64> { text.split(['.', '-', '+']).map(|part| part.parse::<u64>().unwrap_or(0)).collect() };
+    let parts = |text: &str| -> Vec<u64> {
+        text.split(['.', '-', '+'])
+            .map(|part| part.parse::<u64>().unwrap_or(0))
+            .collect()
+    };
     let (mut a, mut b) = (parts(a), parts(b));
     let length = a.len().max(b.len());
     a.resize(length, 0);
@@ -154,14 +163,32 @@ mod tests {
     use super::*;
 
     fn row(id: u32, name: &str, os: &str, online: bool) -> Row {
-        Row { id, name: name.into(), os: os.into(), online, ..Row::default() }
+        Row {
+            id,
+            name: name.into(),
+            os: os.into(),
+            online,
+            ..Row::default()
+        }
     }
     fn rows() -> Vec<Row> {
         vec![
-            Row { favourite: true, group: Some("front".into()), unattended: true, ..row(731_204_118, "Reception PC", "windows", true) },
-            Row { recent: Some(0), ..row(268_455_901, "Anna MacBook", "macos", true) },
-            Row { this_computer: true, ..row(482_913_557, "Tech Mac", "macos", true) },
-            Row { update: true, note: "Warehouse scanner".into(), ..row(519_003_442, "build-agent", "linux", false) },
+            Row {
+                favourite: true,
+                group: Some("front".into()),
+                unattended: true,
+                ..row(731_204_118, "Reception PC", "windows", true)
+            },
+            Row {
+                recent: Some(0),
+                ..row(268_455_901, "Anna MacBook", "macos", true)
+            },
+            row(482_913_557, "Tech Mac", "macos", true),
+            Row {
+                update: true,
+                note: "Warehouse scanner".into(),
+                ..row(519_003_442, "build-agent", "linux", false)
+            },
         ]
     }
 
@@ -186,20 +213,37 @@ mod tests {
     #[test]
     fn chips_combine() {
         let all = rows();
-        let f = Filters { os: Some("macos"), online_only: true, ..Filters::default() };
+        let f = Filters {
+            os: Some("macos"),
+            online_only: true,
+            ..Filters::default()
+        };
         assert_eq!(visible(&f, &all).len(), 2);
-        let f = Filters { unattended_only: true, ..Filters::default() };
+        let f = Filters {
+            unattended_only: true,
+            ..Filters::default()
+        };
         assert_eq!(visible(&f, &all)[0].id, 731_204_118);
-        let f = Filters { update_only: true, ..Filters::default() };
+        let f = Filters {
+            update_only: true,
+            ..Filters::default()
+        };
         assert_eq!(visible(&f, &all)[0].name, "build-agent");
-        let f = Filters { os: Some("linux"), online_only: true, ..Filters::default() };
+        let f = Filters {
+            os: Some("linux"),
+            online_only: true,
+            ..Filters::default()
+        };
         assert!(visible(&f, &all).is_empty());
     }
 
     #[test]
     fn search_reads_name_id_and_note() {
         let all = rows();
-        let by = |text: &str| Filters { search: text.into(), ..Filters::default() };
+        let by = |text: &str| Filters {
+            search: text.into(),
+            ..Filters::default()
+        };
         assert_eq!(visible(&by("recep"), &all).len(), 1);
         assert_eq!(visible(&by("731 204"), &all).len(), 1);
         assert_eq!(visible(&by("731204118"), &all).len(), 1);
@@ -211,11 +255,26 @@ mod tests {
     #[test]
     fn sort_by_status_puts_online_first() {
         let all = rows();
-        let names: Vec<_> = visible(&Filters::default(), &all).iter().map(|row| row.name.as_str()).collect();
-        assert_eq!(names, ["Anna MacBook", "Reception PC", "Tech Mac", "build-agent"]);
-        let f = Filters { sort: Sort::Name, ..Filters::default() };
-        let names: Vec<_> = visible(&f, &all).iter().map(|row| row.name.as_str()).collect();
-        assert_eq!(names, ["Anna MacBook", "build-agent", "Reception PC", "Tech Mac"]);
+        let names: Vec<_> = visible(&Filters::default(), &all)
+            .iter()
+            .map(|row| row.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["Anna MacBook", "Reception PC", "Tech Mac", "build-agent"]
+        );
+        let f = Filters {
+            sort: Sort::Name,
+            ..Filters::default()
+        };
+        let names: Vec<_> = visible(&f, &all)
+            .iter()
+            .map(|row| row.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["Anna MacBook", "build-agent", "Reception PC", "Tech Mac"]
+        );
     }
 
     #[test]

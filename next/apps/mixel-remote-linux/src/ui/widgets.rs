@@ -485,6 +485,74 @@ pub fn tag(text: &str) -> gtk::Label {
     label
 }
 
+/// A flat sidebar entry: icon, title, a count or a red pill, and the selected look.
+pub fn nav_item(icon: &str, title: &str, count: Option<usize>, pill: bool, active: bool, action: impl Fn() + 'static) -> gtk::Button {
+    let row = hbox(10);
+    row.append(&gtk::Image::from_icon_name(icon));
+    let name = gtk::Label::new(Some(title));
+    name.set_xalign(0.0);
+    name.set_hexpand(true);
+    name.set_ellipsize(pango::EllipsizeMode::End);
+    row.append(&name);
+    if let Some(count) = count {
+        let number = gtk::Label::new(Some(&count.to_string()));
+        number.add_css_class(if pill { "mixel-pill" } else { "mixel-count" });
+        row.append(&number);
+    }
+    let button = gtk::Button::new();
+    button.set_child(Some(&row));
+    button.add_css_class("flat");
+    button.add_css_class("mixel-nav");
+    if active {
+        button.add_css_class("active");
+    }
+    let accessible = match count {
+        Some(count) => format!("{title}, {count}"),
+        None => title.to_owned(),
+    };
+    button.update_property(&[gtk::accessible::Property::Label(&accessible)]);
+    button.connect_clicked(move |_| action());
+    button
+}
+
+/// A small coloured dot (`on`, `off` or `busy`).
+pub fn dot(kind: &str) -> gtk::Box {
+    let dot = hbox(0);
+    dot.add_css_class("mixel-dot");
+    dot.add_css_class(kind);
+    dot.set_valign(gtk::Align::Center);
+    dot.set_halign(gtk::Align::Center);
+    dot
+}
+
+/// A rounded pill with a few words (Unattended, Update, In session).
+pub fn pill_tag(kind: &str, text: &str) -> gtk::Label {
+    let label = gtk::Label::new(Some(text));
+    label.add_css_class("mixel-tag");
+    label.add_css_class(kind);
+    label.set_valign(gtk::Align::Center);
+    label
+}
+
+/// The device tile: the system's icon with the online dot.
+pub fn device_tile(icon: &str, kind: &str) -> gtk::Overlay {
+    let tile = gtk::Overlay::new();
+    tile.add_css_class("mixel-tile");
+    let image = gtk::Image::from_icon_name(icon);
+    image.set_pixel_size(20);
+    image.set_halign(gtk::Align::Center);
+    image.set_valign(gtk::Align::Center);
+    tile.set_child(Some(&image));
+    let status = dot(kind);
+    status.add_css_class("mixel-tile-dot");
+    status.set_halign(gtk::Align::End);
+    status.set_valign(gtk::Align::End);
+    tile.add_overlay(&status);
+    tile.set_size_request(38, 38);
+    tile.set_valign(gtk::Align::Center);
+    tile
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -564,72 +632,4 @@ mod tests {
         window.destroy();
         assert_eq!(MESSAGES.load(Ordering::Relaxed), 0, "GTK warnings or critical messages");
     }
-}
-
-/// A flat sidebar entry: icon, title, a count or a red pill, and the selected look.
-pub fn nav_item(icon: &str, title: &str, count: Option<usize>, pill: bool, active: bool, action: impl Fn() + 'static) -> gtk::Button {
-    let row = hbox(10);
-    row.append(&gtk::Image::from_icon_name(icon));
-    let name = gtk::Label::new(Some(title));
-    name.set_xalign(0.0);
-    name.set_hexpand(true);
-    name.set_ellipsize(pango::EllipsizeMode::End);
-    row.append(&name);
-    if let Some(count) = count {
-        let number = gtk::Label::new(Some(&count.to_string()));
-        number.add_css_class(if pill { "mixel-pill" } else { "mixel-count" });
-        row.append(&number);
-    }
-    let button = gtk::Button::new();
-    button.set_child(Some(&row));
-    button.add_css_class("flat");
-    button.add_css_class("mixel-nav");
-    if active {
-        button.add_css_class("active");
-    }
-    let accessible = match count {
-        Some(count) => format!("{title}, {count}"),
-        None => title.to_owned(),
-    };
-    button.update_property(&[gtk::accessible::Property::Label(&accessible)]);
-    button.connect_clicked(move |_| action());
-    button
-}
-
-/// A small coloured dot (`on`, `off` or `busy`).
-pub fn dot(kind: &str) -> gtk::Box {
-    let dot = hbox(0);
-    dot.add_css_class("mixel-dot");
-    dot.add_css_class(kind);
-    dot.set_valign(gtk::Align::Center);
-    dot.set_halign(gtk::Align::Center);
-    dot
-}
-
-/// A rounded pill with a few words (Unattended, Update, In session).
-pub fn pill_tag(kind: &str, text: &str) -> gtk::Label {
-    let label = gtk::Label::new(Some(text));
-    label.add_css_class("mixel-tag");
-    label.add_css_class(kind);
-    label.set_valign(gtk::Align::Center);
-    label
-}
-
-/// The device tile: the system's icon with the online dot.
-pub fn device_tile(icon: &str, kind: &str) -> gtk::Overlay {
-    let tile = gtk::Overlay::new();
-    tile.add_css_class("mixel-tile");
-    let image = gtk::Image::from_icon_name(icon);
-    image.set_pixel_size(20);
-    image.set_halign(gtk::Align::Center);
-    image.set_valign(gtk::Align::Center);
-    tile.set_child(Some(&image));
-    let status = dot(kind);
-    status.add_css_class("mixel-tile-dot");
-    status.set_halign(gtk::Align::End);
-    status.set_valign(gtk::Align::End);
-    tile.add_overlay(&status);
-    tile.set_size_request(38, 38);
-    tile.set_valign(gtk::Align::Center);
-    tile
 }

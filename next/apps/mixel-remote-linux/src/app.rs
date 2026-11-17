@@ -761,6 +761,11 @@ impl App {
         self.apply_effects(effects);
     }
 
+    /// The person closed a session window: the session goes back into its tab.
+    pub fn window_closed(self: &Rc<Self>, peer: u32) {
+        self.edit(|state| state.workspace.window_closed(peer));
+    }
+
     pub fn dismiss_notice(self: &Rc<Self>, peer: u32) {
         self.edit(|state| state.workspace.dismiss_notice(peer));
     }
@@ -825,7 +830,6 @@ impl App {
                     name: device.name.clone(),
                     os: device.os.clone(),
                     online: matches!(presence, Presence::Online | Presence::This),
-                    this_computer: presence == Presence::This,
                     favourite: state.devices.favorites.contains(&device.device),
                     recent: state.devices.recent.iter().position(|id| *id == device.device),
                     group: device.group_id.clone(),

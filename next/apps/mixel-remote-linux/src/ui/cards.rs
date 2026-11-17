@@ -22,8 +22,16 @@ pub fn attempt_card(app: &Rc<App>, state: &State, attempt: &Attempt) -> gtk::Box
     let frame = card_frame();
     let failed = !attempt.failure.is_empty();
     let head = hbox(8);
-    head.append(&gtk::Image::from_icon_name(if failed { "dialog-warning-symbolic" } else { "network-transmit-receive-symbolic" }));
-    let title = gtk::Label::new(Some(&if failed { t("Could not connect") } else { t("Connecting") }));
+    head.append(&gtk::Image::from_icon_name(if failed {
+        "dialog-warning-symbolic"
+    } else {
+        "network-transmit-receive-symbolic"
+    }));
+    let title = gtk::Label::new(Some(&if failed {
+        t("Could not connect")
+    } else {
+        t("Connecting")
+    }));
     title.add_css_class("heading");
     head.append(&title);
     if !failed {
@@ -41,7 +49,10 @@ pub fn attempt_card(app: &Rc<App>, state: &State, attempt: &Attempt) -> gtk::Box
     }
     frame.append(&head);
     let device = hbox(10);
-    device.append(&device_tile(format::os_icon(&attempt.os), if failed { "off" } else { "busy" }));
+    device.append(&device_tile(
+        format::os_icon(&attempt.os),
+        if failed { "off" } else { "busy" },
+    ));
     let names = vbox(0);
     names.set_valign(gtk::Align::Center);
     let name = gtk::Label::new(Some(&attempt.name));
@@ -82,8 +93,18 @@ pub fn attempt_card(app: &Rc<App>, state: &State, attempt: &Attempt) -> gtk::Box
             line.add_css_class("mixel-step-todo");
         }
         row.append(&line);
-        let state_word = if done { t("done") } else if current && !failed { t("in progress") } else if current { t("failed") } else { t("waiting") };
-        row.update_property(&[gtk::accessible::Property::Label(&format!("{name}: {state_word}"))]);
+        let state_word = if done {
+            t("done")
+        } else if current && !failed {
+            t("in progress")
+        } else if current {
+            t("failed")
+        } else {
+            t("waiting")
+        };
+        row.update_property(&[gtk::accessible::Property::Label(&format!(
+            "{name}: {state_word}"
+        ))]);
         frame.append(&row);
     }
     if failed {
@@ -94,17 +115,27 @@ pub fn attempt_card(app: &Rc<App>, state: &State, attempt: &Attempt) -> gtk::Box
     }
     let actions = hbox(8);
     let a = app.clone();
-    actions.append(&button(&if failed { t("Close") } else { t("Cancel") }, move || a.cancel_attempt()));
+    actions.append(&button(
+        &if failed { t("Close") } else { t("Cancel") },
+        move || a.cancel_attempt(),
+    ));
     actions.append(&spacer());
     if failed {
         let (a, peer, unattended) = (app.clone(), attempt.peer, attempt.unattended);
-        actions.append(&primary(&t("Try again"), move || a.connect(peer, None, unattended)));
+        actions.append(&primary(&t("Try again"), move || {
+            a.connect(peer, None, unattended)
+        }));
     } else if !attempt.in_window {
         let a = app.clone();
-        actions.append(&link(&t("Open in window instead"), move || a.open_attempt_in_window()));
+        actions.append(&link(&t("Open in window instead"), move || {
+            a.open_attempt_in_window()
+        }));
     }
     frame.append(&actions);
-    frame.update_property(&[gtk::accessible::Property::Label(&tf("Connecting to %@", &[&attempt.name]))]);
+    frame.update_property(&[gtk::accessible::Property::Label(&tf(
+        "Connecting to %@",
+        &[&attempt.name],
+    ))]);
     frame
 }
 
@@ -126,11 +157,16 @@ pub fn ready_card(app: &Rc<App>, peer: u32, name: &str, os: &str) -> gtk::Box {
     open.set_valign(gtk::Align::Center);
     row.append(&open);
     let a = app.clone();
-    let dismiss = icon_button("window-close-symbolic", &t("Dismiss"), move || a.dismiss_notice(peer));
+    let dismiss = icon_button("window-close-symbolic", &t("Dismiss"), move || {
+        a.dismiss_notice(peer)
+    });
     dismiss.add_css_class("flat");
     dismiss.set_valign(gtk::Align::Center);
     row.append(&dismiss);
     frame.append(&row);
-    frame.update_property(&[gtk::accessible::Property::Label(&tf("Session with %@ is ready", &[name]))]);
+    frame.update_property(&[gtk::accessible::Property::Label(&tf(
+        "Session with %@ is ready",
+        &[&name],
+    ))]);
     frame
 }
