@@ -139,6 +139,7 @@ internal sealed class SessionView : Grid
     {
         shown = visible;
         Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        Screen.SetActive(visible);
         if (visible && stale)
         {
             stale = false;

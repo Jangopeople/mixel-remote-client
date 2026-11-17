@@ -106,7 +106,21 @@ internal sealed class RemoteScreen : Grid
         });
     }
 
-    private void OnFrame(object? sender, VideoFrame frame) => Shell.Perf.Time("Draw frame", () => Draw(frame));
+    private bool active = true;
+
+    /// <summary>A session tab behind another one keeps the newest picture but draws nothing (four sessions drew four swap chains, 4 x 45 ms per picture, and starved the window).</summary>
+    public void SetActive(bool value)
+    {
+        if (active == value) return;
+        active = value;
+        if (value && last is not null) Shell.Perf.Time("Draw frame", () => Draw(last));
+    }
+
+    private void OnFrame(object? sender, VideoFrame frame)
+    {
+        if (!active) { last = frame; return; }
+        Shell.Perf.Time("Draw frame", () => Draw(frame));
+    }
     private void OnDrawing(object? sender, EventArgs args) { if (last is not null) Draw(last); }
     private void OnSession(object? sender, System.ComponentModel.PropertyChangedEventArgs change)
     {
