@@ -297,17 +297,17 @@ struct Chip: View {
 
 /// The table's columns (shared widths).
 enum Columns {
-    static let star: CGFloat = 30
-    static let tile: CGFloat = 44
-    static let id: CGFloat = 120
-    static let status: CGFloat = 230
-    static let seen: CGFloat = 110
-    static let actions: CGFloat = 150
+    static let star: CGFloat = 24
+    static let tile: CGFloat = 40
+    static let id: CGFloat = 104
+    static let status: CGFloat = 150
+    static let seen: CGFloat = 84
+    static let actions: CGFloat = 112
 }
 
 struct ColumnHeader: View {
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Color.clear.frame(width: Columns.star + Columns.tile)
             label(L("Device")).frame(maxWidth: .infinity, alignment: .leading)
             label(L("ID")).frame(width: Columns.id, alignment: .leading)
@@ -358,7 +358,7 @@ struct DeviceTableRow: View {
         let presence = model.presence(of: device)
         let state = workspace.state(of: device.connectionId)
         let attempt = workspace.attempt?.peer == device.connectionId ? workspace.attempt : nil
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             star.frame(width: Columns.star)
             OSTile(os: device.os, dot: dot(presence, state)).frame(width: Columns.tile, alignment: .leading)
             VStack(alignment: .leading, spacing: 2) {
