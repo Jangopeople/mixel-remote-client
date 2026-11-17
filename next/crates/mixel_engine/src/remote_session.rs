@@ -115,6 +115,8 @@ pub struct Status {
     /// The connection to the connection service was lost and is being restored; the session itself (its
     /// media connection) is kept and resumes (feature `resume`). The window stays open and says so.
     pub reconnecting: bool,
+    /// The computer being helped went away and did not come back within a minute ("Could not reconnect").
+    pub reconnect_failed: bool,
     /// D2: this session was opened with a support password and ends by itself (2 hours after it connected).
     /// `ends_at` is the broker's countdown once known (5-minute and 1-minute warnings).
     pub password_session: Option<PasswordSessionView>,
@@ -235,6 +237,7 @@ impl Default for Status {
             switched: false,
             peer_features: Vec::new(),
             reconnecting: false,
+            reconnect_failed: false,
             password_session: None,
             unattended_allowed: None,
             password_ends: None,
@@ -2450,6 +2453,9 @@ async fn run(
         send(&mut socket,ClientMessage::AppVersion{version:crate::agent::APP_VERSION.into(),platform:app_platform()}).await?;
         // An older connection service answers "invalid": then these features are simply not offered.
         let capabilities_sent=std::time::Instant::now();
+        // The computer being helped went away: ask the same device again for a minute (reconnect.rs).
+        let mut last_access:Option<crate::reconnect::Access>=None;
+        let mut retry:Option<crate::reconnect::Retry>=None;
         if let Some(kept) = peer.as_ref() {
             // The media connection of the running session is still up: ask the connection service to continue it.
             let session = kept.id;
@@ -2482,6 +2488,24 @@ async fn run(
                     let now=SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_|"System clock is unavailable")?.as_secs();
                     if now>=authorized_until || pending_renewal.is_some_and(|deadline|std::time::Instant::now()>=deadline) {return Err(Failure::network("Device authorization expired; reconnecting"));}
                     if last_activity.elapsed()>Duration::from_secs(150){return Err(Failure::network("Connection-service heartbeat expired"));}
+                    if let Some(active)=retry.as_mut(){
+                        if peer.as_ref().is_some_and(|session|!session.host && session.signals.is_some()){
+                            retry=None;
+                            state.change(generation,|status|{status.reconnecting=false;status.reconnect_failed=false;}).await;
+                        } else {
+                            match active.step(std::time::Instant::now(),outgoing.is_some()||peer.is_some()){
+                                crate::reconnect::Step::Ask=>{
+                                    let access=active.access().clone();
+                                    let _=tx.try_send(Command::Request(access.host,access.password,access.unattended));
+                                },
+                                crate::reconnect::Step::GiveUp=>{
+                                    retry=None;
+                                    state.change(generation,|status|{status.reconnecting=false;status.reconnect_failed=true;status.phase="ready".into();status.session=None;status.peer=None;status.message="Could not reconnect".into();}).await;
+                                },
+                                crate::reconnect::Step::Wait=>{},
+                            }
+                        }
+                    }
                     if resuming.is_some_and(|since|since.elapsed()>=Duration::from_secs(20)){
                         // The connection service did not take the session back in time: end it here.
                         peer=None;resuming=None;end_when_resumed=false;
@@ -2582,6 +2606,7 @@ async fn run(
                         crate::qa_timeline::mark(if qa_cached {"device key from the cache"} else {"device key fetched from the account service"});
                         if cancel.load(Ordering::Acquire){break;}
                         let with_password=code.is_some();
+                        last_access=Some(crate::reconnect::Access{host,unattended,password:code.clone()});
                         let request=match code {
                             Some(code)=>ClientMessage::RequestWithCode{host,code},
                             None if unattended=>ClientMessage::RequestUnattended{host},
@@ -2629,6 +2654,11 @@ async fn run(
                         state.change(generation,|status|{status.phase=if accept{"negotiating"}else{"closing"}.into();status.message=if accept{"Accepted; authenticating the remote transport"}else{"Rejecting invitation"}.into();}).await;
                     },
                     Command::Close(session)=>{
+                        // The person ended it (or stopped the retries): nothing is asked again.
+                        last_access=None;
+                        if retry.take().is_some(){
+                            state.change(generation,|status|{status.reconnecting=false;status.reconnect_failed=false;status.phase="ready".into();status.session=None;status.peer=None;status.message="Session ended".into();}).await;
+                        }
                         // The window names the session as it sees it; the service knows its current transport.
                         if let Some(active)=peer.as_mut().filter(|peer|peer.id==session || peer.ui==session) && active.take_close(){
                             send(&mut socket,ClientMessage::Close{session:active.id}).await?;
@@ -2693,6 +2723,13 @@ async fn run(
                         if let Err(error)=&result{eprintln!("colleague session ended: {error}");}
                         let views=colleague_views(&joined);
                         state.change(generation,|status|status.colleagues=views).await;
+                        continue;
+                    }
+                    if retry.is_none() && result.is_err() && peer.as_ref().is_some_and(|active|active.id==session && !active.close_sent && !active.host && !active.joined && active.signals.is_some()) && last_access.as_ref().is_some_and(crate::reconnect::Access::repeatable){
+                        peer=None;
+                        send(&mut socket,ClientMessage::Close{session}).await?;
+                        retry=last_access.clone().and_then(|access|crate::reconnect::Retry::start(access,std::time::Instant::now()));
+                        state.change(generation,|status|{status.reconnecting=true;status.reconnect_failed=false;status.phase="outgoing".into();status.session=None;status.message="Reconnecting… the computer went away; asking again".into();}).await;
                         continue;
                     }
                     if peer.as_ref().is_some_and(|peer|peer.id==session && !peer.close_sent){peer=None;send(&mut socket,ClientMessage::Close{session}).await?;state.change(generation,|status|{status.phase="ready".into();status.session=None;status.peer=None;status.requester=None;status.message=result.err().unwrap_or_else(||"Session closed; ready for a new connection".into());}).await;}},
@@ -3042,6 +3079,11 @@ async fn run(
                             switch_memory=Some(SwitchMemory{previous:session,remote:ended.remote,key:ended.key,identity:ended.identity.clone().ok_or("Peer identity unavailable")?,grants,reversed:ended.reversed,at:std::time::Instant::now()});
                             state.change(generation,|status|{status.phase="ready".into();status.message="Switching sides".into();status.session=None;status.peer=Some(ended.remote);status.requester=None;}).await;
                         },
+                        ServerMessage::Closed{session,reason:signaling_server::protocol::CloseReason::Disconnected} if retry.is_none() && peer.as_ref().is_some_and(|active|active.id==session && !active.host && !active.joined && active.signals.is_some()) && last_access.as_ref().is_some_and(crate::reconnect::Access::repeatable)=>{
+                            peer=None;
+                            retry=last_access.clone().and_then(|access|crate::reconnect::Retry::start(access,std::time::Instant::now()));
+                            state.change(generation,|status|{status.reconnecting=true;status.reconnect_failed=false;status.phase="outgoing".into();status.session=None;status.message="Reconnecting… the computer went away; asking again".into();}).await;
+                        },
                         ServerMessage::Closed{session,reason}=>{if peer.as_ref().is_some_and(|peer|peer.id==session){peer=None;state.change(generation,|status|{status.phase="ready".into();status.message=if reason==signaling_server::protocol::CloseReason::Expired{"The support session reached its 2-hour limit.".to_owned()}else{format!("Session closed: {reason:?}")};status.session=None;status.peer=None;status.requester=None;}).await;}},
                         ServerMessage::Error{code} if resuming.is_some()=>{
                             // Not known any more (older connection service, or the 90 seconds passed): the session ends here.
@@ -3058,6 +3100,8 @@ async fn run(
                                     send(&mut socket,ClientMessage::Request{host}).await?;
                                     outgoing=Some((host,key,false,false));
                                     state.change(generation,|status|{status.phase="outgoing".into();status.peer=Some(host);status.message="Waiting for the remote host to Accept".into();}).await;
+                                } else if retry.is_some() {
+                                    // A retry of a lost session: the next ask follows, the window stays as it is.
                                 } else {
                                     state.change(generation,|status|{status.phase="ready".into();status.peer=None;status.message=request_failure_message(code).into();}).await;
                                 }
