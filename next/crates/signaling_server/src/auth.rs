@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
+pub mod device_admin;
 pub mod saas;
 
 #[derive(Clone, Debug)]

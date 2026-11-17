@@ -133,6 +133,12 @@ fn saas(error: signaling_server::auth::saas::SaasError) -> String {
     error.message
 }
 
+/// The failure text of a `remote_admin_*` command: JSON `{"hint", "message", "status"}` so the apps can key on
+/// the server's stable `hint` (`not_admin`, `device_not_found`, `confirm_mismatch`, `changed`, `offline`, ...).
+fn admin(error: signaling_server::auth::device_admin::AdminError) -> String {
+    error.to_json()
+}
+
 /// Open only validated HTTPS destinations in the system browser (the app may also open them itself).
 pub(crate) async fn browser(url: &str) -> Result<(), String> {
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
@@ -731,6 +737,50 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
         "saas_remove_device" => {
             let c = auth.credential(None).await?;
             out(c.ism.saas_remove_device(&c.token, args.get("tenant")?, args.get("device")?).await.map_err(saas)?)
+        }
+        // ---- Device administration (docs/mixel-remote-device-admin-api.md, section 2) ----
+        // The signed-in person's own token; the server decides who may administer (owner/admin, staff with MFA).
+        "remote_admin_devices" => {
+            let c = auth.credential(None).await?;
+            let search: Option<String> = args.get("search")?;
+            out(c.ism.admin_devices(&c.token, args.get("company")?, search.as_deref()).await.map_err(admin)?)
+        }
+        "remote_admin_rename_device" => {
+            let c = auth.credential(None).await?;
+            let name: String = args.get("device_name")?;
+            let expected: Option<String> = args.get("expected_update")?;
+            out(c.ism.admin_rename_device(&c.token, args.get("device")?, &name, expected.as_deref()).await.map_err(admin)?)
+        }
+        "remote_admin_move_device" => {
+            let c = auth.credential(None).await?;
+            let group_name: Option<String> = args.get("group_name")?;
+            out(c.ism.admin_move_device(&c.token, args.get("device")?, args.get("group_id")?, group_name.as_deref()).await.map_err(admin)?)
+        }
+        "remote_admin_set_device_note" => {
+            let c = auth.credential(None).await?;
+            let note: Option<String> = args.get("note")?;
+            out(c.ism.admin_set_device_note(&c.token, args.get("device")?, note.as_deref()).await.map_err(admin)?)
+        }
+        "remote_admin_set_device_favorite" => {
+            let c = auth.credential(None).await?;
+            out(c.ism.admin_set_device_favorite(&c.token, args.get("device")?, args.get("favorite")?).await.map_err(admin)?)
+        }
+        "remote_admin_set_device_unattended" => {
+            let c = auth.credential(None).await?;
+            let setting: String = args.get("setting")?;
+            out(c.ism.admin_set_device_unattended(&c.token, args.get("device")?, &setting).await.map_err(admin)?)
+        }
+        "remote_admin_remove_device" => {
+            let c = auth.credential(None).await?;
+            out(c.ism.admin_remove_device(&c.token, args.get("device")?, args.get("confirm_connection_id")?).await.map_err(admin)?)
+        }
+        "remote_admin_unattended_grants" => {
+            let c = auth.credential(None).await?;
+            out(c.ism.admin_unattended_grants(&c.token, args.get("device")?).await.map_err(admin)?)
+        }
+        "remote_admin_set_unattended_grant" => {
+            let c = auth.credential(None).await?;
+            out(c.ism.admin_set_unattended_grant(&c.token, args.get("device")?, args.get("user")?, args.get("granted")?).await.map_err(admin)?)
         }
         "saas_add_this_device" => {
             if !context.offline().await {
