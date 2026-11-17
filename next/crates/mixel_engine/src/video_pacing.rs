@@ -82,22 +82,6 @@ impl Pacer {
             untroubled: true,
         }
     }
-    /// Starts at 2 MB/s (16 Mbit/s) for live interactive sessions so the first
-    /// keyframe and early motion leave immediately while still adapting down on loss.
-    pub fn new_fast(now: Instant) -> Self {
-        const FAST_START_RATE: f64 = 2_000_000.0;
-        Self {
-            rate: FAST_START_RATE,
-            ceiling: MAX_RATE,
-            picture_rate: FAST_START_RATE,
-            credit: burst(FAST_START_RATE),
-            filled: now,
-            complete_sent: None,
-            latest_complete: None,
-            last_loss: None,
-            untroubled: true,
-        }
-    }
     /// Bytes a second at the moment.
     pub fn rate(&self) -> f64 {
         self.rate

@@ -196,15 +196,22 @@ pub fn start(mut config: Config) -> Result<(), String> {
         }
     })
 }
+/// Whether a session's transport may publish only relay candidates.
+fn relay_only_transport(configured: bool) -> bool {
+    configured
+}
+
 async fn run(config: &mut Config) -> Result<(), String> {
     if config.stopped() {
         return Ok(());
     }
     let servers = std::mem::take(&mut config.ice_servers);
-    let strict_relay = config.relay_only
-        && (cfg!(test)
-            || std::env::var("MIXEL_RELAY_ONLY").is_ok_and(|value| value == "1")
-            || config.source == "qa-relay-fixture");
+    // The service's configuration says relay only (`relay_only` in the packaged service file):
+    // neither side ever publishes its own addresses and every session goes through the relay.
+    // The snapshot of 2.0.5-2.0.14 ignored the setting unless MIXEL_RELAY_ONLY=1 was set, which
+    // no installation sets: both sides then published their local and public addresses to the
+    // other side. There is no switch to turn it off.
+    let strict_relay = relay_only_transport(config.relay_only);
     let transport = if strict_relay {
         #[cfg(target_os = "windows")]
         {
@@ -1012,7 +1019,7 @@ async fn host_media(
         // Remote sound: what this computer plays, while the technician wants to hear it.
         let mut sound: Option<crate::remote_sound::Capture> = None;
         let mut sound_failed = false;
-        let mut pacer = crate::video_pacing::Pacer::new_fast(Instant::now());
+        let mut pacer = crate::video_pacing::Pacer::new(Instant::now());
         while !config.stopped() {
             if control.sound_wanted() {
                 if sound.is_none() && !sound_failed {
@@ -1139,11 +1146,11 @@ async fn host_media(
                 .try_send(EncodeRequest {
                     frame,
                     timestamp: started.elapsed().as_micros() as u64,
-                    keyframe: force_keyframe
-                        || sent <= 5
-                        || sent == 30
-                        || sent == 90
-                        || sent.is_multiple_of(180),
+                    // One complete picture to start with and one every 60 pictures. The snapshot's
+                    // six in a row at the start (and at 30 and 90) cost a slow link its first seconds
+                    // and were there for a picture the encoder left out, which is now sent again
+                    // (`encode_again`).
+                    keyframe: force_keyframe || sent.is_multiple_of(60),
                     reply,
                 })
                 .map_err(|_| "Screen video encoder stopped")?;
@@ -1289,7 +1296,14 @@ async fn send_picture(
         },
     )
     .await?;
-    let _ = complete;
+    if sent && complete {
+        // Requests for a complete picture that came in while this one was leaving were sent
+        // before it could arrive: it answers them. Sending another would double the load on
+        // exactly the connections that are slow. (A technician who still needs one asks again
+        // within a second.) The snapshot of 2.0.5-2.0.14 dropped this: on a slow link every
+        // request then started another complete picture behind the one still on its way.
+        control.complete_picture_sent();
+    }
     Ok(sent)
 }
 /// Host side of a colleague who joined: the first technician's pictures, sent on this connection.
@@ -1304,7 +1318,7 @@ async fn mirror_media(
     let mut pictures = crate::session_mirror::watch().ok_or("The first technician's session has ended")?;
     let mut sent = 0u64;
     let mut last = Instant::now();
-    let mut pacer = crate::video_pacing::Pacer::new_fast(Instant::now());
+    let mut pacer = crate::video_pacing::Pacer::new(Instant::now());
     let result = async {
         while !config.stopped() {
             if !consent.can_share_local_screen() {

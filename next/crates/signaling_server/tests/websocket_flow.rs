@@ -2243,3 +2243,133 @@ async fn the_connection_limit_is_configurable_and_frees_closed_places() {
     assert!(again.is_some(), "a closed connection frees its place");
     task.abort();
 }
+
+/// Who gets onto a host with unattended access on (and a support password set) without the
+/// person at the host being asked. Only controllers the policy service allows unattended access
+/// get in without a question; controllers it allows only attended support are asked about; anyone
+/// it refuses (another company, an unrelated account) and anyone not signed in gets nothing, with
+/// or without the password.
+#[tokio::test]
+async fn unattended_access_only_for_controllers_the_policy_allows() {
+    use axum::{Json, Router, http::StatusCode, routing::post};
+    use ed25519_dalek::SigningKey;
+    use signaling_server::{delegated_auth::TicketAuth, support_policy::SupportPolicy};
+
+    const TOKEN: &str = "5222552255225522552255225522552255225522552255225522552255225522";
+    const HOST: u32 = 123_456_789;
+    const UNATTENDED_TECHNICIAN: u32 = 200_000_001;
+    const ATTENDED_TECHNICIAN: u32 = 200_000_002;
+    const STRANGER: u32 = 200_000_003;
+    // The policy service of the fixture: profile 12 may help unattended, profile 11 only attended,
+    // profile 13 (another company) not at all.
+    let policy = Router::new().route(
+        "/api/internal/remote/authorize",
+        post(|Json(pair): Json<serde_json::Value>| async move {
+            let controller = pair["controller"]["profile"].as_str().unwrap_or_default().to_owned();
+            let unattended = pair["unattended"] == true;
+            let allowed = if controller == Uuid::from_u128(12).to_string() {
+                true
+            } else if controller == Uuid::from_u128(11).to_string() {
+                !unattended
+            } else {
+                false
+            };
+            if allowed { StatusCode::NO_CONTENT } else { StatusCode::FORBIDDEN }
+        }),
+    );
+    let policy_socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let policy_url = format!("http://{}/api/internal/remote/authorize", policy_socket.local_addr().unwrap());
+    let policy_task = tokio::spawn(async move { axum::serve(policy_socket, policy).await.unwrap() });
+    let signer = SigningKey::from_bytes(&[52; 32]);
+    let state = AppState::new(Arc::new(TicketAuth::new(vec![signer.verifying_key()]).unwrap()), HashSet::new())
+        .with_support_policy(SupportPolicy::new(policy_url.parse().unwrap(), TOKEN.into()).unwrap());
+    let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/v1/ws", socket.local_addr().unwrap());
+    let broker = tokio::spawn(async move { axum::serve(socket, router(state)).await.unwrap() });
+    let peer = |profile: u128, device: u128, tenant: u128, connection_id: u32, key_byte: u8| SignedPeer {
+        profile: Uuid::from_u128(profile),
+        device: Uuid::from_u128(device),
+        tenant: Some(Uuid::from_u128(tenant)),
+        connection_id,
+        generation: 1,
+        key_byte,
+    };
+    let mut host = signed_peer(&url, &signer, peer(10, 20, 1, HOST, 60)).await;
+    let mut attended = signed_peer(&url, &signer, peer(11, 21, 1, ATTENDED_TECHNICIAN, 61)).await;
+    let mut unattended = signed_peer(&url, &signer, peer(12, 22, 1, UNATTENDED_TECHNICIAN, 62)).await;
+    let mut stranger = signed_peer(&url, &signer, peer(13, 23, 9, STRANGER, 63)).await;
+
+    send(&mut host, ClientMessage::ConfigureUnattended { enabled: true }).await;
+    assert!(matches!(event(&mut host).await, ServerMessage::UnattendedStatus { enabled: true }));
+
+    // Refused by the policy: nothing reaches the host, whatever is asked.
+    for message in [ClientMessage::Request { host: HOST }, ClientMessage::RequestUnattended { host: HOST }] {
+        send(&mut stranger, message).await;
+        assert!(matches!(event(&mut stranger).await, ServerMessage::Error { code: ErrorCode::Unavailable }));
+        assert!(quiet(&mut host).await, "a refused controller reached the host");
+    }
+
+    // Not signed in at all: no session can be asked for.
+    let (mut anonymous, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    send(&mut anonymous, ClientMessage::Request { host: HOST }).await;
+    let answer = timeout(Duration::from_secs(2), anonymous.next()).await;
+    if let Ok(Some(Ok(Message::Text(raw)))) = answer {
+        assert!(!matches!(serde_json::from_str::<ServerMessage>(&raw), Ok(ServerMessage::Requested { .. })));
+    }
+    assert!(quiet(&mut host).await, "an anonymous client reached the host");
+
+    // Allowed attended support only: the host is asked (no unattended consent), and an explicit
+    // unattended request is refused.
+    send(&mut attended, ClientMessage::RequestUnattended { host: HOST }).await;
+    assert!(matches!(event(&mut attended).await, ServerMessage::Error { code: ErrorCode::Unavailable }));
+    assert!(quiet(&mut host).await);
+    send(&mut attended, ClientMessage::Request { host: HOST }).await;
+    let ServerMessage::Requested { session: asked } = event(&mut attended).await else {
+        panic!("an attended technician's request was refused instead of being asked about");
+    };
+    assert!(matches!(event(&mut host).await,
+        ServerMessage::Consent { session, unattended: false, requester_connection: ATTENDED_TECHNICIAN, .. } if session == asked));
+    send(&mut host, ClientMessage::Decide { session: asked, accept: false }).await;
+    while let Ok(Some(Ok(_))) = timeout(Duration::from_millis(150), attended.next()).await {}
+    while let Ok(Some(Ok(_))) = timeout(Duration::from_millis(150), host.next()).await {}
+
+    // Allowed unattended access: the plain request is unattended (no question at the host).
+    send(&mut unattended, ClientMessage::Request { host: HOST }).await;
+    let ServerMessage::Requested { session: silent } = event(&mut unattended).await else {
+        panic!("an unattended technician's request was refused");
+    };
+    assert!(matches!(event(&mut host).await,
+        ServerMessage::Consent { session, unattended: true, requester_connection: UNATTENDED_TECHNICIAN, .. } if session == silent));
+    send(&mut host, ClientMessage::Decide { session: silent, accept: false }).await;
+    while let Ok(Some(Ok(_))) = timeout(Duration::from_millis(150), unattended.next()).await {}
+    while let Ok(Some(Ok(_))) = timeout(Duration::from_millis(150), host.next()).await {}
+
+    // With a support password set: the right password does not let a refused controller in, and a
+    // controller the policy allows attended support needs it (then, by the owner's choice, it is
+    // not asked about).
+    send(&mut host, ClientMessage::GenerateSupportCode).await;
+    let ServerMessage::SupportCode { code: Some(code), .. } = event(&mut host).await else {
+        panic!("support password was not generated");
+    };
+    let password = || ClientMessage::RequestWithCode { host: HOST, code: SupportCode::parse(code.reveal().into()).unwrap() };
+    send(&mut stranger, password()).await;
+    assert!(matches!(event(&mut stranger).await, ServerMessage::Error { code: ErrorCode::Unavailable }));
+    assert!(quiet(&mut host).await, "a refused controller got in with the password");
+    send(&mut attended, ClientMessage::Request { host: HOST }).await;
+    assert!(matches!(event(&mut attended).await, ServerMessage::Error { code: ErrorCode::Unavailable }));
+    assert!(quiet(&mut host).await, "the password was skipped");
+    send(&mut attended, password()).await;
+    let ServerMessage::Requested { session: with_password } = event(&mut attended).await else {
+        panic!("the password was refused");
+    };
+    assert!(matches!(event(&mut host).await,
+        ServerMessage::Consent { session, unattended: true, requester_connection: ATTENDED_TECHNICIAN, .. } if session == with_password));
+
+    policy_task.abort();
+    broker.abort();
+}
+
+/// Nothing arrives on the socket for a moment.
+async fn quiet(socket: &mut Socket) -> bool {
+    timeout(Duration::from_millis(150), socket.next()).await.is_err()
+}

@@ -202,6 +202,11 @@ pub async fn fetch_verified(manifest: &Manifest) -> Result<PathBuf, String> {
         .map_err(|_| "Cannot check the update signature")??;
     Ok(path)
 }
+/// The Authenticode check of [`fetch_verified`], for a copy of an update kept elsewhere.
+#[cfg(target_os = "windows")]
+pub fn verify_windows_signature(installer: &Path) -> Result<(), String> {
+    verify_signature(installer)
+}
 #[cfg(target_os = "windows")]
 fn verify_signature(installer: &Path) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
@@ -272,9 +277,6 @@ fn install(_package: &Path, _version: &str) -> Result<(), String> {
 }
 #[cfg(target_os = "macos")]
 fn install(image: &Path, version: &str) -> Result<(), String> {
-    fn sh_quote(path: &Path) -> String {
-        format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
-    }
     let exe = std::env::current_exe().map_err(|_| "Cannot locate Mixel Remote")?;
     let mut bundle = exe
         .ancestors()
@@ -341,15 +343,7 @@ fn install(image: &Path, version: &str) -> Result<(), String> {
             let _ = std::fs::remove_dir_all(&staged);
             let uid = run("/usr/bin/id", &["-u".as_ref()]).unwrap_or_else(|_| "0".into());
             let gid = run("/usr/bin/id", &["-g".as_ref()]).unwrap_or_else(|_| "0".into());
-            let sh_cmd = format!(
-                "/bin/rm -rf {staged} {old} && /usr/bin/ditto {source} {staged} && (if [ -e {bundle} ]; then /bin/mv {bundle} {old}; fi) && /bin/mv {staged} {bundle} && /usr/sbin/chown -R {uid}:{gid} {bundle} && /bin/rm -rf {old}",
-                source = sh_quote(&source),
-                staged = sh_quote(&staged),
-                old = sh_quote(&old),
-                bundle = sh_quote(&bundle),
-                uid = uid.trim(),
-                gid = gid.trim(),
-            );
+            let sh_cmd = admin_install_command(&source, &staged, &old, &bundle, &requirement, uid.trim(), gid.trim());
             let osa_script = format!(
                 "do shell script \"{}\" with administrator privileges",
                 sh_cmd.replace('\\', "\\\\").replace('"', "\\\"")
@@ -367,6 +361,48 @@ fn install(image: &Path, version: &str) -> Result<(), String> {
         .spawn()
         .map_err(|_| "Updated; start Mixel Remote again")?;
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn sh_quote(path: &Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
+}
+
+/// The administrator step of a Mac update: the app is copied out of the image into a staging
+/// folder, and that copy (not the image the user's own processes could swap meanwhile) is checked
+/// against Mixel's signing requirement as root before it replaces the installed app.
+#[cfg(target_os = "macos")]
+fn admin_install_command(source: &Path, staged: &Path, old: &Path, bundle: &Path, requirement: &str, uid: &str, gid: &str) -> String {
+    format!(
+        "/bin/rm -rf {staged} {old} && /usr/bin/ditto {source} {staged} && /usr/bin/codesign --verify --deep --strict -R {requirement} {staged} && (if [ -e {bundle} ]; then /bin/mv {bundle} {old}; fi) && /bin/mv {staged} {bundle} && /usr/sbin/chown -R {uid}:{gid} {bundle} && /bin/rm -rf {old}",
+        source = sh_quote(source),
+        staged = sh_quote(staged),
+        old = sh_quote(old),
+        bundle = sh_quote(bundle),
+        requirement = sh_quote(Path::new(requirement)),
+    )
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod admin_install_tests {
+    #[test]
+    fn the_root_step_checks_the_signature_of_its_own_copy_before_installing_it() {
+        use std::path::Path;
+        let command = super::admin_install_command(
+            Path::new("/tmp/x.mount/Mixel Remote.app"),
+            Path::new("/Applications/.Mixel Remote.app.update"),
+            Path::new("/Applications/.Mixel Remote.app.previous"),
+            Path::new("/Applications/Mixel Remote.app"),
+            "=anchor apple generic and identifier \"ch.mixel.remote\"",
+            "501",
+            "20",
+        );
+        let copy = command.find("/usr/bin/ditto").unwrap();
+        let check = command.find("/usr/bin/codesign --verify").unwrap();
+        let install = command.find("/bin/mv '/Applications/.Mixel Remote.app.update'").unwrap();
+        assert!(copy < check && check < install, "{command}");
+        assert!(command[check..install].contains("'/Applications/.Mixel Remote.app.update'"), "the copy is what is checked: {command}");
+    }
 }
 
 #[cfg(target_os = "linux")]

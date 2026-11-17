@@ -505,6 +505,16 @@ pub fn can_send_sas() -> bool {
     SIGNIN_HOST.load(Ordering::Acquire) || settings_path().is_file() || public_status().is_some()
 }
 const HELPER_PIPE: &str = r"\\.\pipe\MixelRemoteHelper";
+/// SYSTEM and administrators fully; signed-in (interactive) users may connect, read and write
+/// (`0x12019B` = generic read, write data, write attributes and extended attributes) but not
+/// create instances of the pipe: `FILE_CREATE_PIPE_INSTANCE` (0x4, part of GW) would let any user
+/// put up a pipe of this name and answer the SYSTEM sign-in host in the service's place
+/// (2.0.5-2.0.14 granted GRGW).
+const HELPER_PIPE_SDDL: &str = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x12019B;;;IU)";
+/// `SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION` for `CreateFileW`.
+const SECURITY_IDENTIFICATION: u32 = 0x0010_0000 | (1 << 16);
+/// The shortest time between two Ctrl+Alt+Del the helper sends.
+const SAS_SPACING: Duration = Duration::from_secs(1);
 
 /// Sends Ctrl+Alt+Del (the secure attention sequence) on this computer. Windows accepts it
 /// only from the service process, so the host asks the service over the local helper pipe.
@@ -515,7 +525,9 @@ pub fn send_sas() -> Result<(), String> {
     }
     let mut last = None;
     for _ in 0..20 {
-        match std::fs::OpenOptions::new().write(true).open(HELPER_PIPE) {
+        // Identification only: whoever answers on the pipe cannot act as this process.
+        use std::os::windows::fs::OpenOptionsExt;
+        match std::fs::OpenOptions::new().write(true).security_qos_flags(SECURITY_IDENTIFICATION).open(HELPER_PIPE) {
             Ok(mut pipe) => return pipe.write_all(b"sas\n").map_err(|_| "Ctrl+Alt+Del could not be sent".into()),
             Err(error) => last = Some(error),
         }
@@ -537,7 +549,7 @@ fn helper_pipe() {
         return;
     };
     let mut descriptor = PSECURITY_DESCRIPTOR::default();
-    let sddl = wide("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)");
+    let sddl = wide(HELPER_PIPE_SDDL);
     // SAFETY: sddl is a live null-terminated buffer; the descriptor lives for the thread.
     if unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(PCWSTR(sddl.as_ptr()), SDDL_REVISION_1, &mut descriptor, None) }.is_err() {
         log("helper pipe: no security descriptor");
@@ -550,6 +562,7 @@ fn helper_pipe() {
     };
     runtime.block_on(async move {
         let mut first = true;
+        let mut last_sas: Option<std::time::Instant> = None;
         while !STOP.load(Ordering::Acquire) {
             let mut options = tokio::net::windows::named_pipe::ServerOptions::new();
             options.first_pipe_instance(first).access_outbound(false);
@@ -569,7 +582,9 @@ fn helper_pipe() {
             let read = tokio::time::timeout(Duration::from_secs(2), server.read(&mut buffer)).await;
             if let Ok(Ok(count)) = read
                 && &buffer[..count] == b"sas\n"
+                && last_sas.is_none_or(|at: std::time::Instant| at.elapsed() >= SAS_SPACING)
             {
+                last_sas = Some(std::time::Instant::now());
                 match call_sas() {
                     Ok(()) => log("Ctrl+Alt+Del sent"),
                     Err(error) => log(&error),
@@ -858,6 +873,16 @@ async fn update_self() {
             return;
         }
     };
+    // The download folder may be one a user can write to: the checked program is copied into the
+    // service's own folder (SYSTEM and administrators only) and checked again there; only that copy
+    // is installed.
+    let installer = match protected_update_copy(&installer, &manifest.sha256) {
+        Ok(path) => path,
+        Err(error) => {
+            log(&format!("update not installed: {error}"));
+            return;
+        }
+    };
     use std::os::windows::process::CommandExt;
     // Detached helper (survives the service stop): swap the service program, start it again.
     let script = "sc.exe stop MixelRemoteSignIn | Out-Null; Start-Sleep 5; \
@@ -873,6 +898,24 @@ async fn update_self() {
     if spawned.is_err() {
         log("update helper could not start");
     }
+}
+
+/// Copies a downloaded, checked update into the service's folder, checks its SHA-256 and its
+/// signature again there, and returns the copy.
+fn protected_update_copy(downloaded: &std::path::Path, sha256: &str) -> Result<PathBuf, String> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(downloaded).map_err(|_| "Cannot read the update")?;
+    let target = folder().join("update-pending.exe");
+    let _ = std::fs::remove_file(&target);
+    std::fs::write(&target, &bytes).map_err(|_| "Cannot keep the update")?;
+    let copied = std::fs::read(&target).map_err(|_| "Cannot read the update")?;
+    let digest: String = Sha256::digest(&copied).iter().map(|byte| format!("{byte:02x}")).collect();
+    if !digest.eq_ignore_ascii_case(sha256) {
+        let _ = std::fs::remove_file(&target);
+        return Err("The update changed after it was checked".into());
+    }
+    crate::self_update::verify_windows_signature(&target)?;
+    Ok(target)
 }
 
 // ---------------- host ----------------

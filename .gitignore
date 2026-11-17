@@ -28,3 +28,6 @@ __pycache__/
 /next/crates/desktop_app/gen/
 
 /next/frontends/desktop/node_modules/
+
+# Lab runs (QA sessions, measurements); never committed
+/_lab/

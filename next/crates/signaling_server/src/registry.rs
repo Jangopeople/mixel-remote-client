@@ -190,6 +190,9 @@ pub struct Registry {
     max_peers: usize,
     max_sessions: usize,
     journal: SessionJournal,
+    /// Set only while `handle_limited_attended` runs: a plain request is handled as attended
+    /// (the person at the host decides) although the host has unattended access on.
+    force_attended: bool,
 }
 impl Default for Registry {
     fn default() -> Self {
@@ -517,6 +520,7 @@ impl Registry {
             max_peers: connections,
             max_sessions: connections,
             journal: SessionJournal::default(),
+            force_attended: false,
         }
     }
     /// Changes the limits; connections and sessions already open stay.
@@ -724,6 +728,24 @@ impl Registry {
     }
     /// Like `handle`; a new session request under `limit` is refused with `Busy` once the tenant
     /// holds `max_sessions` sessions, and the new session counts against that tenant.
+    /// As [`Self::handle_limited`], for a plain `Request` the policy service allowed only as
+    /// attended support: the host is asked for consent even when it has unattended access on.
+    pub fn handle_limited_attended(
+        &mut self,
+        from: u32,
+        generation: Uuid,
+        message: ClientMessage,
+        now: Instant,
+        limit: Option<SessionLimit>,
+    ) -> Result<(), ErrorCode> {
+        if !matches!(message, ClientMessage::Request { .. }) {
+            return Err(ErrorCode::Invalid);
+        }
+        self.force_attended = true;
+        let result = self.handle_limited(from, generation, message, now, limit);
+        self.force_attended = false;
+        result
+    }
     pub fn handle_limited(
         &mut self,
         from: u32,
@@ -955,8 +977,12 @@ impl Registry {
                 };
                 let requester = &self.peers[&from];
                 let target = self.peers.get(&host).ok_or(ErrorCode::Unavailable)?;
+                // A plain request to a host with unattended access on is unattended when the
+                // policy service allows that controller unattended access to this computer; when
+                // it allows only attended support, the server handles it as attended
+                // (`handle_limited_attended`) and the person at the host decides.
                 let unattended = matches!(message, ClientMessage::RequestUnattended { .. })
-                    || (offered.is_none() && target.unattended_enabled);
+                    || (offered.is_none() && target.unattended_enabled && !self.force_attended);
                 if from == host
                     || !requester.can_request(target, unattended)
                     || (unattended && !target.unattended_enabled)

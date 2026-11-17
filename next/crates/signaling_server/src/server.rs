@@ -445,23 +445,46 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                                         ClientMessage::Decide { session, accept: true } if check.unattended => Some(*session),
                                         _ => None,
                                     };
-                                    let g = state.support_allowed(&check.pair, check.unattended, audit).await;
-                                    eprintln!("policy check from={id} msg={:?} unattended={} allowed={}", std::mem::discriminant(&message), check.unattended, g.is_some());
-                                    g
+                                    state.support_allowed(&check.pair, check.unattended, audit).await
                                 },
-                                None => {
-                                    eprintln!("policy_for_message returned None for from={id} msg={:?}", std::mem::discriminant(&message));
-                                    None
-                                },
+                                None => None,
                             };
+                            // A plain request to a host with unattended access on: when the policy
+                            // service does not allow this controller unattended access, it may still
+                            // allow attended support. The request then goes to the person at the host
+                            // as a question instead of failing (2.0.5-2.0.14 refused it, so every
+                            // technician without an unattended grant could no longer connect).
+                            let (check, grant, attended_fallback) = match (check, grant) {
+                                (Some(unattended_check), None)
+                                    if unattended_check.unattended
+                                        && matches!(message, ClientMessage::Request { .. }) =>
+                                {
+                                    let attended = crate::registry::PolicyCheck { unattended: false, ..unattended_check };
+                                    match state.support_allowed(&attended.pair, false, None).await {
+                                        Some(grant) => (Some(attended), Some(grant), true),
+                                        None => (Some(attended), None, false),
+                                    }
+                                }
+                                (check, grant) => (check, grant, false),
+                            };
+                            if grant.is_none() {
+                                eprintln!("policy refused from={id} unattended={}", check.as_ref().is_some_and(|check| check.unattended));
+                            }
                             let now = Instant::now();
                             let unix = unix_now();
                             if !authorization_live(expires_at, authorized_at, now, unix) { break; }
                             let result = match state.registry.lock() {
                                 Ok(mut registry) => {
-                                    if let Some(grant) = grant.filter(|_| registry.policy_for_message(id, generation, &message, unix) == check) {
+                                    let current = registry
+                                        .policy_for_message(id, generation, &message, unix)
+                                        .map(|current| if attended_fallback { crate::registry::PolicyCheck { unattended: false, ..current } } else { current });
+                                    if let Some(grant) = grant.filter(|_| current == check) {
                                         // A SaaS tenant's plan limits its sessions at once.
-                                        registry.handle_limited(id, generation, message, now, grant.limit)
+                                        if attended_fallback {
+                                            registry.handle_limited_attended(id, generation, message, now, grant.limit)
+                                        } else {
+                                            registry.handle_limited(id, generation, message, now, grant.limit)
+                                        }
                                     } else {
                                         if let Some(check) = check
                                             && let ClientMessage::Decide { session, .. } | ClientMessage::Restart { session } = message

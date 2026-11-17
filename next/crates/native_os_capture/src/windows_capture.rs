@@ -190,6 +190,9 @@ impl Drop for Mapped<'_> {
         }
     }
 }
+/// The shortest time between two pictures when only GDI can copy the screen.
+const GDI_ONLY_INTERVAL: Duration = Duration::from_millis(33);
+
 pub struct WindowsCapture {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
@@ -198,6 +201,8 @@ pub struct WindowsCapture {
     display: Display,
     fallback: Option<gdi::GdiCapture>,
     received_visible_frame: bool,
+    /// GDI-only capture (no desktop duplication): the last picture, to tell an unchanged screen.
+    last_gdi_only: Option<Vec<u8>>,
     staging: Option<(u32, u32, ID3D11Texture2D)>,
 }
 impl WindowsCapture {
@@ -268,6 +273,7 @@ impl WindowsCapture {
                 display: display.clone(),
                 fallback: None,
                 received_visible_frame: false,
+                last_gdi_only: None,
                 staging: None,
             }),
             Err(error) => {
@@ -282,6 +288,7 @@ impl WindowsCapture {
                         display: display.clone(),
                         fallback: Some(fallback),
                         received_visible_frame: false,
+                        last_gdi_only: None,
                         staging: None,
                     });
                 }
@@ -308,8 +315,17 @@ impl WindowsCapture {
                 .map(Some);
         }
         let Some(duplication) = self.duplication.clone() else {
-            std::thread::sleep(timeout.clamp(Duration::from_millis(1), Duration::from_millis(8)));
-            return self.fallback_frame().map(Some);
+            // Windows refused desktop duplication for this display, so every picture is a GDI copy
+            // of the whole screen (slow, and done on this thread). At most about 30 a second, and an
+            // unchanged screen is no new picture: the snapshot of 2.0.5-2.0.14 copied and encoded the
+            // whole screen every 8 ms whether anything changed or not.
+            std::thread::sleep(timeout.clamp(GDI_ONLY_INTERVAL, Duration::from_millis(100)));
+            let frame = self.fallback_frame()?;
+            if self.last_gdi_only.as_deref() == Some(frame.pixels()) {
+                return Ok(None);
+            }
+            self.last_gdi_only = Some(frame.pixels().to_vec());
+            return Ok(Some(frame));
         };
         let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
         let mut resource = None;

@@ -808,7 +808,9 @@ impl RemoteSession {
         inner.commands = Some(tx.clone());
         crate::agent::start(self.clone(), tx.clone());
         inner.video = Some(video.clone());
-        let default_unattended = if !crate::service_config::controller_only() {
+        // Unattended access is on by default, unless the owner turned it off on this computer:
+        // that choice is kept across restarts (2.0.5-2.0.14 switched it back on at every start).
+        let default_unattended = if !crate::service_config::controller_only() && !unattended_choice::turned_off() {
             session_platform::main_display_source()
                 .map(|source| UnattendedSource {
                     source,
@@ -988,11 +990,13 @@ impl RemoteSession {
                 .ok_or("Connect this device first")?
                 .try_send(Command::ConfigureUnattended { enabled: true })
                 .map_err(|_| "The connection service is busy")?;
+            unattended_choice::remember(false);
             inner.status.unattended = Some(config);
             inner.status.unattended_pending = Some(UnattendedChange::Enabling);
             return Ok(());
         }
 
+        unattended_choice::remember(true);
         if inner.status.unattended.take().is_none() {
             return Ok(());
         }
@@ -2704,22 +2708,19 @@ async fn run(
                             }
                             if ticket.identity.profile!=*requester.as_bytes(){return Err("The requester account does not match its signed identity".into());}
                             let status=state.status().await;
-                            let is_unattended=unattended || status.unattended_enabled;
+                            // Only the connection service says a request is unattended: it does so for a
+                            // controller the policy service allows unattended access to this computer, or
+                            // for a correct support password. A plain request it handles as attended is
+                            // asked about here, also when unattended access is on (2.0.5-2.0.14 accepted
+                            // every request without asking as soon as unattended access was on).
+                            let is_unattended=unattended;
                             let auto=if is_unattended {
-                                let config=status
-                                    .unattended
-                                    .filter(|config|(status.unattended_enabled || status.code_required) && config.capture_allowed())
-                                    .or_else(|| {
-                                        (status.unattended_enabled || status.code_required)
-                                            .then(session_platform::main_display_source)
-                                            .flatten()
-                                            .map(|source| UnattendedSource {
-                                                source,
-                                                control: session_platform::input_access(),
-                                            })
-                                            .filter(UnattendedSource::capture_allowed)
-                                    });
-                                let Some(config)=config else { send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;continue; };
+                                let Some(config)=automatic_source(&status, || {
+                                    session_platform::main_display_source().map(|source| UnattendedSource {
+                                        source,
+                                        control: session_platform::input_access(),
+                                    })
+                                }) else { send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;continue; };
                                 Some(config)
                             }else{None};
                             let expires=Arc::new(AtomicU64::new(ticket.expires_at));
@@ -2728,7 +2729,8 @@ async fn run(
                             state.change(generation,|status|{status.phase="incoming".into();status.message="Incoming request: choose a source and Accept or Reject".into();status.peer=Some(requester_connection);status.requester=Some(requester);status.sharing=true;status.unattended_session=is_unattended;}).await;
                             if let Some(config)=auto {
                                 let full=!session_platform::login_window_mode();
-                                let control=config.control || (config.source != "qa-relay-fixture" && session_platform::input_access());
+                                // The owner's choice for unattended sessions: view only stays view only.
+                                let control=unattended_control(&config, session_platform::input_access());
                                 let decision=Decision{session,accept:true,source:config.source,confirm:true,
                                     control,clipboard:full,files:full,chat:full,recording:full};
                                 if state.decide(decision).await.is_err() {
@@ -3491,3 +3493,124 @@ mod consent_tests {
 #[cfg(all(test, any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 #[path = "remote_session_native_test.rs"]
 mod remote_session_native_test;
+
+/// What an unattended request (the connection service said so: an allowed controller or a correct
+/// support password) is accepted with, without asking: the source the owner chose, else the main
+/// display; nothing when neither unattended access nor a support password is on here.
+fn automatic_source(status: &Status, main_display: impl FnOnce() -> Option<UnattendedSource>) -> Option<UnattendedSource> {
+    if !(status.unattended_enabled || status.code_required) {
+        return None;
+    }
+    status
+        .unattended
+        .clone()
+        .filter(UnattendedSource::capture_allowed)
+        .or_else(|| main_display().filter(UnattendedSource::capture_allowed))
+}
+
+/// Keyboard and mouse in an unattended session: only when the owner allowed control for it and
+/// this computer can apply input (2.0.5-2.0.14 gave control whenever input was possible).
+fn unattended_control(config: &UnattendedSource, input_access: bool) -> bool {
+    config.control && config.source != "qa-relay-fixture" && input_access
+}
+
+#[cfg(test)]
+mod automatic_tests {
+    use super::*;
+
+    fn source(control: bool) -> UnattendedSource {
+        UnattendedSource { source: "qa-relay-fixture".into(), control }
+    }
+
+    #[test]
+    fn nothing_is_accepted_without_asking_unless_unattended_or_a_password_is_on() {
+        let status = Status::default();
+        assert!(automatic_source(&status, || Some(source(true))).is_none());
+        let status = Status { unattended: Some(source(true)), ..Status::default() };
+        assert!(automatic_source(&status, || Some(source(true))).is_none(), "a source alone is not consent");
+    }
+
+    #[test]
+    fn view_only_unattended_access_never_gives_control() {
+        let display = UnattendedSource { source: "display:1".into(), control: false };
+        assert!(!unattended_control(&display, true));
+        let display = UnattendedSource { source: "display:1".into(), control: true };
+        assert!(unattended_control(&display, true));
+        assert!(!unattended_control(&display, false));
+    }
+}
+
+/// The owner's choice about unattended access on this computer, kept across restarts: a file
+/// `unattended-off` in the app's folder for the OS user while it is turned off.
+mod unattended_choice {
+    use std::path::{Path, PathBuf};
+
+    fn folder() -> Option<PathBuf> {
+        // Unit tests never touch the real app's folder of the person running them.
+        #[cfg(test)]
+        {
+            Some(std::env::temp_dir().join(format!("mixel-unattended-tests-{}", std::process::id())))
+        }
+        #[cfg(all(not(test), target_os = "windows"))]
+        {
+            crate::device_identity::windows_store_location(None)
+                .ok()
+                .and_then(|path| path.parent().map(Path::to_path_buf))
+        }
+        #[cfg(all(not(test), target_os = "macos"))]
+        {
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join("Library/Application Support/Mixel Remote"))
+        }
+        #[cfg(all(not(test), not(any(target_os = "windows", target_os = "macos"))))]
+        {
+            std::env::var_os("XDG_CONFIG_HOME")
+                .map(PathBuf::from)
+                .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+                .map(|base| base.join("mixel-remote"))
+        }
+    }
+
+    pub(super) fn turned_off() -> bool {
+        folder().is_some_and(|folder| turned_off_in(&folder))
+    }
+
+    pub(super) fn remember(off: bool) {
+        if let Some(folder) = folder() {
+            remember_in(&folder, off);
+        }
+    }
+
+    fn marker(folder: &Path) -> PathBuf {
+        folder.join("unattended-off")
+    }
+
+    pub(super) fn turned_off_in(folder: &Path) -> bool {
+        marker(folder).is_file()
+    }
+
+    pub(super) fn remember_in(folder: &Path, off: bool) {
+        if off {
+            let _ = std::fs::create_dir_all(folder);
+            let _ = std::fs::write(marker(folder), b"1");
+        } else {
+            let _ = std::fs::remove_file(marker(folder));
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn turning_unattended_access_off_is_kept_until_it_is_turned_on() {
+            let folder = std::env::temp_dir().join(format!("mixel-unattended-choice-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&folder);
+            assert!(!super::turned_off_in(&folder), "on by default");
+            super::remember_in(&folder, true);
+            assert!(super::turned_off_in(&folder), "off is kept (a restart reads it again)");
+            super::remember_in(&folder, true);
+            assert!(super::turned_off_in(&folder));
+            super::remember_in(&folder, false);
+            assert!(!super::turned_off_in(&folder), "on again");
+            let _ = std::fs::remove_dir_all(&folder);
+        }
+    }
+}
