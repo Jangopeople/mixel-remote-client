@@ -853,7 +853,8 @@ impl App {
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |now| now.as_secs());
         let attempt = state.workspace.attempt.as_ref().map(|attempt| attempt.peer);
         if let Some(refusal) = state.raw.last_refusal.as_ref().filter(|refusal| Some(refusal.peer) == attempt && now.saturating_sub(refusal.at) < 120) {
-            return i18n::engine(&refusal.message);
+            let unattended = state.workspace.attempt.as_ref().is_some_and(|attempt| attempt.unattended);
+            return unattended.then(|| logic::unattended_refusal_advice(&refusal.message)).flatten().unwrap_or_else(|| i18n::engine(&refusal.message));
         }
         if state.raw.message.is_empty() || state.raw.phase == "ready" {
             t("The connection was not established. The other side declined, did not answer, or unattended access is not allowed.")
@@ -1313,6 +1314,25 @@ impl App {
         let tenant = self.tenant_id().ok_or("No company")?;
         let app = self.clone();
         self.result_of(self.device_change(Box::pin(async move { app.perform("saas_move_device", json!({ "tenant": tenant, "device": device, "group": group })).await })).await, |state| state.devices.error.clone())
+    }
+
+    /// The people who may connect to `device` without being asked (grants + the company's members).
+    pub async fn unattended_who(self: &Rc<Self>, device: String) -> Result<Vec<crate::models::GrantRow>, String> {
+        let tenant = self.tenant_id().ok_or("No company")?;
+        let read = async {
+            let grants: Vec<crate::models::UnattendedGrant> = self.run("remote_admin_unattended_grants", json!({ "device": device })).await?;
+            let members: Vec<crate::models::Member> = self.run("saas_members", json!({ "tenant": tenant })).await?;
+            Ok::<_, String>(logic::grant_rows(&members, &grants))
+        };
+        read.await.map_err(|text| {
+            if text.contains("not_saas") { t("The people who may connect to this computer are managed in the administration console of its company.") } else { text }
+        })
+    }
+
+    pub async fn set_unattended_grant(self: &Rc<Self>, device: String, user: String, granted: bool) -> Result<(), String> {
+        self.perform("remote_admin_set_unattended_grant", json!({ "device": device, "user": user, "granted": granted })).await.map_err(|text| {
+            if text.contains("invalid_user") { t("This person cannot be given access to this computer.") } else { text }
+        })
     }
 
     pub async fn remove_device(self: &Rc<Self>, device: String) -> Result<(), String> {

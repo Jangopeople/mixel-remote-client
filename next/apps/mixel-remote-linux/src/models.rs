@@ -842,3 +842,25 @@ impl AdminDevice {
         }
     }
 }
+
+/// One row of `remote_admin_unattended_grants`: a per-user grant, or automatic access from the company setting.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct UnattendedGrant {
+    pub user_id: String,
+    pub name: Option<String>,
+    pub role: Option<String>,
+    /// `company_setting` for automatic access (read-only); `grant` (or absent) for a per-user grant.
+    pub source: Option<String>,
+}
+
+/// One person in the "Who may connect" list.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GrantRow {
+    pub user_id: String,
+    pub name: String,
+    pub email: String,
+    pub role: String,
+    pub granted: bool,
+    pub automatic: bool,
+}

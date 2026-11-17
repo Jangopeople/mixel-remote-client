@@ -606,6 +606,10 @@ impl DevicesPage {
                 let (a, chosen) = (app.clone(), device.clone());
                 items.push(Some((t("Move to group…"), writable, Box::new(move || move_dialog(&a, &chosen)))));
             }
+            if company.deploys() {
+                let (a, chosen) = (app.clone(), device.clone());
+                items.push(Some((t("Unattended access: who may connect…"), true, Box::new(move || who_dialog(&a, &chosen)))));
+            }
             items.push(None);
             let (a, chosen) = (app.clone(), device.clone());
             items.push(Some((t("Remove…"), true, Box::new(move || remove_dialog(&a, &chosen)))));
@@ -657,6 +661,74 @@ fn rename_dialog(app: &Rc<App>, device: &Device) {
         let (a, id) = (a.clone(), id.clone());
         Box::pin(async move { a.rename_device(id, values[0].trim().to_owned()).await })
     }));
+}
+
+/// "Unattended access, Who may connect…": the company's technicians with a switch each (owners and administrators only).
+fn who_dialog(app: &Rc<App>, device: &Device) {
+    let Some(parent) = window(app) else { return };
+    let (dialog, content, actions) = dialogs::window(&parent, &t("Who may connect…"), 440);
+    content.append(&dim(&tf("People who may connect to %@ (%@) without anyone there being asked.", &[&device.name, &format::remote_id(Some(device.connection_id))])));
+    let list = vbox(8);
+    let problem = dim("");
+    problem.add_css_class("error");
+    content.append(&list);
+    content.append(&problem);
+    let close = dialog.clone();
+    let done = button(&t("Done"), move || close.close());
+    actions.append(&done);
+    dialog.present();
+    let (a, device_id) = (app.clone(), device.device.clone());
+    list.append(&dim(&t("Loading…")));
+    app.spawn(async move {
+        let rows = a.unattended_who(device_id.clone()).await;
+        while let Some(child) = list.first_child() {
+            list.remove(&child);
+        }
+        let rows = match rows {
+            Ok(rows) => rows,
+            Err(text) => {
+                list.append(&dim(&if text.is_empty() { t("The list could not be read.") } else { crate::i18n::engine(&text) }));
+                return;
+            }
+        };
+        if rows.is_empty() {
+            list.append(&dim(&t("This company has no other technicians.")));
+        }
+        for row in rows {
+            let line = hbox(12);
+            let title = format!("{} · {}{}", row.name, row.role, if row.automatic { format!(" · {}", t("automatic (company setting)")) } else { String::new() });
+            let name = gtk::Label::builder().label(title).xalign(0.0).hexpand(true).wrap(true).build();
+            let switch = gtk::Switch::builder().active(row.granted || row.automatic).sensitive(!row.automatic).valign(gtk::Align::Center).build();
+            switch.update_property(&[gtk::accessible::Property::Label(&row.name)]);
+            let (app, device_id, user, problem) = (a.clone(), device_id.clone(), row.user_id.clone(), problem.clone());
+            let settling = std::rc::Rc::new(std::cell::Cell::new(false));
+            switch.connect_state_set(move |switch, wanted| {
+                if settling.get() {
+                    return gtk::glib::Propagation::Proceed;
+                }
+                let (app, device_id, user, problem, settling, switch) = (app.clone(), device_id.clone(), user.clone(), problem.clone(), settling.clone(), switch.clone());
+                switch.set_sensitive(false);
+                gtk::glib::spawn_future_local(async move {
+                    match app.set_unattended_grant(device_id, user, wanted).await {
+                        Ok(()) => problem.set_text(""),
+                        Err(text) => {
+                            problem.set_text(&text);
+                            settling.set(true);
+                            switch.set_active(!wanted);
+                            switch.set_state(!wanted);
+                            settling.set(false);
+                        }
+                    }
+                    switch.set_sensitive(true);
+                });
+                // The switch shows the new state at once; a refusal puts it back.
+                gtk::glib::Propagation::Proceed
+            });
+            line.append(&name);
+            line.append(&switch);
+            list.append(&line);
+        }
+    });
 }
 
 fn remove_dialog(app: &Rc<App>, device: &Device) {

@@ -808,9 +808,55 @@ pub fn report_day(text: &str) -> Option<String> {
     (text.len() == 10 && format::parse_time(&format!("{text}T00:00:00Z")).is_some()).then(|| text.to_owned())
 }
 
+/// The people of the company who may connect to a device without being asked: owners, administrators and
+/// technicians, each with their grant, sorted by name (an empty name shows the e-mail).
+pub fn grant_rows(members: &[Member], grants: &[UnattendedGrant]) -> Vec<GrantRow> {
+    let mut rows: Vec<GrantRow> = members
+        .iter()
+        .filter(|member| matches!(member.role.as_str(), "owner" | "admin" | "technician"))
+        .map(|member| GrantRow {
+            user_id: member.user_id.clone(),
+            name: if member.name.is_empty() { member.email.clone() } else { member.name.clone() },
+            email: member.email.clone(),
+            role: member.role.clone(),
+            granted: grants.iter().any(|grant| grant.user_id == member.user_id && grant.source.as_deref() != Some("company_setting")),
+            automatic: grants.iter().any(|grant| grant.user_id == member.user_id && grant.source.as_deref() == Some("company_setting")),
+        })
+        .collect();
+    rows.sort_by_key(|row| row.name.to_lowercase());
+    rows
+}
+
+/// The sentence for a refused unattended request: the engine's "not available to you" does not say what to do.
+/// `None` when the message is not that refusal.
+pub fn unattended_refusal_advice(engine_message: &str) -> Option<String> {
+    engine_message.starts_with("The remote device is not available to you").then(|| {
+        t("This computer did not accept an unattended connection from you. Ask an admin to allow you unattended access to this computer (its menu in Devices, Unattended access, Who may connect…), or connect and ask the person there to accept.")
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn who_may_connect_lists_owners_admins_and_technicians_with_their_grants() {
+        let member = |id: &str, name: &str, role: &str| Member { user_id: id.into(), name: name.into(), email: format!("{id}@example.com"), role: role.into(), ..Default::default() };
+        let members = [member("u2", "", "technician"), member("u1", "Anna", "owner"), member("u3", "Bob", "viewer"), member("u4", "cleo", "admin")];
+        let grant = |id: &str, source: &str| UnattendedGrant { user_id: id.into(), source: Some(source.into()), ..Default::default() };
+        let rows = grant_rows(&members, &[grant("u2", "grant"), grant("u4", "company_setting")]);
+        assert_eq!(rows.iter().map(|row| row.user_id.as_str()).collect::<Vec<_>>(), ["u1", "u4", "u2"], "viewers left out, sorted by name, the e-mail stands in for no name");
+        assert_eq!(rows.iter().map(|row| row.granted).collect::<Vec<_>>(), [false, false, true]);
+        assert_eq!(rows.iter().map(|row| row.automatic).collect::<Vec<_>>(), [false, true, false]);
+        assert_eq!(grant_rows(&members, &[UnattendedGrant { user_id: "u1".into(), ..Default::default() }])[0].granted, true, "no source reads as a grant");
+    }
+
+    #[test]
+    fn a_refused_unattended_request_tells_the_person_to_ask_an_admin() {
+        let advice = unattended_refusal_advice("The remote device is not available to you. Ask the other person to make their computer available.").expect("the refusal is recognised");
+        assert!(advice.contains("Ask an admin to allow you unattended access to this computer"));
+        assert!(unattended_refusal_advice("The remote device is busy.").is_none());
+    }
 
     #[test]
     fn a_password_session_warns_at_five_minutes_and_one_minute_and_says_when_it_ends() {
