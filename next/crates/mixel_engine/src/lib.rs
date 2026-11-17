@@ -42,6 +42,7 @@ pub mod agent;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod ai_assistant;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
+pub mod agent_verify;
 pub mod self_update;
 pub mod update_gate;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]

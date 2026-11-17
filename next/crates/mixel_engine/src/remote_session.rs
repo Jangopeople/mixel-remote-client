@@ -35,6 +35,20 @@ use zeroize::Zeroize;
 /// Session features of this app: colleagues can join, sides can be switched.
 pub const JOIN: &str = signaling_server::protocol::FEATURE_JOIN;
 pub const SWITCH: &str = signaling_server::protocol::FEATURE_SWITCH;
+const ENDING: &str = signaling_server::protocol::FEATURE_ENDING;
+const POLICY: &str = signaling_server::protocol::FEATURE_POLICY;
+const RESUME: &str = signaling_server::protocol::FEATURE_RESUME;
+const SIGNED: &str = signaling_server::protocol::FEATURE_SIGNED;
+/// `macos-arm64`, `windows-x64`, `linux-x64`: what the Devices list shows next to the version.
+fn app_platform() -> String {
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        "x86_64" => "x64",
+        other => other,
+    };
+    let text = format!("{}-{arch}", std::env::consts::OS);
+    if text.len() <= 32 && text.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') { text } else { "unknown".into() }
+}
 
 #[derive(Clone, Serialize)]
 pub struct Status {
@@ -98,8 +112,48 @@ pub struct Status {
     pub switched: bool,
     /// Optional features the app on the other side announced (`join`, `switch`, …).
     pub peer_features: Vec<String>,
+    /// The connection to the connection service was lost and is being restored; the session itself (its
+    /// media connection) is kept and resumes (feature `resume`). The window stays open and says so.
+    pub reconnecting: bool,
+    /// D2: this session was opened with a support password and ends by itself (2 hours after it connected).
+    /// `ends_at` is the broker's countdown once known (5-minute and 1-minute warnings).
+    pub password_session: Option<PasswordSessionView>,
+    /// D1: the administrator's setting for unattended access on this device (`device_policy`), when known.
+    pub unattended_allowed: Option<bool>,
+    #[serde(skip)]
+    password_ends: Option<std::time::Instant>,
+    #[serde(skip)]
+    password_flag: bool,
     #[serde(skip)]
     code_expires_at: Option<std::time::Instant>,
+}
+/// `remote_status.password_session`.
+#[derive(Clone, Serialize)]
+pub struct PasswordSessionView {
+    /// ISO 8601 UTC, when the broker's limit ends the session (None until known).
+    pub ends_at: Option<String>,
+    pub seconds_left: Option<u64>,
+}
+/// Seconds since 1970 as `2026-11-17T12:00:00Z`.
+pub(crate) fn iso_utc(seconds: u64) -> String {
+    let days = (seconds / 86_400) as i64;
+    let rest = seconds % 86_400;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if month <= 2 { year + 1 } else { year };
+    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", rest / 3600, rest % 3600 / 60, rest % 60)
+}
+/// "This support session ends in 5 minutes (support password limit). Ask for a new password to continue."
+fn ending_message(seconds: u32) -> String {
+    let when = if seconds <= 60 { "1 minute".to_owned() } else { format!("{} minutes", seconds.div_ceil(60)) };
+    format!("This support session ends in {when} (support password limit). Ask for a new password to continue.")
 }
 /// A colleague connected to (or asking for) this computer next to the first technician.
 #[derive(Clone, Serialize)]
@@ -180,6 +234,11 @@ impl Default for Status {
             joined_session: false,
             switched: false,
             peer_features: Vec::new(),
+            reconnecting: false,
+            password_session: None,
+            unattended_allowed: None,
+            password_ends: None,
+            password_flag: false,
             code_expires_at: None,
         }
     }
@@ -691,7 +750,12 @@ impl RemoteSession {
         inner.status.message = message;
     }
     pub async fn status(&self) -> Status {
-        let inner = self.0.lock().await;
+        let mut inner = self.0.lock().await;
+        if !crate::update_gate::phase_busy(&inner.status.phase) {
+            // Nothing running: the countdown of an ended password session must not reach the next one.
+            inner.status.password_flag = false;
+            inner.status.password_ends = None;
+        }
         let mut status = inner.status.clone();
         if status.phase == "active" && !status.sharing {
             status.recording = status.session.and_then(|session| self.recording_hub().view(session));
@@ -731,6 +795,14 @@ impl RemoteSession {
         status.input_access = !crate::service_config::controller_only()
             && session_platform::input_access();
         crate::update_gate::observe_phase(&status.phase);
+        if crate::update_gate::phase_busy(&status.phase) && (status.password_flag || status.password_ends.is_some()) {
+            let now = std::time::Instant::now();
+            let left = status.password_ends.map(|end| end.saturating_duration_since(now).as_secs());
+            let unix = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |time| time.as_secs());
+            status.password_session = Some(PasswordSessionView { ends_at: left.map(|left| iso_utc(unix + left)), seconds_left: left });
+        } else {
+            status.password_session = None;
+        }
         status
     }
     pub async fn connect(&self, auth: AccountAuth, identity: Arc<IdentityState>) -> Result<(), String> {
@@ -2102,10 +2174,40 @@ async fn event(socket: &mut Socket) -> Result<Option<ServerMessage>, Failure> {
         _ => Err("The connection service sent an invalid message".into()),
     }
 }
-struct AttemptGuard(Arc<AtomicBool>);
+struct AttemptGuard(Arc<AtomicBool>, bool);
+impl AttemptGuard {
+    fn disarm(mut self) -> Self {
+        self.1 = true;
+        self
+    }
+}
 impl Drop for AttemptGuard {
     fn drop(&mut self) {
-        self.0.store(true, Ordering::Release);
+        if !self.1 {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+}
+/// How long a session whose connection to the connection service was lost waits to be resumed.
+const RESUME_WINDOW: Duration = Duration::from_secs(30);
+/// A session carried from one registration to the next while the connection service restarts.
+struct Carry {
+    peer: Peer,
+    attempt: Arc<AtomicBool>,
+    lease: BrokerLease,
+    since: std::time::Instant,
+}
+impl Peer {
+    /// Whether the session's media connection is established and nothing about it is in flight: only such a
+    /// session can be resumed after the connection to the connection service was lost.
+    fn resumable(&self) -> bool {
+        !self.cancel.load(Ordering::Acquire)
+            && self.signals.is_some()
+            && self.identity.is_some()
+            && self.nonce.is_none()
+            && self.restart_pending.is_none()
+            && !self.close_sent
+            && self.local_consent != Some(false)
     }
 }
 async fn cancelled(cancel: &AtomicBool) {
@@ -2130,12 +2232,15 @@ async fn supervise(
     drop(initial);
     let mut backoff = Backoff::default();
     let mut ever_ready = false;
+    // A session whose media connection survives a lost connection to the connection service (resume).
+    let mut keep: Option<Carry> = None;
     loop {
         if cancel.load(Ordering::Acquire) {
             return Ok(());
         }
-        let attempt = Arc::new(AtomicBool::new(false));
-        let guard = AttemptGuard(attempt.clone());
+        // The kept session's media is bound to the registration's flag: the next registration continues it.
+        let attempt = keep.as_ref().map_or_else(|| Arc::new(AtomicBool::new(false)), |kept| kept.attempt.clone());
+        let guard = AttemptGuard(attempt.clone(), false);
         let result = match auth.credential(Some(&attempt)).await {
             Ok(credential) => {
                 let principal = auth.principal(&credential)?;
@@ -2147,12 +2252,14 @@ async fn supervise(
                 }
                 tokio::select! {
                     _=cancelled(&cancel)=>Ok(()),
-                    result=run(state,generation,auth.clone(),identity.clone(),url.clone(),credential,attempt,tx.clone(),&mut commands,video.clone())=>result,
+                    result=run(state,generation,auth.clone(),identity.clone(),url.clone(),credential,attempt,tx.clone(),&mut commands,video.clone(),&mut keep)=>result,
                 }
             }
             Err(message) if ever_ready => Err(Failure::network(&message)),
             Err(message) => return Err(message),
         };
+        // A session kept for resuming must not cancel the registration flag its media listens to.
+        let guard = if keep.is_some() { guard.disarm() } else { guard };
         drop(guard);
         let mut error = match result {
             Ok(()) => return Ok(()),
@@ -2173,9 +2280,26 @@ async fn supervise(
         if !error.retryable {
             return Err(error.message);
         }
+        if keep.as_ref().is_some_and(|kept| kept.since.elapsed() >= RESUME_WINDOW) {
+            keep = None;
+        }
         let delay=backoff.next(error.registered_for).ok_or_else(||format!("{}; automatic reconnect attempts exhausted. Register this computer again when the network is available.",error.message))?;
+        if keep.is_some() {
+            // The session stays open: only the connection to the connection service is restored.
+            state
+                .change(generation, |status| {
+                    status.reconnecting = true;
+                    status.message = "Reconnecting… the session stays open".into();
+                })
+                .await;
+            tokio::select! {_ = cancelled(&cancel)=>return Ok(()),_ = tokio::time::sleep(delay.min(Duration::from_secs(2)))=>{}}
+            continue;
+        }
         state
             .change(generation, |status| {
+                status.reconnecting = false;
+                status.password_flag = false;
+                status.password_ends = None;
                 status.phase = "connecting".into();
                 status.session = None;
                 status.peer = None;
@@ -2214,7 +2338,19 @@ async fn run(
     tx: mpsc::Sender<Command>,
     commands: &mut mpsc::Receiver<Command>,
     video: Arc<VideoMailbox>,
+    keep: &mut Option<Carry>,
 ) -> Result<(), Failure> {
+    // A session carried over from the registration that was lost: it resumes once this one is ready.
+    let carried = keep.take();
+    let carried_since = carried.as_ref().map(|kept| kept.since);
+    let mut peer: Option<Peer> = None;
+    let mut resuming: Option<std::time::Instant> = None;
+    let mut end_when_resumed = false;
+    let mut carried_lease: Option<BrokerLease> = None;
+    if let Some(kept) = carried {
+        carried_lease = Some(kept.lease);
+        peer = Some(kept.peer);
+    }
     let enrolled = auth.enrollment(&initial, &identity).await?;
     let device = enrolled.device;
     let principal = auth.principal(&initial)?.clone();
@@ -2237,10 +2373,10 @@ async fn run(
     .await
     .map_err(|_| Failure::network("Secure connection timed out"))?
     .map_err(crate::remote_recovery::socket)?;
-    let broker_lease = Arc::new(std::sync::Mutex::new((
-        own_ticket.expires_at,
-        std::time::Instant::now() + Duration::from_secs(899),
-    )));
+    let broker_lease = carried_lease.unwrap_or_else(|| Arc::new(std::sync::Mutex::new((0, std::time::Instant::now()))));
+    if let Ok(mut lease) = broker_lease.lock() {
+        *lease = (own_ticket.expires_at, std::time::Instant::now() + Duration::from_secs(899));
+    }
     let _lease_task = watch_lease(
         state.clone(),
         generation,
@@ -2263,7 +2399,12 @@ async fn run(
                 if !source.capture_allowed() {
                     return Err("The sign-in screen host is missing the required system permissions".into());
                 }
+                let carried_session = peer.is_some();
                 state.change(generation, |status| {
+                    if carried_session {
+                        status.host = Some(enrolled.connection_id);
+                        return;
+                    }
                     status.phase = "ready".into();
                     status.message = "Verifying unattended startup sharing".into();
                     status.host = Some(enrolled.connection_id);
@@ -2273,7 +2414,12 @@ async fn run(
                 send(&mut socket, ClientMessage::ConfigureUnattended { enabled: true }).await?;
             }
             _ => {
+                let carried_session = peer.is_some();
                 state.change(generation, |status| {
+                    if carried_session {
+                        status.host = Some(enrolled.connection_id);
+                        return;
+                    }
                     status.phase = "ready".into();
                     status.host = Some(enrolled.connection_id);
                     if status.unattended.is_some() {
@@ -2296,11 +2442,20 @@ async fn run(
         let mut last_delegation_attempt=std::time::Instant::now();
         // Second technicians and switching sides: announced to the connection service, which
         // forwards invitations and switches only to apps that understand them.
-        let features:Vec<String>=if own_ticket.unattended_host_only() || crate::service_config::controller_only() {vec![JOIN.into()]} else {vec![JOIN.into(),SWITCH.into()]};
+        let mut features:Vec<String>=if own_ticket.unattended_host_only() || crate::service_config::controller_only() {vec![JOIN.into()]} else {vec![JOIN.into(),SWITCH.into()]};
+        // Password-session warnings, the administrator's device policy, resuming a session after the connection
+        // service restarted, and signed remote commands (verified in `agent_verify`).
+        features.extend([ENDING.into(),POLICY.into(),RESUME.into(),SIGNED.into()]);
         send(&mut socket,ClientMessage::Capabilities{features}).await?;
+        send(&mut socket,ClientMessage::AppVersion{version:crate::agent::APP_VERSION.into(),platform:app_platform()}).await?;
         // An older connection service answers "invalid": then these features are simply not offered.
         let capabilities_sent=std::time::Instant::now();
-        let mut peer:Option<Peer>=None;
+        if let Some(kept) = peer.as_ref() {
+            // The media connection of the running session is still up: ask the connection service to continue it.
+            let session = kept.id;
+            send(&mut socket,ClientMessage::Resume{session}).await?;
+            resuming=Some(std::time::Instant::now());
+        }
         // Host: colleagues of the technician who joined (or ask to join) the running session.
         let mut joined:Vec<Peer>=Vec::new();
         // (host, pinned key, unattended, joined on an invitation)
@@ -2327,6 +2482,11 @@ async fn run(
                     let now=SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_|"System clock is unavailable")?.as_secs();
                     if now>=authorized_until || pending_renewal.is_some_and(|deadline|std::time::Instant::now()>=deadline) {return Err(Failure::network("Device authorization expired; reconnecting"));}
                     if last_activity.elapsed()>Duration::from_secs(150){return Err(Failure::network("Connection-service heartbeat expired"));}
+                    if resuming.is_some_and(|since|since.elapsed()>=Duration::from_secs(20)){
+                        // The connection service did not take the session back in time: end it here.
+                        peer=None;resuming=None;end_when_resumed=false;
+                        state.change(generation,|status|{status.reconnecting=false;status.phase="ready".into();status.session=None;status.peer=None;status.requester=None;status.message="The session ended while the connection service restarted".into();}).await;
+                    }
                     if let Some(active)=peer.as_mut(){
                         if !active.close_sent && active.cancel.load(Ordering::Acquire) && active.signals.is_none(){
                             let session=active.id;let reject=active.host && active.local_consent.is_none();peer=None;
@@ -2401,6 +2561,17 @@ async fn run(
                     #[cfg(feature = "qa-session")]
                     match &command{Command::Close(session)=>eprintln!("QA command close {session} at clock {}",crate::remote_control::qa_wall_clock()),Command::Restart(session)=>eprintln!("QA command restart {session} at clock {}",crate::remote_control::qa_wall_clock()),Command::Finished{session,result}=>eprintln!("QA command finished {session} {:?} at clock {}",result.as_ref().err(),crate::remote_control::qa_wall_clock()),_=>{}}
                     match command {
+                    // While the session is being resumed only ending it counts; everything else is dropped.
+                    Command::Close(session) if resuming.is_some() && peer.as_ref().is_some_and(|active|active.id==session)=>{
+                        if let Some(active)=peer.as_mut(){active.take_close();}
+                        end_when_resumed=true;
+                        state.change(generation,|status|{status.message="Ending the session…".into();}).await;
+                    },
+                    Command::Finished{session,..} if resuming.is_some() && peer.as_ref().is_some_and(|active|active.id==session)=>{
+                        peer=None;resuming=None;end_when_resumed=false;
+                        state.change(generation,|status|{status.reconnecting=false;status.phase="ready".into();status.session=None;status.peer=None;status.requester=None;status.message="The session ended while the connection service restarted".into();}).await;
+                    },
+                    _ if resuming.is_some()=>{},
                     Command::Request(host,code,unattended)=>{
                         if peer.is_some() || outgoing.is_some(){continue;}
                         crate::qa_timeline::begin(if unattended {"connect asked (unattended)"} else if code.is_some() {"connect asked (password)"} else {"connect asked (attended)"});
@@ -2410,13 +2581,14 @@ async fn run(
                         let key=if let Some(key)=cached{key}else{match credential.ism.peer_key_scoped(&credential.token,credential.principal.is_personal(),host).await{Ok(key)=>{peer_keys.insert(host,(key,std::time::Instant::now()));key},Err(_)=>{state.change(generation,|status|{status.phase="ready".into();status.peer=None;status.message="This account could not verify that device ID. Check that it is enrolled in Mixel Remote and that your company has access.".into();}).await;continue;}}};
                         crate::qa_timeline::mark(if qa_cached {"device key from the cache"} else {"device key fetched from the account service"});
                         if cancel.load(Ordering::Acquire){break;}
+                        let with_password=code.is_some();
                         let request=match code {
                             Some(code)=>ClientMessage::RequestWithCode{host,code},
                             None if unattended=>ClientMessage::RequestUnattended{host},
                             None=>ClientMessage::Request{host},
                         };
                         send(&mut socket,request).await?;outgoing=Some((host,key,unattended,false));crate::qa_timeline::mark("request sent to the connection service");
-                        state.change(generation,|status|{status.phase="outgoing".into();status.message="Waiting for the remote host to Accept".into();status.peer=Some(host);status.sharing=false;}).await;
+                        state.change(generation,|status|{status.phase="outgoing".into();status.message="Waiting for the remote host to Accept".into();status.peer=Some(host);status.sharing=false;status.password_flag=with_password;status.password_ends=None;}).await;
                     },
                     Command::ConfigureUnattended{enabled}=>{
                         send(&mut socket,ClientMessage::ConfigureUnattended{enabled}).await?;
@@ -2656,7 +2828,7 @@ async fn run(
                         ServerMessage::Agent{command}=>{
                             if let Some(command)=command {
                                 let unattended=state.status().await.unattended_enabled;
-                                crate::agent::accept(command,unattended);
+                                crate::agent::accept(command,unattended,device,enrolled.connection_id);
                             }
                         },
                         ServerMessage::PairingStatus{pending,confirmed,failed}=>{
@@ -2870,7 +3042,13 @@ async fn run(
                             switch_memory=Some(SwitchMemory{previous:session,remote:ended.remote,key:ended.key,identity:ended.identity.clone().ok_or("Peer identity unavailable")?,grants,reversed:ended.reversed,at:std::time::Instant::now()});
                             state.change(generation,|status|{status.phase="ready".into();status.message="Switching sides".into();status.session=None;status.peer=Some(ended.remote);status.requester=None;}).await;
                         },
-                        ServerMessage::Closed{session,reason}=>{if peer.as_ref().is_some_and(|peer|peer.id==session){peer=None;state.change(generation,|status|{status.phase="ready".into();status.message=format!("Session closed: {reason:?}");status.session=None;status.peer=None;status.requester=None;}).await;}},
+                        ServerMessage::Closed{session,reason}=>{if peer.as_ref().is_some_and(|peer|peer.id==session){peer=None;state.change(generation,|status|{status.phase="ready".into();status.message=if reason==signaling_server::protocol::CloseReason::Expired{"The support session reached its 2-hour limit.".to_owned()}else{format!("Session closed: {reason:?}")};status.session=None;status.peer=None;status.requester=None;}).await;}},
+                        ServerMessage::Error{code} if resuming.is_some()=>{
+                            // Not known any more (older connection service, or the 90 seconds passed): the session ends here.
+                            let _=code;
+                            peer=None;resuming=None;end_when_resumed=false;
+                            state.change(generation,|status|{status.reconnecting=false;status.phase="ready".into();status.session=None;status.peer=None;status.requester=None;status.message="The session ended while the connection service restarted".into();}).await;
+                        },
                         ServerMessage::Error{code}=>{
                             if let Some((host,key,was_unattended,joined))=outgoing.take(){
                                 // A computer with unattended access accepts this. One without it
@@ -2904,6 +3082,26 @@ async fn run(
                                 return Err(Failure::network("Device authorization renewal was refused; reconnecting"));
                             }else{return Err(format!("Connection service rejected an operation: {code:?}").into());}
                         },
+                        ServerMessage::SessionEnding{seconds,..}=>{
+                            // D2: a session opened with a support password ends 2 hours after it connected.
+                            let ends=std::time::Instant::now()+Duration::from_secs(u64::from(seconds));
+                            state.change(generation,|status|{status.password_ends=Some(ends);status.message=ending_message(seconds);}).await;
+                        },
+                        ServerMessage::DevicePolicy{unattended_allowed,..}=>{
+                            state.change(generation,|status|status.unattended_allowed=Some(unattended_allowed)).await;
+                        },
+                        ServerMessage::Resumed{session} if resuming.is_some() && peer.as_ref().is_some_and(|active|active.id==session)=>{
+                            resuming=None;
+                            if end_when_resumed {
+                                end_when_resumed=false;
+                                peer=None;
+                                send(&mut socket,ClientMessage::Close{session}).await?;
+                                state.change(generation,|status|{status.reconnecting=false;status.phase="ready".into();status.session=None;status.peer=None;status.requester=None;status.message="Session ended".into();}).await;
+                            } else {
+                                state.change(generation,|status|{status.reconnecting=false;status.message="Reconnected; the session continues".into();}).await;
+                            }
+                        },
+                        ServerMessage::Resumed{..}=>{},
                         _=>return Err("Unexpected connection-service state transition".into()),
                     }
                 },
@@ -2917,6 +3115,19 @@ async fn run(
             .unwrap_or(Duration::ZERO);
         error
     });
+    // The connection to the connection service is lost but the session's media connection is up: keep it for
+    // the next registration, which asks the connection service to resume it (nothing is cancelled).
+    if let Err(failure) = &result
+        && failure.retryable
+        && ready_at.is_some()
+        && peer.as_ref().is_some_and(Peer::resumable)
+        && !cancel.load(Ordering::Acquire)
+        && let Some(kept) = peer.take()
+    {
+        *keep = Some(Carry { peer: kept, attempt: cancel.clone(), lease: broker_lease.clone(), since: carried_since.unwrap_or_else(std::time::Instant::now) });
+        let _ = tokio::time::timeout(Duration::from_secs(2), socket.close(None)).await;
+        return result;
+    }
     cancel.store(true, Ordering::Release);
     let _ = tokio::time::timeout(Duration::from_secs(2), socket.close(None)).await;
     result
@@ -3653,10 +3864,15 @@ mod automatic_tests {
 
 /// The owner's choice about unattended access on this computer, kept across restarts: a file
 /// `unattended-off` in the app's folder for the OS user while it is turned off.
+/// The app's own data folder (device key store location, command log, seen ids).
+pub(crate) fn app_folder() -> Option<std::path::PathBuf> {
+    unattended_choice::folder()
+}
+
 mod unattended_choice {
     use std::path::{Path, PathBuf};
 
-    fn folder() -> Option<PathBuf> {
+    pub(super) fn folder() -> Option<PathBuf> {
         // Unit tests never touch the real app's folder of the person running them.
         #[cfg(test)]
         {
