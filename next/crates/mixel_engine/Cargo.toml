@@ -64,3 +64,7 @@ x11rb = { version = "=0.13.2", features = ["randr", "xinput", "shape"] }
 [target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
 rfd = { version = "=0.18.0", default-features = false, features = ["xdg-portal"] }
 
+
+[[example]]
+name = "admin_live_check"
+required-features = ["qa-session"]
