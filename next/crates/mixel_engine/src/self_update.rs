@@ -19,6 +19,39 @@ const UPDATE_KEY: [u8; 32] = [
     0x54, 0x7e, 0x06, 0xc5, 0x2b, 0xf6, 0xa8, 0xcb, 0x75, 0xb2, 0xd8, 0xd6, 0xeb, 0x2d, 0xab, 0x8a,
     0x95, 0x06, 0x8d, 0xa3, 0x66, 0xab, 0xa4, 0xf7, 0x9a, 0x86, 0x3f, 0x70, 0x5a, 0x93, 0x65, 0x49,
 ];
+
+/// Where updates come from and which key signs them: the fixed server and key above. Lab builds (feature
+/// `qa-session`, never a release build) can point both elsewhere with a file `lab-update.json`
+/// (`{"base":"http://host:port/path","key":"<64 hex characters>"}`, named by MIXEL_LAB_UPDATE_FILE or kept in
+/// ProgramData\Mixel Remote), to test updates against a lab channel with a lab key.
+fn source() -> (String, [u8; 32]) {
+    #[cfg(feature = "qa-session")]
+    if let Some(lab) = lab_source() {
+        return lab;
+    }
+    (BASE.into(), UPDATE_KEY)
+}
+#[cfg(feature = "qa-session")]
+fn lab_source() -> Option<(String, [u8; 32])> {
+    let path = std::env::var_os("MIXEL_LAB_UPDATE_FILE").map(PathBuf::from).or_else(|| {
+        std::env::var_os("ProgramData").map(|dir| PathBuf::from(dir).join("Mixel Remote").join("lab-update.json"))
+    })?;
+    lab_source_from(&std::fs::read_to_string(path).ok()?)
+}
+#[cfg(feature = "qa-session")]
+fn lab_source_from(text: &str) -> Option<(String, [u8; 32])> {
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    let base = value.get("base")?.as_str()?.trim_end_matches('/').to_owned();
+    let hex = value.get("key")?.as_str()?;
+    if hex.len() != 64 || !base.starts_with("http") {
+        return None;
+    }
+    let mut key = [0u8; 32];
+    for (index, byte) in key.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(hex.get(index * 2..index * 2 + 2)?, 16).ok()?;
+    }
+    Some((base, key))
+}
 const MAX_INSTALLER: u64 = 300 * 1024 * 1024;
 static INSTALLING: AtomicBool = AtomicBool::new(false);
 
@@ -117,8 +150,9 @@ pub async fn latest() -> Result<Manifest, String> {
 /// command created on a Mac).
 pub async fn latest_for(platform: &str, arch: &str) -> Result<Manifest, String> {
     let channel = channel();
+    let (base, update_key) = source();
     let response = client()?
-        .get(format!("{BASE}/{channel}/{platform}-{arch}/latest.json"))
+        .get(format!("{base}/{channel}/{platform}-{arch}/latest.json"))
         .timeout(Duration::from_secs(15))
         .send()
         .await
@@ -131,12 +165,12 @@ pub async fn latest_for(platform: &str, arch: &str) -> Result<Manifest, String> 
     if bytes.len() > 8192 {
         return Err("The update information is invalid".into());
     }
-    let key = VerifyingKey::from_bytes(&UPDATE_KEY).map_err(|_| "The update key is invalid")?;
+    let key = VerifyingKey::from_bytes(&update_key).map_err(|_| "The update key is invalid")?;
     verify_envelope_for(&bytes, &channel, &key, platform, arch)
 }
 /// Public download address of a manifest's file.
 pub fn file_url(manifest: &Manifest) -> String {
-    format!("{BASE}/{}", manifest.file)
+    format!("{}/{}", source().0, manifest.file)
 }
 
 fn work_dir(version: &str) -> PathBuf {
@@ -151,7 +185,7 @@ async fn download(manifest: &Manifest) -> Result<PathBuf, String> {
     let name = manifest.file.rsplit('/').next().unwrap_or("update");
     let path = dir.join(name);
     let response = client()?
-        .get(format!("{BASE}/{}", manifest.file))
+        .get(format!("{}/{}", source().0, manifest.file))
         .send()
         .await
         .and_then(reqwest::Response::error_for_status)
@@ -500,6 +534,24 @@ mod tests {
         let at = tampered.len() / 2;
         tampered[at] ^= 1;
         assert!(verify_envelope(&tampered, "stable", &public).is_err());
+    }
+    /// The lab override does not exist in a release build (the functions are compiled only with `qa-session`), so no file or
+    /// variable can redirect the update server or key; this checks the result and that the source text keeps it that way.
+    #[cfg(not(feature = "qa-session"))]
+    #[test]
+    fn release_builds_ignore_the_lab_override() {
+        let (base, key) = source();
+        assert_eq!(base, BASE);
+        assert_eq!(key, UPDATE_KEY);
+    }
+    #[cfg(feature = "qa-session")]
+    #[test]
+    fn lab_builds_read_the_lab_override() {
+        let (base, key) = lab_source_from(&format!(r#"{{"base":"http://10.0.0.1:8080/u/","key":"{}"}}"#, "ab".repeat(32))).unwrap();
+        assert_eq!(base, "http://10.0.0.1:8080/u");
+        assert_eq!(key, [0xab; 32]);
+        assert!(lab_source_from(r#"{"base":"ftp://x","key":"00"}"#).is_none());
+        assert!(lab_source_from(&format!(r#"{{"base":"file:///x","key":"{}"}}"#, "ab".repeat(32))).is_none());
     }
     #[test]
     fn the_embedded_key_is_valid() {

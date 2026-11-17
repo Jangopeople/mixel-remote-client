@@ -5,6 +5,15 @@ $ErrorActionPreference = 'Continue'
 $root = 'W:\MixelRemoteBuild\v210-win'; $src = "$root\src\next"; $app = "$src\apps\mixel-remote-windows"
 New-Item -ItemType Directory "$root\logs","$root\out" -Force | Out-Null
 function VsEnv { cmd /c "call `"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat`" -no_logo -arch=x64 -host_arch=x64 >nul 2>&1 && set" | ForEach-Object { if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "env:$($matches[1])" -Value $matches[2] } } }
+function ETest {
+  VsEnv
+  $env:MIXEL_DESKTOP_SERVICE_CONFIG = "$src\deployment\public-service-config.json"; $env:MIXEL_ENGINE_APP_VERSION = $Version
+  $env:CARGO_TARGET_DIR = "$root\target-test"; Set-Location $src
+  foreach ($f in @('', '--features qa-session')) {
+    cmd /c "cargo test --locked -p mixel_engine --lib $f self_update > `"$root\logs\etest.log`" 2>&1"; "ETEST [$f] exit $LASTEXITCODE"
+    Get-Content "$root\logs\etest.log" | Select-String 'test result|FAILED|error' | Select-Object -First 4
+  }
+}
 function Core($lab) {
   VsEnv
   $env:MIXEL_DESKTOP_SERVICE_CONFIG = "$src\deployment\public-service-config.json"
@@ -43,7 +52,7 @@ function Test {
   Get-Content "$root\logs\dotnet-test.log" | Select-String -Pattern 'Passed!|Failed!|error|Failed ' | Select-Object -First 30 | ForEach-Object { $_.ToString() }
 }
 switch ($Step) {
-  'test' { Test }
+  'test' { Test } 'etest' { ETest }
   'core' { Core $false } 'corelab' { Core $true } 'app' { App $false } 'applab' { App $true } 'pack' { Pack 'rel' } 'packlab' { Pack 'lab' }
   'all' { Core $true; App $true; Pack 'lab' }
 }
