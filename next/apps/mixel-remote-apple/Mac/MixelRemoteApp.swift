@@ -192,6 +192,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         try? FileManager.default.removeItem(atPath: path)
         for line in text.split(separator: "\n") {
             let words = line.split(separator: " ").map(String.init)
+            // `burst <id> <id> ...`: asks the engine for all these sessions at once (the UI starts one at a time); the answers
+            // (or the refusal text) go to /tmp/labmac/cmd.log.
+            if words.first == "burst" {
+                let ids = words.dropFirst().compactMap { UInt32($0) }
+                Task { @MainActor in
+                    for id in ids {
+                        struct Request: Encodable { var host: UInt32; var password: String?; var unattended: Bool }
+                        var out = "burst \(id): ok"
+                        do { _ = try await model.engine.run("remote_request", Request(host: id, password: nil, unattended: true), as: JSONValue.self) } catch { out = "burst \(id): \(AppModel.message(error))" }
+                        let data = (String(Int(Date().timeIntervalSince1970 * 1000)) + " " + out + "\n").data(using: .utf8)!
+                        if let handle = FileHandle(forWritingAtPath: "/tmp/labmac/cmd.log") { handle.seekToEndOfFile(); handle.write(data); try? handle.close() } else { FileManager.default.createFile(atPath: "/tmp/labmac/cmd.log", contents: data) }
+                    }
+                }
+                continue
+            }
             guard words.count >= 2, let id = UInt32(words[1].replacingOccurrences(of: "-", with: "")) else { continue }
             // `chat <id> <text>` / `chats <id>`: the chat of that session through the engine (windows in the background are never "focused").
             if words[0] == "chat" || words[0] == "chats", let stable = model.sessionModels[id]?.sessionId {

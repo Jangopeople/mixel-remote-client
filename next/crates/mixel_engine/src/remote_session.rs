@@ -2378,6 +2378,11 @@ struct HostGrants {
     chat: bool,
     recording: bool,
 }
+/// The connection service answers "busy" both when the other computer is busy and when the company's plan allows no
+/// more sessions at the same time than this person already has open: with sessions open, the text says both.
+fn busy_with_sessions_message() -> &'static str {
+    "No new session could be started: that computer is busy, or your company's plan allows no more sessions at the same time than you have open now. End one of your sessions or ask your administrator about the plan, then try again."
+}
 fn request_failure_message(code: ErrorCode) -> &'static str {
     match code {
         ErrorCode::Forbidden => {
@@ -3872,7 +3877,8 @@ async fn run(
                                 } else if retries.iter().any(|again|again.host==host) {
                                     // A retry of a lost session: the next ask follows, the window stays as it is.
                                 } else {
-                                    state.slot_end(generation,slot,request_failure_message(code).into()).await;
+                                    let message=if code==ErrorCode::Busy && !ctrl.is_empty(){busy_with_sessions_message()}else{request_failure_message(code)};
+                                    state.slot_end(generation,slot,message.into()).await;
                                 }
                             }
                             else if std::mem::take(&mut invite_pending){

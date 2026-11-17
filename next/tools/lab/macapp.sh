@@ -7,7 +7,7 @@ APP="${LAB_APP:-/Volumes/MAC_Mini_Ext/Project_Mixel/mixel-remote-client/.worktre
 mkdir -p /tmp/labmac; chmod 700 /tmp/labmac
 case ${1:-} in
   start) ( umask 077; cp "$2" /tmp/labmac/session.json ); rm -f /tmp/labmac/cmd
-         MIXEL_QA_SESSION_FILE=/tmp/labmac/session.json MIXEL_QA_COMMANDS=/tmp/labmac/cmd "$APP/Contents/MacOS/desktop_app" > /tmp/labmac/app.log 2>&1 &
+         MIXEL_QA_STATUSLOG=${MIXEL_QA_STATUSLOG:-/tmp/labmac/status.log} MIXEL_QA_SESSION_FILE=/tmp/labmac/session.json MIXEL_QA_COMMANDS=/tmp/labmac/cmd "$APP/Contents/MacOS/desktop_app" > /tmp/labmac/app.log 2>&1 &
          echo $! > /tmp/labmac/pid; echo "started $(cat /tmp/labmac/pid)";;
   cmd) echo "$2" >> /tmp/labmac/cmd;;
   stop) kill "$(cat /tmp/labmac/pid)"; echo stopped;;
