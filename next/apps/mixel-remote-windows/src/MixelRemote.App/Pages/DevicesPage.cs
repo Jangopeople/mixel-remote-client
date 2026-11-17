@@ -530,7 +530,7 @@ internal sealed class DevicesPage : PageView
         {
             var name = new TextBox { PlaceholderText = L("New group"), MinWidth = 220 };
             var problem = Ui.Text("", secondary: false);
-            problem.Foreground = new SolidColorBrush(Microsoft.UI.Colors.IndianRed);
+            problem.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.IndianRed);
             var create = Ui.Plain(L("Create group"), async () =>
             {
                 var wanted = name.Text.Trim();
