@@ -121,4 +121,6 @@ WINDOWS = {
     'You keep working; a notice offers “Open”.': ('Sie arbeiten weiter; ein Hinweis bietet „Öffnen“ an.', 'Vous continuez à travailler ; un avis propose « Ouvrir ».', 'Continua a lavorare; un avviso propone «Apri».'),
     'and the': ('und die', 'et les', 'e i'),
     'or': ('oder', 'ou', 'o'),
+    'This support session ends in 1 minute (support password limit). Ask for a new password to continue.': ('Diese Support-Sitzung endet in 1 Minute (Limit des Support-Passworts). Fragen Sie nach einem neuen Passwort, um fortzufahren.', 'Cette session de support se termine dans 1 minute (limite du mot de passe de support). Demandez un nouveau mot de passe pour continuer.', 'Questa sessione di supporto termina tra 1 minuto (limite della password di supporto). Chieda una nuova password per continuare.'),
+    'This support session ends in %d minutes (support password limit). Ask for a new password to continue.': ('Diese Support-Sitzung endet in %d Minuten (Limit des Support-Passworts). Fragen Sie nach einem neuen Passwort, um fortzufahren.', 'Cette session de support se termine dans %d minutes (limite du mot de passe de support). Demandez un nouveau mot de passe pour continuer.', 'Questa sessione di supporto termina tra %d minuti (limite della password di supporto). Chieda una nuova password per continuare.'),
 }

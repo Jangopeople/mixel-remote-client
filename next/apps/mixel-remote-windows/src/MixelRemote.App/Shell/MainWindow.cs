@@ -37,6 +37,7 @@ internal sealed partial class MainWindow : Window
     private readonly Border sidebarBox = new() { Width = 248 };
     private readonly Border pageHost = new();
     private readonly Grid content = new();
+    private readonly Border hosted = new() { Visibility = Visibility.Collapsed, Padding = new Thickness(20, 9, 20, 9), BorderThickness = new Thickness(0, 0, 0, 1) };
     private readonly StackPanel notices = new() { Spacing = 10, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Bottom, Margin = new Thickness(18) };
     private readonly Dictionary<AppSection, PageView> pages = [];
     private readonly Dictionary<uint, SessionView> sessionViews = [];
@@ -104,7 +105,13 @@ internal sealed partial class MainWindow : Window
         sidebar.Children.Add(footer);
         sidebarBox.Child = sidebar;
         consoleLayer.Children.Add(sidebarBox);
-        pageHost.Child = content;
+        var pageStack = new Grid();
+        pageStack.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        pageStack.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        pageStack.Children.Add(hosted);
+        Grid.SetRow(content, 1);
+        pageStack.Children.Add(content);
+        pageHost.Child = pageStack;
         Grid.SetColumn(pageHost, 1);
         consoleLayer.Children.Add(pageHost);
 
@@ -242,6 +249,9 @@ internal sealed partial class MainWindow : Window
         if (workspace.Selected.Peer is not null && session is null) workspace.Selected = WorkspaceTab.Console;
         var hideChrome = session is not null && FullScreen;
         titleBar.Visibility = hideChrome ? Visibility.Collapsed : Visibility.Visible;
+        // A pop-out window the person closed (or whose session ended) goes away; the session is back in its tab.
+        foreach (var gone in popOuts.Keys.Where(key => !workspace.IsInWindow(key)).ToList()) ClosePopOut(gone);
+        BuildHostedBanner();
         BuildTabs();
         BuildSidebar();
         BuildNotices();
@@ -255,6 +265,21 @@ internal sealed partial class MainWindow : Window
         sessionHost.Visibility = session is null ? Visibility.Collapsed : Visibility.Visible;
         ShowSessionView(session);
         UpdateInset();
+    }
+
+    /// <summary>A technician is connected to this computer: always visible, one click to the details.</summary>
+    private void BuildHostedBanner()
+    {
+        var remote = app.Remote;
+        var show = remote.Phase == "active" && remote.Sharing && app.Section != AppSection.Remote;
+        hosted.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        if (!show) return;
+        hosted.Background = Ui.Brush("MixelActiveRow");
+        hosted.BorderBrush = Ui.Brush("MixelHairline");
+        var message = Ui.Row(10, Ui.Icon("\uE95A", 16, Ui.BrandBrush), Ui.Text(L("A technician is connected to this computer."), bold: true, wrap: false));
+        hosted.Child = Ui.Split(message, Ui.Row(8, Ui.Plain(L("Show"), () => ShowSection(AppSection.Remote)), Ui.Primary(L("End session"), () => _ = app.Session.End())));
+        AutomationProperties.SetName(hosted, L("A technician is connected to this computer."));
+        AutomationProperties.SetLiveSetting(hosted, Microsoft.UI.Xaml.Automation.Peers.AutomationLiveSetting.Polite);
     }
 
     /// <summary>The session of the open tab; sessions that have no tab any more lose their view.</summary>
