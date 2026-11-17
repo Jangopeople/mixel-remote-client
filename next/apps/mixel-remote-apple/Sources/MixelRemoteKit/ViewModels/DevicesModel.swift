@@ -58,7 +58,8 @@ public final class DevicesModel: ObservableObject {
     func loadAdmin() async {
         guard admin.available, app.signedIn else { adminRows = [:]; return }
         do {
-            let rows = try await admin.devices(company: tenant?.tenantId, search: nil)
+            // `company` of the API is the ISM client id, not the tenant id; every row is matched by its 9-digit ID anyway.
+            let rows = try await admin.devices(company: nil, search: nil)
             adminRows = Dictionary(rows.map { ($0.connectionId, $0) }, uniquingKeysWith: { first, _ in first })
         } catch DeviceAdminError.unavailable {
             adminRows = [:]
