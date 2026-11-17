@@ -833,7 +833,7 @@ impl App {
                     favourite: state.devices.favorites.contains(&device.device),
                     recent: state.devices.recent.iter().position(|id| *id == device.device),
                     group: device.group_id.clone(),
-                    unattended: meta.and_then(|meta| meta.unattended_allowed).unwrap_or(false),
+                    unattended: meta.is_some_and(crate::models::AdminDevice::unattended_on),
                     update: meta.and_then(|meta| meta.app_version.as_deref()).is_some_and(|version| view::version_older(version, &latest)),
                     note: meta.and_then(|meta| meta.note.clone()).unwrap_or_default(),
                 }

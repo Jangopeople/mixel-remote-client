@@ -521,7 +521,7 @@ impl DevicesPage {
             Some("ready" | "starting" | "ending") => status.append(&pill_tag("session", &t("In session"))),
             _ => {
                 status.append(&badge(logic::presence_badge(presence), &logic::presence_label(presence, &state.remote)));
-                if meta.and_then(|meta| meta.unattended_allowed) == Some(true) {
+                if meta.is_some_and(crate::models::AdminDevice::unattended_on) {
                     status.append(&pill_tag("unattended", &t("Unattended")));
                 }
             }

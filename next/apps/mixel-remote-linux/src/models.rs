@@ -514,6 +514,20 @@ mod tests {
     }
 
     #[test]
+    fn admin_rows_read_the_engine_answer_and_unattended_follows_the_setting() {
+        let rows: Vec<AdminDevice> = serde_json::from_str(
+            r#"[{"device_id":"d1","connection_id":440207203,"name":"A","os":"macos","favorite":true,"unattended_setting":"default","unattended_default":false,"unattended_allowed":true,"status":"online","app_version":"2.0.19","note":"Desk 3","can_admin":true,"last_seen":"2026-11-17T09:12:30Z","owner_name":null,"future":1},
+                {"connection_id":268455901,"unattended_setting":"default","unattended_default":true,"unattended_allowed":true},
+                {"connection_id":731204118,"unattended_setting":"on","unattended_allowed":true},
+                {"connection_id":123456789,"unattended_setting":"off","unattended_default":true,"unattended_allowed":false},
+                {"connection_id":111222333}]"#,
+        )
+        .unwrap();
+        assert_eq!((rows[0].app_version.as_deref(), rows[0].note.as_deref(), rows[0].can_admin), (Some("2.0.19"), Some("Desk 3"), true));
+        assert_eq!(rows.iter().map(AdminDevice::unattended_on).collect::<Vec<_>>(), [false, true, true, false, false]);
+    }
+
+    #[test]
     fn revoked_or_unenrolled_company_devices_are_not_listed() {
         let row = |connection: Option<u32>, revoked: Option<bool>| SaasDevice { device_id: "d".into(), connection_id: connection, revoked, ..Default::default() };
         assert!(row(Some(123_456_789), None).device().is_some());
@@ -573,8 +587,22 @@ pub struct AdminDevice {
     pub connection_id: u32,
     pub app_version: Option<String>,
     pub unattended_allowed: Option<bool>,
+    pub unattended_default: Option<bool>,
     pub unattended_setting: Option<String>,
     pub note: Option<String>,
     pub can_admin: bool,
     pub last_seen: Option<String>,
+}
+
+impl AdminDevice {
+    /// The device accepts unattended connections: switched on, or on by the company default and not switched
+    /// off. `unattended_allowed` alone only says the broker does not refuse it (true for every device that
+    /// is not set to "off"), so it is not the badge.
+    pub fn unattended_on(&self) -> bool {
+        match self.unattended_setting.as_deref() {
+            Some("on") => self.unattended_allowed != Some(false),
+            Some("off") | None => false,
+            Some(_) => self.unattended_default == Some(true) && self.unattended_allowed != Some(false),
+        }
+    }
 }
