@@ -47,7 +47,7 @@ public struct DeviceConsoleView: View {
         .sheet(item: $editing) { device in StaffDeviceSheet(model: model, device: device) }
         .sheet(isPresented: $addingOthers) { DeployLinkSheet(model: model) }
         .sheet(isPresented: $addingThis) {
-            ScrollView { EnrollmentCard(app: app, enrollment: app.enrollment).padding(20) }.frame(minWidth: 460, minHeight: 320)
+            AddThisComputerSheet(app: app)
         }
         .confirmationDialog(L("Remove this device?"), isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), presenting: removing) { device in
             Button(L("Remove %@", device.name), role: .destructive) { Task { _ = await model.remove(device) } }
@@ -308,7 +308,7 @@ enum Columns {
 struct ColumnHeader: View {
     var body: some View {
         HStack(spacing: 8) {
-            Color.clear.frame(width: Columns.star + Columns.tile)
+            Color.clear.frame(width: Columns.star + Columns.tile, height: 1)
             label(L("Device")).frame(maxWidth: .infinity, alignment: .leading)
             label(L("ID")).frame(width: Columns.id, alignment: .leading)
             label(L("Status")).frame(width: Columns.status, alignment: .leading)
@@ -394,7 +394,7 @@ struct DeviceTableRow: View {
             .help(on ? L("Remove from favorites") : L("Add to favorites"))
             .accessibilityLabel(Text(verbatim: on ? L("Remove from favorites") : L("Add to favorites")))
         } else {
-            Color.clear
+            Color.clear.frame(height: 1)
         }
     }
 
@@ -667,3 +667,31 @@ struct SessionsPage: View {
     }
 }
 #endif
+
+
+/// "Add this computer": the enrolment card in a sheet that closes itself once this computer is registered.
+struct AddThisComputerSheet: View {
+    @ObservedObject var app: AppModel
+    @ObservedObject var enrollment: EnrollmentModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var started: String?
+
+    init(app: AppModel) {
+        self.app = app
+        enrollment = app.enrollment
+    }
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 0) {
+            Button(L("Close")) { dismiss() }
+                .keyboardShortcut(.cancelAction)
+                .padding([.top, .trailing], 14)
+            ScrollView { EnrollmentCard(app: app, enrollment: enrollment).padding(20) }
+        }
+        .frame(minWidth: 460, minHeight: 340)
+        .onAppear { started = enrollment.current?.device }
+        .onChange(of: enrollment.current?.device) { device in
+            if device != nil, device != started { dismiss() }
+        }
+    }
+}

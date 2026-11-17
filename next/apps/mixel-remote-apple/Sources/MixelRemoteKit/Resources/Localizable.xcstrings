@@ -45,6 +45,50 @@
         }
       }
     },
+    "%@ — Mixel Remote": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ – Mixel Remote"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ – Mixel Remote"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ – Mixel Remote"
+          }
+        }
+      }
+    },
+    "%d days ago": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "vor %d Tagen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "il y a %d jours"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%d giorni fa"
+          }
+        }
+      }
+    },
     "%d devices": {
       "localizations": {
         "de": {
@@ -63,6 +107,94 @@
           "stringUnit": {
             "state": "translated",
             "value": "%d dispositivi"
+          }
+        }
+      }
+    },
+    "%d devices · %d online": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%d Geräte · %d online"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%d appareils · %d en ligne"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%d dispositivi · %d online"
+          }
+        }
+      }
+    },
+    "%d fps": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%d Bilder/s"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%d i/s"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%d fps"
+          }
+        }
+      }
+    },
+    "%d h ago": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "vor %d Std."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "il y a %d h"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%d h fa"
+          }
+        }
+      }
+    },
+    "%d min ago": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "vor %d Min."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "il y a %d min"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%d min fa"
           }
         }
       }
@@ -107,6 +239,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "%d di %d dispositivi"
+          }
+        }
+      }
+    },
+    "%d of %d devices · %d online": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%d von %d Geräten · %d online"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%d sur %d appareils · %d en ligne"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%d di %d dispositivi · %d online"
           }
         }
       }
@@ -239,6 +393,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Uno spazio sicuro per i tuoi dispositivi e le tue connessioni."
+          }
+        }
+      }
+    },
+    "A tab in this window": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ein Tab in diesem Fenster"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un onglet dans cette fenêtre"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Una scheda in questa finestra"
           }
         }
       }
@@ -437,6 +613,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Account"
+          }
+        }
+      }
+    },
+    "Actions": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aktionen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Actions"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Azioni"
           }
         }
       }
@@ -679,6 +877,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Amministratore"
+          }
+        }
+      }
+    },
+    "All": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alle"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tous"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tutti"
           }
         }
       }
@@ -1057,6 +1277,28 @@
         }
       }
     },
+    "Back into a tab": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zurück in einen Tab"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retour dans un onglet"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Torna in una scheda"
+          }
+        }
+      }
+    },
     "Block input": {
       "localizations": {
         "de": {
@@ -1189,6 +1431,28 @@
         }
       }
     },
+    "Chat with %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chat mit %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chat avec %@"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chat con %@"
+          }
+        }
+      }
+    },
     "Check for pairing": {
       "localizations": {
         "de": {
@@ -1229,6 +1493,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Cerca aggiornamenti"
+          }
+        }
+      }
+    },
+    "Checking unattended access": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unbeaufsichtigter Zugriff wird geprüft"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérification de l’accès sans surveillance"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica dell’accesso non presidiato"
           }
         }
       }
@@ -1449,6 +1735,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Appunti"
+          }
+        }
+      }
+    },
+    "Clipboard, send text and print jobs": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zwischenablage, Text senden und Druckaufträge"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Presse-papiers, envoi de texte et impressions"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Appunti, invio di testo e stampe"
           }
         }
       }
@@ -1761,6 +2069,50 @@
         }
       }
     },
+    "Connect and ask the person to accept": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbinden und die Person um Erlaubnis bitten"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se connecter et demander l’accord de la personne"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connetti e chiedi alla persona di accettare"
+          }
+        }
+      }
+    },
+    "Connect by ID": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Per ID verbinden"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se connecter par ID"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connetti tramite ID"
+          }
+        }
+      }
+    },
     "Connect this controller to the Mixel network.": {
       "localizations": {
         "de": {
@@ -1845,6 +2197,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Connetti a Quick Support"
+          }
+        }
+      }
+    },
+    "Connect to a device under Devices; its session appears here and as a tab in the title bar.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbinden Sie sich unter „Geräte“ mit einem Gerät; die Sitzung erscheint hier und als Tab in der Titelleiste."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connectez-vous à un appareil sous « Appareils » ; la session apparaît ici et comme onglet dans la barre de titre."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Collegati a un dispositivo in «Dispositivi»; la sessione appare qui e come scheda nella barra del titolo."
           }
         }
       }
@@ -1959,6 +2333,28 @@
         }
       }
     },
+    "Connecting": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbindung wird aufgebaut"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connexion en cours"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connessione in corso"
+          }
+        }
+      }
+    },
     "Connecting securely…": {
       "localizations": {
         "de": {
@@ -1977,6 +2373,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Connessione sicura in corso…"
+          }
+        }
+      }
+    },
+    "Connecting to %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbindung zu %@ wird aufgebaut"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connexion à %@"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connessione a %@"
           }
         }
       }
@@ -2131,6 +2549,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Problema di connessione"
+          }
+        }
+      }
+    },
+    "Continue": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Weiter"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continuer"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continua"
           }
         }
       }
@@ -2949,6 +3389,28 @@
         }
       }
     },
+    "Dismiss": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schliessen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fermer"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiudi"
+          }
+        }
+      }
+    },
     "Display": {
       "localizations": {
         "de": {
@@ -3033,6 +3495,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Scarica"
+          }
+        }
+      }
+    },
+    "Draw": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zeichnen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dessiner"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disegna"
           }
         }
       }
@@ -3235,6 +3719,28 @@
         }
       }
     },
+    "E2E encrypted": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ende-zu-Ende verschlüsselt"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiffré de bout en bout"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Crittografia end-to-end"
+          }
+        }
+      }
+    },
     "Edit device": {
       "localizations": {
         "de": {
@@ -3367,6 +3873,28 @@
         }
       }
     },
+    "Encrypting end-to-end": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ende-zu-Ende-Verschlüsselung"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiffrement de bout en bout"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Crittografia end-to-end"
+          }
+        }
+      }
+    },
     "End": {
       "localizations": {
         "de": {
@@ -3451,6 +3979,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Termina prima la sessione in corso."
+          }
+        }
+      }
+    },
+    "End the session with %@?": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sitzung mit %@ beenden?"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Terminer la session avec %@ ?"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Terminare la sessione con %@?"
           }
         }
       }
@@ -3873,6 +4423,28 @@
         }
       }
     },
+    "Favourites": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Favoriten"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Favoris"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preferiti"
+          }
+        }
+      }
+    },
     "File transfer was not allowed for this session.": {
       "localizations": {
         "de": {
@@ -3939,6 +4511,28 @@
         }
       }
     },
+    "First and last name": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vor- und Nachname"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prénom et nom"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nome e cognome"
+          }
+        }
+      }
+    },
     "From": {
       "localizations": {
         "de": {
@@ -3957,6 +4551,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Dal"
+          }
+        }
+      }
+    },
+    "Full screen": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vollbild"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Plein écran"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schermo intero"
           }
         }
       }
@@ -4093,6 +4709,28 @@
         }
       }
     },
+    "Go to Devices": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zu Geräte"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aller à Appareils"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vai a Dispositivi"
+          }
+        }
+      }
+    },
     "Green": {
       "localizations": {
         "de": {
@@ -4133,6 +4771,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Gruppo"
+          }
+        }
+      }
+    },
+    "Groups": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gruppen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Groupes"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gruppi"
           }
         }
       }
@@ -4247,6 +4907,28 @@
         }
       }
     },
+    "ID": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID"
+          }
+        }
+      }
+    },
     "ID from the phone": {
       "localizations": {
         "de": {
@@ -4265,6 +4947,72 @@
           "stringUnit": {
             "state": "translated",
             "value": "ID dal telefono"
+          }
+        }
+      }
+    },
+    "In a tab": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In einem Tab"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dans un onglet"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In una scheda"
+          }
+        }
+      }
+    },
+    "In its own window": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In eigenem Fenster"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dans sa propre fenêtre"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nella propria finestra"
+          }
+        }
+      }
+    },
+    "In session": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In Sitzung"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En session"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In sessione"
           }
         }
       }
@@ -4467,6 +5215,28 @@
         }
       }
     },
+    "Its own window": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eigenes Fenster"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fenêtre séparée"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finestra separata"
+          }
+        }
+      }
+    },
     "Its running sessions end at once. It can be added again later.": {
       "localizations": {
         "de": {
@@ -4507,6 +5277,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Partecipa"
+          }
+        }
+      }
+    },
+    "Just now": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gerade eben"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "À l’instant"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Adesso"
           }
         }
       }
@@ -4595,6 +5387,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Lingua"
+          }
+        }
+      }
+    },
+    "Last seen": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zuletzt gesehen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dernière activité"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ultimo accesso"
           }
         }
       }
@@ -5193,6 +6007,28 @@
         }
       }
     },
+    "Mixel engine": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mixel-Engine"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Moteur Mixel"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Motore Mixel"
+          }
+        }
+      }
+    },
     "Mixel team account": {
       "localizations": {
         "de": {
@@ -5259,6 +6095,28 @@
         }
       }
     },
+    "More for %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mehr zu %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Plus pour %@"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Altro per %@"
+          }
+        }
+      }
+    },
     "Move": {
       "localizations": {
         "de": {
@@ -5299,6 +6157,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Sposta %@ in un gruppo"
+          }
+        }
+      }
+    },
+    "Move back into a tab": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zurück in einen Tab verschieben"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replacer dans un onglet"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Riporta in una scheda"
           }
         }
       }
@@ -5611,6 +6491,28 @@
         }
       }
     },
+    "No session is running.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Es läuft keine Sitzung."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucune session en cours."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nessuna sessione in corso."
+          }
+        }
+      }
+    },
     "No sessions in this period.": {
       "localizations": {
         "de": {
@@ -5633,6 +6535,28 @@
         }
       }
     },
+    "Not connected": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nicht verbunden"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non connecté"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non connesso"
+          }
+        }
+      }
+    },
     "Not now": {
       "localizations": {
         "de": {
@@ -5651,6 +6575,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Non ora"
+          }
+        }
+      }
+    },
+    "Not set up yet": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Noch nicht eingerichtet"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pas encore configuré"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non ancora configurato"
           }
         }
       }
@@ -5695,6 +6641,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Nota (facoltativa)"
+          }
+        }
+      }
+    },
+    "Now": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jetzt"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Maintenant"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ora"
           }
         }
       }
@@ -5853,6 +6821,28 @@
         }
       }
     },
+    "Online now": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jetzt online"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En ligne"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Online ora"
+          }
+        }
+      }
+    },
     "Online · ID %@": {
       "localizations": {
         "de": {
@@ -5919,6 +6909,50 @@
         }
       }
     },
+    "Open in its own window": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In eigenem Fenster öffnen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ouvrir dans sa propre fenêtre"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apri in una finestra separata"
+          }
+        }
+      }
+    },
+    "Open in window instead": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stattdessen im Fenster öffnen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ouvrir plutôt dans une fenêtre"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apri invece in una finestra"
+          }
+        }
+      }
+    },
     "Open invitations": {
       "localizations": {
         "de": {
@@ -5937,6 +6971,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Inviti aperti"
+          }
+        }
+      }
+    },
+    "Open sessions in": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sitzungen öffnen in"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ouvrir les sessions dans"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apri le sessioni in"
           }
         }
       }
@@ -6183,6 +7239,50 @@
         }
       }
     },
+    "Picture quality": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bildqualität"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Qualité d’image"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Qualità dell’immagine"
+          }
+        }
+      }
+    },
+    "Pictures per second": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bilder pro Sekunde"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Images par seconde"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Immagini al secondo"
+          }
+        }
+      }
+    },
     "Please wait a moment, the previous step is still running.": {
       "localizations": {
         "de": {
@@ -6425,6 +7525,28 @@
         }
       }
     },
+    "Reaching device": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gerät wird erreicht"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Joindre l’appareil"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Raggiungimento del dispositivo"
+          }
+        }
+      }
+    },
     "Read the Terms of Service, the Data Processing Agreement and the Privacy Policy": {
       "localizations": {
         "de": {
@@ -6487,6 +7609,50 @@
           "stringUnit": {
             "state": "translated",
             "value": "Pronto. La persona lì accetta la richiesta, a meno che non sia configurato l’accesso automatico."
+          }
+        }
+      }
+    },
+    "Received": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Empfangen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reçu"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ricevuto"
+          }
+        }
+      }
+    },
+    "Recent": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zuletzt"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Récents"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recenti"
           }
         }
       }
@@ -7129,6 +8295,28 @@
         }
       }
     },
+    "Report": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bericht"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rapport"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rapporto"
+          }
+        }
+      }
+    },
     "Reports": {
       "localizations": {
         "de": {
@@ -7169,6 +8357,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Richiesta di accesso non presidiato…"
+          }
+        }
+      }
+    },
+    "Resolution": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Auflösung"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Résolution"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Risoluzione"
           }
         }
       }
@@ -7591,6 +8801,28 @@
         }
       }
     },
+    "Search name, ID or group": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Name, ID oder Gruppe suchen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rechercher nom, ID ou groupe"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cerca nome, ID o gruppo"
+          }
+        }
+      }
+    },
     "Send": {
       "localizations": {
         "de": {
@@ -7745,6 +8977,28 @@
         }
       }
     },
+    "Session": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sitzung"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Session"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sessione"
+          }
+        }
+      }
+    },
     "Session note": {
       "localizations": {
         "de": {
@@ -7873,6 +9127,72 @@
           "stringUnit": {
             "state": "translated",
             "value": "Sessione con"
+          }
+        }
+      }
+    },
+    "Session with %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sitzung mit %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Session avec %@"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sessione con %@"
+          }
+        }
+      }
+    },
+    "Session with %@ is ready": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sitzung mit %@ ist bereit"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La session avec %@ est prête"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La sessione con %@ è pronta"
+          }
+        }
+      }
+    },
+    "Sessions": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sitzungen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sessions"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sessioni"
           }
         }
       }
@@ -8097,6 +9417,28 @@
         }
       }
     },
+    "Show the session with %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sitzung mit %@ anzeigen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Afficher la session avec %@"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mostra la sessione con %@"
+          }
+        }
+      }
+    },
     "Shown once this computer is connected.": {
       "localizations": {
         "de": {
@@ -8159,6 +9501,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Accedi prima."
+          }
+        }
+      }
+    },
+    "Sign in to Mixel": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bei Mixel anmelden"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se connecter à Mixel"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accedi a Mixel"
           }
         }
       }
@@ -8515,6 +9879,28 @@
         }
       }
     },
+    "Sorted by status": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nach Status sortiert"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trié par statut"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ordinati per stato"
+          }
+        }
+      }
+    },
     "Sound": {
       "localizations": {
         "de": {
@@ -8603,6 +9989,50 @@
         }
       }
     },
+    "Starting video": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Video wird gestartet"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Démarrage de la vidéo"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Avvio del video"
+          }
+        }
+      }
+    },
+    "Status": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Status"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Statut"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stato"
+          }
+        }
+      }
+    },
     "Status unknown": {
       "localizations": {
         "de": {
@@ -8621,6 +10051,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Stato sconosciuto"
+          }
+        }
+      }
+    },
+    "Stay in Devices and show “Open”": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In „Geräte“ bleiben und „Öffnen“ anzeigen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rester dans Appareils et afficher « Ouvrir »"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resta in Dispositivi e mostra «Apri»"
           }
         }
       }
@@ -8665,6 +10117,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Resta connesso su questo computer"
+          }
+        }
+      }
+    },
+    "Stop": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stopp"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Arrêter"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Interrompi"
           }
         }
       }
@@ -8779,6 +10253,28 @@
         }
       }
     },
+    "Switch to the session": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zur Sitzung wechseln"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Passer à la session"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Passa alla sessione"
+          }
+        }
+      }
+    },
     "Technician": {
       "localizations": {
         "de": {
@@ -8889,6 +10385,50 @@
         }
       }
     },
+    "The connection ends for both sides.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Verbindung wird für beide Seiten beendet."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La connexion se termine pour les deux côtés."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La connessione termina per entrambe le parti."
+          }
+        }
+      }
+    },
+    "The connection was not established. The other side declined, did not answer, or unattended access is not allowed.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Verbindung kam nicht zustande. Die Gegenseite hat abgelehnt, nicht geantwortet oder unbeaufsichtigter Zugriff ist nicht erlaubt."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La connexion n’a pas pu être établie. L’autre côté a refusé, n’a pas répondu ou l’accès sans surveillance n’est pas autorisé."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La connessione non è stata stabilita. L’altra parte ha rifiutato, non ha risposto oppure l’accesso non presidiato non è consentito."
+          }
+        }
+      }
+    },
     "The other computer cannot take a second technician directly. Use a meeting link instead.": {
       "localizations": {
         "de": {
@@ -8951,6 +10491,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "La persona apre Mixel Quick Support sul telefono e Le comunica l’ID mostrato."
+          }
+        }
+      }
+    },
+    "The picture adapts to the line by itself.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das Bild passt sich selbst an die Leitung an."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’image s’adapte automatiquement à la ligne."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’immagine si adatta da sola alla linea."
           }
         }
       }
@@ -9039,6 +10601,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Il computer remoto si sta riavviando. Mixel Remote si ricollega appena torna disponibile…"
+          }
+        }
+      }
+    },
+    "The session is ready.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Sitzung ist bereit."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La session est prête."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La sessione è pronta."
           }
         }
       }
@@ -9171,6 +10755,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "La apre e Le legge l’ID di 9 cifre mostrato."
+          }
+        }
+      }
+    },
+    "This Mac (hardware)": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieser Mac (Hardware)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce Mac (matériel)"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo Mac (hardware)"
           }
         }
       }
@@ -9523,6 +11129,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Questo telefono"
+          }
+        }
+      }
+    },
+    "This session has ended.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Sitzung wurde beendet."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cette session est terminée."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questa sessione è terminata."
           }
         }
       }
@@ -10121,6 +11749,28 @@
         }
       }
     },
+    "Video decoding": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Videodekodierung"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Décodage vidéo"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Decodifica video"
+          }
+        }
+      }
+    },
     "View and control": {
       "localizations": {
         "de": {
@@ -10161,6 +11811,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Solo visualizzazione"
+          }
+        }
+      }
+    },
+    "Views": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ansichten"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vues"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Viste"
           }
         }
       }
@@ -10231,6 +11903,28 @@
         }
       }
     },
+    "Waiting for the person to accept": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warten auf die Zustimmung der Person"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En attente de l’accord de la personne"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In attesa dell’accettazione della persona"
+          }
+        }
+      }
+    },
     "Wake": {
       "localizations": {
         "de": {
@@ -10275,6 +11969,28 @@
         }
       }
     },
+    "When a session is ready": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wenn eine Sitzung bereit ist"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quand une session est prête"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quando una sessione è pronta"
+          }
+        }
+      }
+    },
     "White": {
       "localizations": {
         "de": {
@@ -10293,6 +12009,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bianco"
+          }
+        }
+      }
+    },
+    "Window": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fenster"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fenêtre"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finestra"
           }
         }
       }
@@ -10403,6 +12141,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Giallo"
+          }
+        }
+      }
+    },
+    "Yesterday": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gestern"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hier"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ieri"
           }
         }
       }
@@ -10627,6 +12387,116 @@
         }
       }
     },
+    "Your name": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ihr Name"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Votre nom"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il tuo nome"
+          }
+        }
+      }
+    },
+    "done": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "fertig"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "terminé"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "completato"
+          }
+        }
+      }
+    },
+    "in progress": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "in Arbeit"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "en cours"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "in corso"
+          }
+        }
+      }
+    },
+    "keep working, it opens as a tab": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "weiterarbeiten, sie öffnet sich als Tab"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "continuez à travailler, elle s’ouvre dans un onglet"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "continua a lavorare, si apre come scheda"
+          }
+        }
+      }
+    },
+    "keep working, it opens in its own window": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "weiterarbeiten, sie öffnet sich in einem eigenen Fenster"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "continuez à travailler, elle s’ouvre dans sa propre fenêtre"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "continua a lavorare, si apre in una finestra separata"
+          }
+        }
+      }
+    },
     "macOS permissions": {
       "localizations": {
         "de": {
@@ -10671,6 +12541,28 @@
         }
       }
     },
+    "offline": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "offline"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "hors ligne"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "offline"
+          }
+        }
+      }
+    },
     "on": {
       "localizations": {
         "de": {
@@ -10693,6 +12585,28 @@
         }
       }
     },
+    "online": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "online"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "en ligne"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "online"
+          }
+        }
+      }
+    },
     "phone or tablet": {
       "localizations": {
         "de": {
@@ -10711,6 +12625,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "telefono o tablet"
+          }
+        }
+      }
+    },
+    "waiting": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "wartet"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "en attente"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "in attesa"
           }
         }
       }

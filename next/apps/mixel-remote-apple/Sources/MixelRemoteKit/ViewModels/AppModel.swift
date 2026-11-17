@@ -205,9 +205,17 @@ public final class AppModel: ObservableObject {
     /// `provider`: nil for Mixel ID (or the company's single sign-on), else google, azure or apple.
     public func signIn(provider: String? = nil, showLink: Bool = false) {
         act {
-            let url: String = try await self.engine.run("account_sign_in", ["open_browser": false, "provider": provider])
-            if showLink { self.signInLink = url }
-            else if let link = URL(string: url) { (self.openSignIn ?? self.openURL)(link) }
+            // A lab core (qa-session) signs in at once and answers null instead of a link.
+            let url: String? = try await self.engine.run("account_sign_in", ["open_browser": false, "provider": provider], as: String?.self)
+            if let url { if showLink { self.signInLink = url } else if let link = URL(string: url) { (self.openSignIn ?? self.openURL)(link) } }
+            await self.refreshAccount()
+        }
+    }
+
+    /// The first sign-in of a new Mixel ID: the name that goes with the account.
+    public func completeProfile(name: String) {
+        act {
+            try await self.engine.perform("account_setup", ["name": name.trimmingCharacters(in: .whitespaces)])
             await self.refreshAccount()
         }
     }

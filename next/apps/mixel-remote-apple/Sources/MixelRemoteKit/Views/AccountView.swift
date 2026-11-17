@@ -5,6 +5,7 @@ import SwiftUI
 public struct AccountView: View {
     @ObservedObject var app: AppModel
     @ObservedObject var company: CompanyModel
+    @State private var profileName = ""
 
     public init(app: AppModel) {
         self.app = app
@@ -38,6 +39,16 @@ public struct AccountView: View {
         Card {
             CardTitle(L("Connect with your Mixel account"), symbol: "person.badge.key")
             switch account.phase {
+            case "profile_setup":
+                Text(verbatim: Translator.shared.translate(account.message)).foregroundStyle(.secondary)
+                FieldRow(L("Your name")) {
+                    TextField(L("First and last name"), text: $profileName).textFieldStyle(.roundedBorder).frame(maxWidth: 320)
+                }
+                HStack {
+                    Button(L("Continue")) { app.completeProfile(name: profileName) }
+                        .buttonStyle(PrimaryButtonStyle()).disabled(profileName.trimmingCharacters(in: .whitespaces).isEmpty || app.busy)
+                    Button(L("Cancel sign-in")) { app.cancelSignIn() }
+                }
             case "starting", "waiting_browser", "verifying":
                 HStack(spacing: 10) {
                     ProgressView().controlSize(.small)
@@ -176,6 +187,7 @@ public struct AccountView: View {
 struct CompanyCard: View {
     @ObservedObject var app: AppModel
     @ObservedObject var company: CompanyModel
+    @State private var profileName = ""
     @State private var inviting = false
     @State private var renaming = false
     @State private var deleting = false
@@ -283,6 +295,7 @@ struct CompanyCard: View {
 
 struct InviteSheet: View {
     @ObservedObject var company: CompanyModel
+    @State private var profileName = ""
     @State private var email = ""
     @State private var role = "technician"
     @Environment(\.dismiss) private var dismiss
@@ -319,6 +332,7 @@ struct InviteSheet: View {
 struct CreateCompanyCard: View {
     @ObservedObject var app: AppModel
     @ObservedObject var company: CompanyModel
+    @State private var profileName = ""
     @State private var name = ""
     @State private var terms = false
     @State private var personalName = ""

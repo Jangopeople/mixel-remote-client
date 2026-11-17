@@ -57,6 +57,7 @@ struct MainWindow: View {
 
     var body: some View {
         RootView(app: app)
+            .ignoresSafeArea(.container, edges: .top)
             .tint(Theme.brand)
             .onAppear {
                 app.workspace.openWindow = { peer in openWindow(id: "session", value: peer) }
