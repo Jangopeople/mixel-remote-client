@@ -47,3 +47,27 @@ Branch `feat/multi-20261117`. App: `next/apps/mixel-remote-windows`. Engine API:
   so the banner appears in every open session (correct). `password_session` is a single top-level field of the engine (not per session): with several
   sessions the password-limit warning would show in all of them. Engine need: `password_session` inside each `sessions[]` item.
 - Still not verified: no interactive launch (see above).
+
+## 2.1.0 build-complete (Windows)
+- **Per-session password and unattended**: `SessionStatus` decodes `password_session {ends_at, seconds_left}`, `unattended_session`, `reconnecting`, `reconnect_failed`.
+  `SessionStatus.Project` now hands each session model its own `PasswordSession` / `UnattendedSession` (the top-level values only serve an older engine
+  without `sessions[]`, via `LegacySession`). The 5-minute and 1-minute warning therefore shows only in the session it belongs to.
+- **Reconnect**: a session with `reconnecting` or `reconnect_failed` keeps its tab (states `reconnecting` / `failed`), its window and its model; the empty screen
+  says "Reconnecting..." or "Could not reconnect" (`SessionModel.WaitingText`), and after the minute a Retry button sends `remote_reconnect` with the stable id
+  (`SessionModel.Retry`). End (toolbar, tab, Sessions page, window close) sends `remote_close` with the stable id, which does not depend on the top-level
+  `session` (empty while retrying). "Cancel" of a request no longer ends a session that only asks its computer again (`SessionStatus.Asking`). A session that
+  comes back is not announced again as "ready".
+- **Closing a session window ends the session**: `WorkspaceModel.WindowCloseRequested` decides (ask "End session with <device>?" when its session runs, close
+  silently when it is gone), `ConfirmWindowClose` ends only that session; `PopOutWindow` shows the ContentDialog. The toolbar's "Back into a tab" (`Dock`) is
+  the only way to dock. Same as the Mac.
+- **Gaps D**: the favourite star (list row, context menu, Favourites view) already exists on Windows and is the same call as on the Mac and Linux
+  (`saas_set_favorite` / `saas_favorites`, company devices only; `remote_admin_set_device_favorite` is the admin-console variant and is not used by any app
+  for the personal star); tested in `Favorites_come_first_and_recent_devices_are_offered`. Picture quality stays read only: `native_commands.rs` has no
+  command that sets quality, bitrate, or frame rate, so no control was added (the Mac popover is read only too).
+- **Texts**: "Reconnecting...", "Could not reconnect", "Retry", "Ask the remote computer again", "End session with %@?" in de/fr/it (`scripts/windows_texts.py`, `make-texts.py`).
+- **Lab**: `tools/lab/windows/sync.sh test|build|all` copies the app sources (no bin/obj, no AppleDouble files) to `W:\MixelRemoteBuild\win-210` on win-build and runs
+  `dotnet test` / `dotnet build` there. No secrets (ssh alias only).
+- **Verified** on win-build: `dotnet test` of `MixelRemote.Core.Tests`: 111 passed, 0 failed (new: `ReconnectTests.cs`, 16 tests; changed: the window-close tests in
+  `WorkspaceTests.cs`); `dotnet build` of `MixelRemote.App` (Release x64): 0 warnings, 0 errors. The engine DLL was not rebuilt (the app tests do not load it).
+- **Not verified**: the app was not started (win-build has no interactive desktop): the Retry button, the "Reconnecting..." screen and the close-window dialog
+  are built and their decisions are unit-tested, but not looked at on screen; no run against a real engine with a host going away.
