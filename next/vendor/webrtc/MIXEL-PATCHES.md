@@ -18,16 +18,9 @@ Regression: `core_protocol::transport::receive_buffer_tests::a_keyframe_sized_bu
 
 Regression: `core_protocol::stream_turn::tests` (byte-identical picture through `send`, which now runs through `packetize_sample`) and `mixel_engine::video_pacing::tests`. Keep the method when upgrading the crate.
 
-## First-flight timers of DTLS and SCTP (17 Nov 2026)
+## First-flight timers of DTLS and SCTP: tried in 2.0.17, taken out in 2.0.18 (17 Nov 2026)
 
-`vendor/rtc-dtls` and `vendor/rtc-sctp` are rtc-dtls 0.21.1 and rtc-sctp 0.21.1 from crates.io (licenses kept,
-examples and benches dropped) with one constant each changed: the DTLS handshake's first retransmission after
-250 ms instead of 1 s (`conn/mod.rs` `INITIAL_TICKER_INTERVAL`; it still doubles per try) and SCTP's RTO before the
-first RTT measurement 250 ms instead of 1 s (`association/timer.rs` `RTO_INITIAL`) and its lowest RTO 400 ms instead
-of 1 s (`RTO_MIN`, as in the SCTP stack libwebrtc uses: the data channel's open message lost as the association came
-up waited a full second). In a relay-only session the first DTLS flight and the first SCTP
-INIT are regularly lost at the moment ICE completes (the other side is not ready yet); each cost one full second
-(lab, 17 Nov: ICE done after 0.14 s, DTLS after 1.0-1.3 s more, the data channel 1.1-2.2 s after that).
-
-Regression: the lab timeline (`mixel_engine::qa_timeline`, "QA transport" lines) and `rtc-sctp`'s own timer tests
-(`cargo test --manifest-path vendor/rtc-sctp/Cargo.toml timer`). Keep both changes when upgrading the crates.
+2.0.17 vendored rtc-dtls and rtc-sctp 0.21.1 with a 250 ms first DTLS retransmission and SCTP RTO 250 ms initial /
+400 ms minimum. On a 280 ms line with 1 % loss the file channel then never opened (lab: 0 of 2 sessions; the same build
+without the patch 1 of 1, 300 kB in 11 s), and the connect gain there was nil (6.6-6.7 s either way). Removed; the
+registry crates are used again. A future attempt must keep RTO_MIN at 1 s and prove the file channel on the long line.
