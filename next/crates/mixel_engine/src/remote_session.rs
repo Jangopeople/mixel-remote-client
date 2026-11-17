@@ -2849,8 +2849,10 @@ async fn supervise(
         // The kept session's media is bound to the registration's flag: the next registration continues it.
         let attempt = keep.as_ref().map_or_else(|| Arc::new(AtomicBool::new(false)), |kept| kept.attempt.clone());
         let guard = AttemptGuard(attempt.clone(), false);
+        crate::qa_timeline::begin("registration: starting");
         let result = match auth.credential(Some(&attempt)).await {
             Ok(credential) => {
+                crate::qa_timeline::mark("registration: sign-in credential ready");
                 let principal = auth.principal(&credential)?;
                 if principal.user != expected.user
                     || principal.tenant != expected.tenant
@@ -2970,6 +2972,7 @@ async fn run(
         for kept in kept.peers { if kept.host { peer = Some(kept); } else { ctrl.push(kept); } }
     }
     let enrolled = auth.enrollment(&initial, &identity).await?;
+    crate::qa_timeline::mark("registration: device enrollment ready");
     let device = enrolled.device;
     let principal = auth.principal(&initial)?.clone();
     if enrolled.public_key != identity.public_key()? {
@@ -2978,6 +2981,7 @@ async fn run(
     let service = crate::service_config::ServiceConfig::load()?;
     let roots = service.roots()?;
     let mut own_ticket = registration_ticket(&initial, &enrolled, &identity).await?;
+    crate::qa_timeline::mark("registration: device ticket ready");
     if cancel.load(Ordering::Acquire) {
         return Err("The device registration was cancelled".into());
     }
@@ -2991,6 +2995,7 @@ async fn run(
     .await
     .map_err(|_| Failure::network("Secure connection timed out"))?
     .map_err(crate::remote_recovery::socket)?;
+    crate::qa_timeline::mark("registration: connection service socket open");
     let broker_lease = carried_lease.unwrap_or_else(|| Arc::new(std::sync::Mutex::new((0, std::time::Instant::now()))));
     if let Ok(mut lease) = broker_lease.lock() {
         *lease = (own_ticket.expires_at, std::time::Instant::now() + Duration::from_secs(899));
@@ -3011,6 +3016,7 @@ async fn run(
         let ready=tokio::time::timeout(Duration::from_secs(6),event(&mut socket)).await.map_err(|_|Failure::network("Device registration timed out"))??;
         if !matches!(ready,Some(ServerMessage::Ready{host,protocol:core_protocol::PROTOCOL_VERSION}) if host==enrolled.connection_id) {return Err(Failure::network("The connection service did not verify this device ID"));}
         ready_at=Some(std::time::Instant::now());
+        crate::qa_timeline::mark("registration: READY (reachable)");
         match &auth {
             #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
             RegistrationAuth::Startup { source, .. } => {

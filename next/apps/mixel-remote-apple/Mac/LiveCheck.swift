@@ -238,6 +238,95 @@ enum LiveCheck {
 
     /// Each sign-in button reaches its provider's login page: the engine builds the PKCE authorize link,
     /// it is followed without cookies up to the provider, and the sign-in is cancelled (nobody signs in).
+    /// `--live-multi`: two sessions at once, from this Mac to two lab computers (their Remote IDs in
+    /// `folder/host-id-a.txt` and `host-id-b.txt`, written by the lab script). Both must show pictures, input goes only
+    /// to the session it names (the lab script reads both computers' pointers: `input-a.txt` out, `input-a.ack` in),
+    /// and ending one leaves the other running.
+    static func multi(sessionFile: String, suffix: String, folder: String) -> Never {
+        setenv("MIXEL_QA_SESSION_FILE", sessionFile, 1)
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
+            await multiRun(folder: URL(fileURLWithPath: folder))
+            done.signal()
+        }
+        _ = NSApplication.shared
+        NSApp.setActivationPolicy(.accessory)
+        while done.wait(timeout: .now()) == .timedOut { RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05)) }
+        print("RESULT \(checks - failures)/\(checks) passed")
+        exit(failures == 0 ? 0 : 1)
+    }
+
+    static func multiRun(folder: URL) async {
+        func read(_ name: String, seconds: Int) async -> String? {
+            for _ in 0..<(seconds * 2) {
+                if let text = try? String(contentsOf: folder.appendingPathComponent(name), encoding: .utf8), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return text.trimmingCharacters(in: .whitespacesAndNewlines) }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            return nil
+        }
+        guard let engine = try? CoreEngine(dataDirectory: folder.appendingPathComponent("engine")) else { check("engine starts", false); return }
+        check("sign-in with the QA session", await signIn(engine))
+        guard let a = await read("host-id-a.txt", seconds: 600).flatMap({ Int($0) }), let b = await read("host-id-b.txt", seconds: 600).flatMap({ Int($0) }) else { check("both lab computers are online", false); return }
+        func sessions(_ status: [String: Any]) -> [[String: Any]] { status["sessions"] as? [[String: Any]] ?? [] }
+        func item(_ status: [String: Any], _ host: Int) -> [String: Any]? { sessions(status).first { ($0["peer"] as? Int) == host } }
+        func status() async -> [String: Any] { ((try? await call(engine, "remote_status").get()) as? [String: Any]) ?? [:] }
+        // Online first (presence), then both requests, one after the other.
+        for _ in 0..<60 {
+            _ = await call(engine, "remote_presence", ["hosts": [a, b]])
+            let online = (await status())["online"] as? [Int] ?? []
+            if online.contains(a), online.contains(b) { break }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+        let idA = (try? await call(engine, "remote_request", ["host": a, "password": NSNull(), "unattended": false]).get()) as? String
+        let idB = (try? await call(engine, "remote_request", ["host": b, "password": NSNull(), "unattended": false]).get()) as? String
+        check("two requests accepted (stable ids)", idA != nil && idB != nil && idA != idB, "\(String(describing: idA)) \(String(describing: idB))")
+        guard let idA, let idB else { return }
+        let both = await wait(engine, seconds: 90) { status in
+            let list = (status["sessions"] as? [[String: Any]] ?? []).filter { ($0["phase"] as? String) == "active" }
+            return list.count == 2
+        }
+        let listed = await status()["sessions"]
+        check("both sessions active at the same time", both != nil, "\(String(describing: listed))")
+        guard both != nil else { return }
+        // Both pictures update: the picture counters of both rise meanwhile.
+        let first = await status()
+        let before = (item(first, a)?["received"] as? Int ?? 0, item(first, b)?["received"] as? Int ?? 0)
+        try? await Task.sleep(nanoseconds: 6_000_000_000)
+        let later = await status()
+        let after = (item(later, a)?["received"] as? Int ?? 0, item(later, b)?["received"] as? Int ?? 0)
+        print("pictures received A \(before.0) -> \(after.0), B \(before.1) -> \(after.1); rates \(item(later, a)?["quality"] ?? "") \(item(later, b)?["quality"] ?? "")")
+        check("pictures of session A keep arriving", after.0 > before.0)
+        check("pictures of session B keep arriving", after.1 > before.1)
+        // Input goes to the session it names: a pointer move to A only (the lab script compares both computers' pointers).
+        let x = 45000, y = 30000
+        try? "\(x) \(y)".write(to: folder.appendingPathComponent("input-a.txt"), atomically: true, encoding: .utf8)
+        var confirmed = false
+        for step in 0..<6 {
+            let reply = try? await engine.input(session: idA, json: "{\"kind\":\"pointer\",\"x\":\(x + step),\"y\":\(y)}")
+            confirmed = confirmed || reply != nil
+            try? await Task.sleep(nanoseconds: 300_000_000)
+        }
+        check("input to session A is confirmed by computer A", confirmed)
+        let ack = await read("input-a.ack", seconds: 60)
+        check("only computer A moved its pointer, computer B did not (\(ack ?? "no answer"))", ack?.hasPrefix("A-moved B-still") == true)
+        // Ending A leaves B running with pictures.
+        _ = await call(engine, "remote_close", ["session": idA])
+        let rest = await wait(engine, seconds: 30) { status in
+            let list = status["sessions"] as? [[String: Any]] ?? []
+            return list.count == 1 && (list.first?["peer"] as? Int) == b && (list.first?["phase"] as? String) == "active"
+        }
+        let left = await status()["sessions"]
+        check("ending A leaves exactly B, still active", rest != nil, "\(String(describing: left))")
+        let b1 = item(await status(), b)?["received"] as? Int ?? 0
+        try? await Task.sleep(nanoseconds: 5_000_000_000)
+        let b2 = item(await status(), b)?["received"] as? Int ?? 0
+        check("pictures of B continue after A ended (\(b1) -> \(b2))", b2 > b1)
+        _ = await call(engine, "remote_close", ["session": idB])
+        let none = await wait(engine, seconds: 30) { (($0["sessions"] as? [[String: Any]]) ?? []).isEmpty }
+        check("ending B leaves no session", none != nil)
+        try? await engine.shutdown()
+    }
+
     static func providers() -> Never {
         let done = DispatchSemaphore(value: 0)
         Task.detached {

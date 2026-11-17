@@ -35,6 +35,11 @@ enum Entry {
         if arguments.count >= 5, arguments[1] == "--live-be-host" {
             LiveCheck.technician(sessionFile: arguments[2], suffix: arguments[3], folder: arguments[4], last: false, command: "qa_live_host")
         }
+        // `--live-multi <qa-session.json> <suffix> <folder>`: two sessions at once to two lab computers (host-id-a.txt,
+        // host-id-b.txt in the folder): pictures of both, input to one, ending one leaves the other.
+        if arguments.count >= 5, arguments[1] == "--live-multi" {
+            LiveCheck.multi(sessionFile: arguments[2], suffix: arguments[3], folder: arguments[4])
+        }
         // `--live-providers`: every sign-in button reaches its provider's login page (no sign-in).
         if arguments.count >= 2, arguments[1] == "--live-providers" { LiveCheck.providers() }
         // `--live-prepare <qa-session.json> <suffix> <folder>`: QA company + deploy token for the update test.
