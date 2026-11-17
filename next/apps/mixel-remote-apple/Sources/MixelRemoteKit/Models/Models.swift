@@ -284,6 +284,8 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
     /// Opened with a one-time password: this session's own end time (its 5 and 1 minute warnings are this session's only).
     public var passwordSession: PasswordSessionView?
     public var unattendedSession: Bool
+    /// Unattended access was asked for, but that computer is not set up for it: the person there is asked instead.
+    public var unattendedRefused = false
 
     /// A request still waiting for Accept or negotiating (not a session asking its computer again).
     public var isNewRequest: Bool { ["outgoing", "negotiating"].contains(phase) && !reconnecting && !reconnectFailed }
@@ -307,7 +309,7 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
     private enum Key: String, CodingKey {
         case id, session, peer, device, phase, message, consent, received, control, clipboard, files, recordingPermitted, recording, displays, display
         case displayAll, printJobs, hostActions, signinId, hostMacs, meetingOffer, peerFeatures, joinedSession, switched, quality, startedAt
-        case reconnecting, reconnectFailed, passwordSession, unattendedSession
+        case reconnecting, reconnectFailed, passwordSession, unattendedSession, unattendedRefused
     }
 
     public init(from decoder: Decoder) throws {
@@ -341,6 +343,7 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
         reconnectFailed = (try? c.decodeIfPresent(Bool.self, forKey: .reconnectFailed)) ?? false
         passwordSession = try? c.decodeIfPresent(PasswordSessionView.self, forKey: .passwordSession)
         unattendedSession = (try? c.decodeIfPresent(Bool.self, forKey: .unattendedSession)) ?? false
+        unattendedRefused = (try? c.decodeIfPresent(Bool.self, forKey: .unattendedRefused)) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -373,6 +376,7 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
         try c.encode(reconnectFailed, forKey: .reconnectFailed)
         try c.encode(passwordSession, forKey: .passwordSession)
         try c.encode(unattendedSession, forKey: .unattendedSession)
+        try c.encode(unattendedRefused, forKey: .unattendedRefused)
         try c.encode(quality, forKey: .quality)
         try c.encode(startedAt, forKey: .startedAt)
     }

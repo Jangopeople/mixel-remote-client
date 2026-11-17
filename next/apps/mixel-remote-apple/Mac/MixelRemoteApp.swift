@@ -75,6 +75,13 @@ struct MainWindow: View {
     }
 }
 
+extension Scene {
+    /// Session windows belong to a running session: after a restart there is nothing to show, so macOS does not bring them back.
+    @SceneBuilder func withoutRestoration() -> some Scene {
+        if #available(macOS 15.0, *) { self.restorationBehavior(.disabled) } else { self }
+    }
+}
+
 struct MixelRemoteMacApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @Environment(\.openWindow) private var openWindow
@@ -98,6 +105,7 @@ struct MixelRemoteMacApp: App {
             }
         }
         .defaultSize(width: 1180, height: 760)
+        .withoutRestoration()
 
         Settings {
             if let app = delegate.model {

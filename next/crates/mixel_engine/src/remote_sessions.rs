@@ -88,6 +88,9 @@ pub struct SessionStatus {
     pub password_session: Option<crate::remote_session::PasswordSessionView>,
     /// This session was opened (and granted) as an unattended one.
     pub unattended_session: bool,
+    /// Unattended access was asked for but this computer is not set up for it: the person there is asked instead (attended).
+    #[serde(default)]
+    pub unattended_refused: bool,
     /// Opened with a support password (the countdown starts when the connection service announces the end).
     #[serde(skip)]
     pub password_flag: bool,
@@ -233,6 +236,7 @@ impl Registry {
                 reconnect_failed: false,
                 password_session: None,
                 unattended_session: false,
+                unattended_refused: false,
                 password_flag: false,
                 password_ends: None,
             },

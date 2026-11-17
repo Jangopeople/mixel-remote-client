@@ -3868,7 +3868,7 @@ async fn run(
                                     crate::qa_timeline::mark("unattended request refused (Unavailable): asking again as an attended request");
                                     send(&mut socket,ClientMessage::Request{host}).await?;
                                     outgoing.push_front(Out{slot,host,key,unattended:false,joined:false,cancelled:false});
-                                    state.slot_change(generation,slot,|view|{view.phase="outgoing".into();view.unattended_session=false;view.message="Waiting for the remote host to Accept".into();}).await;
+                                    state.slot_change(generation,slot,|view|{view.phase="outgoing".into();view.unattended_session=false;view.unattended_refused=true;view.message="This computer is not set up for unattended access; asking the person there".into();}).await;
                                 } else if retries.iter().any(|again|again.host==host) {
                                     // A retry of a lost session: the next ask follows, the window stays as it is.
                                 } else {

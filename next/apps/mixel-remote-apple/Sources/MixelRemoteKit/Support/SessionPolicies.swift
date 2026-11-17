@@ -10,6 +10,8 @@ public struct SessionNotice: Equatable, Sendable {
         case password(seconds: Int?)
         /// Unattended: nobody at the other computer accepted.
         case unattended
+        /// Unattended was asked for, but that computer is not set up for it: the person there was asked.
+        case unattendedRefused
     }
     public enum Level: Int, Equatable, Sendable { case info, warning, urgent }
 
@@ -25,7 +27,7 @@ public struct SessionNotice: Equatable, Sendable {
     ///   - passwordSession: the engine reports the session as opened with a password (`password_session`).
     ///   - sentPassword: this app's own request carried a password (the engine may not report it yet).
     ///   - endsAt: the end of a password session, when known.
-    public static func make(passwordSession: Bool, sentPassword: Bool, unattended: Bool, endsAt: Date?, now: Date = Date()) -> SessionNotice? {
+    public static func make(passwordSession: Bool, sentPassword: Bool, unattended: Bool, unattendedRefused: Bool = false, endsAt: Date?, now: Date = Date()) -> SessionNotice? {
         if passwordSession || sentPassword {
             guard let endsAt else { return SessionNotice(kind: .password(seconds: nil), level: .info) }
             let left = max(0, Int(endsAt.timeIntervalSince(now).rounded(.up)))
@@ -33,6 +35,7 @@ public struct SessionNotice: Equatable, Sendable {
             return SessionNotice(kind: .password(seconds: left), level: level)
         }
         if unattended { return SessionNotice(kind: .unattended, level: .info) }
+        if unattendedRefused { return SessionNotice(kind: .unattendedRefused, level: .warning) }
         return nil
     }
 

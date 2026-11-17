@@ -83,6 +83,8 @@ pub struct RemoteStatus {
     pub unattended_enabled: bool,
     pub unattended_pending: Option<String>,
     pub unattended_session: bool,
+    /// Unattended was asked for, but that computer is not set up for it: the person there is asked instead.
+    pub unattended_refused: bool,
     pub pairing: Option<PairingPrompt>,
     pub pairing_message: Option<String>,
     pub code_required: bool,
@@ -179,6 +181,8 @@ pub struct SessionItem {
     pub password_session: Option<PasswordSessionView>,
     /// Opened without a person confirming at the other computer (this session only).
     pub unattended_session: bool,
+    /// Unattended was asked for, but that computer is not set up for it: the person there is asked instead.
+    pub unattended_refused: bool,
 }
 
 /// Where one session's connection to its computer stands.
@@ -284,6 +288,7 @@ impl RemoteStatus {
             switched: self.switched,
             password_session: self.password_session.clone(),
             unattended_session: self.unattended_session,
+            unattended_refused: self.unattended_refused,
             ..SessionItem::default()
         }]
     }
@@ -338,6 +343,7 @@ impl RemoteStatus {
         // must not show here.
         view.password_session = item.password_session.clone();
         view.unattended_session = item.unattended_session;
+        view.unattended_refused = item.unattended_refused;
         view.session_reconnecting = item.reconnecting && !item.reconnect_failed;
         view.session_reconnect_failed = item.reconnect_failed;
         view

@@ -857,7 +857,7 @@ impl Parts {
     fn render_floating(&self, app: &Rc<App>, state: &State) {
         let workspace = &state.workspace;
         let notices: Vec<(u32, String, String)> = workspace.ready_notices.iter().filter_map(|peer| workspace.tab(*peer).map(|tab| (*peer, tab.name.clone(), tab.os.clone()))).collect();
-        let key = format!("{:?}{:?}{}", workspace.attempt, notices, crate::i18n::choice());
+        let key = format!("{:?}{:?}{}{}", workspace.attempt, notices, crate::i18n::choice(), state.setup_offer);
         if *self.floating_key.borrow() == key {
             return;
         }

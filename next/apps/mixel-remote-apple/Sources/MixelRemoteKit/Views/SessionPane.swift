@@ -162,11 +162,11 @@ struct SessionNoticeBanner: View {
 
     var body: some View {
         let status = session.remote
-        if status.passwordSession != nil || session.lastRequestPassword || status.unattendedSession {
+        if status.passwordSession != nil || session.lastRequestPassword || status.unattendedSession || session.item?.unattendedRefused == true {
             TimelineView(.periodic(from: Date(), by: 1)) { context in
                 let ends = status.passwordSession?.endsAt.flatMap(Format.parseDate)
                 if let notice = SessionNotice.make(passwordSession: status.passwordSession != nil, sentPassword: session.lastRequestPassword,
-                                                   unattended: status.unattendedSession, endsAt: ends, now: context.date) {
+                                                   unattended: status.unattendedSession, unattendedRefused: session.item?.unattendedRefused == true, endsAt: ends, now: context.date) {
                     SessionNoticeBar(notice: notice)
                 }
             }
@@ -181,6 +181,8 @@ struct SessionNoticeBar: View {
         switch notice.kind {
         case .unattended:
             return L("Unattended session: nobody at that computer was asked.")
+        case .unattendedRefused:
+            return L("This computer is not set up for unattended access. The person there was asked to accept.")
         case .password(let seconds):
             guard let seconds else { return L("Opened with a one-time password. Such a session ends by itself after at most 2 hours.") }
             if seconds == 0 { return L("The time limit of this password session is reached. The session ends now.") }
@@ -302,7 +304,7 @@ struct SessionBar: View {
                 if !compact {
                     HStack(spacing: 4) {
                         Image(systemName: "lock.fill").foregroundStyle(Theme.success).font(.system(size: 9))
-                        Text(verbatim: [Format.remoteId(tab.peer), L("E2E encrypted"), remote.unattendedSession ? L("Unattended") : nil, remote.control ? nil : L("View only")]
+                        Text(verbatim: [Format.remoteId(tab.peer), L("E2E encrypted"), remote.unattendedSession ? L("Unattended") : L("Attended"), remote.control ? nil : L("View only")]
                             .compactMap { $0 }.joined(separator: " · "))
                             .lineLimit(1)
                     }
@@ -503,6 +505,15 @@ public struct SessionWindowView: View {
                 // A window restored at launch without its session closes at once.
                 if workspace.tab(peer) == nil || !workspace.isInWindow(peer) {
                     DispatchQueue.main.async { window?.close() }
+                    // The engine lists its sessions a moment after launch and the window is found a moment after it appears:
+                    // check again, so an old session's window never stays empty.
+                    Task { @MainActor in
+                        for _ in 0..<6 {
+                            try? await Task.sleep(nanoseconds: 700_000_000)
+                            if workspace.tab(peer) != nil, workspace.isInWindow(peer) { return }
+                            if let window { window.close(); return }
+                        }
+                    }
                 }
             }
     }

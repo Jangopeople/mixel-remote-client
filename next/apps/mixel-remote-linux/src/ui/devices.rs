@@ -724,7 +724,7 @@ fn move_dialog(app: &Rc<App>, device: &Device) {
 }
 
 /// "Add this computer" from the device list: the set-up card in a dialog.
-fn add_this_dialog(app: &Rc<App>, setup: &Rc<SetupInputs>) {
+pub(super) fn add_this_dialog(app: &Rc<App>, setup: &Rc<SetupInputs>) {
     let Some(parent) = window(app) else { return };
     let (dialog, content, actions) = dialogs::window(&parent, &t("Add this computer"), 480);
     let holder = vbox(0);

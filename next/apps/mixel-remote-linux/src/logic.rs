@@ -70,6 +70,11 @@ pub fn session_warnings(remote: &RemoteStatus) -> Vec<String> {
     if remote.reconnecting {
         lines.push(t("Reconnecting… the session stays open"));
     }
+    if remote.unattended_session {
+        lines.push(t("Unattended session: nobody at that computer was asked."));
+    } else if remote.unattended_refused {
+        lines.push(t("This computer is not set up for unattended access. The person there was asked to accept."));
+    }
     if let Some(left) = remote.password_session.as_ref().and_then(|session| session.seconds_left) {
         if left == 0 {
             lines.push(t("The time limit of this password session is reached. The session ends now."));
@@ -1135,5 +1140,14 @@ mod tests {
         assert_eq!(duration(3900), "1 h 05 min");
         assert_eq!(report_day("2026-11-01"), Some("2026-11-01".into()));
         assert_eq!(report_day("01.11.2026"), None);
+    }
+
+    #[test]
+    fn the_session_view_says_when_unattended_access_fell_back_to_asking_the_person() {
+        let refused = RemoteStatus { unattended_refused: true, ..RemoteStatus::default() };
+        assert!(session_warnings(&refused).iter().any(|line| line.contains("not set up for unattended access")));
+        let unattended = RemoteStatus { unattended_session: true, ..RemoteStatus::default() };
+        assert!(session_warnings(&unattended).iter().any(|line| line.contains("nobody at that computer was asked")));
+        assert!(session_warnings(&RemoteStatus::default()).is_empty());
     }
 }

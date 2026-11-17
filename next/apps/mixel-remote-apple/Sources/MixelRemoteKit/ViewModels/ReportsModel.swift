@@ -176,6 +176,9 @@ public final class ReportsModel: ObservableObject {
     func statusChanged(from previous: RemoteStatus, to next: RemoteStatus) {
         let controlling = next.phase == "active" && !next.sharing && next.session != nil && next.peer != nil
         if let active = current, next.phase == "closing" || (controlling && next.session == active.session) { return }
+        // A session that lost its computer and asks again (Reconnecting, Could not reconnect + Retry) is still listed:
+        // it has not ended, so no note sheet covers its panel.
+        if let active = current, next.viewerSessions.contains(where: { $0.peer == active.peer && $0.phase != "closing" }) && !controlling { return }
         let ended = current
         current = controlling ? (next.session!, next.peer!) : nil
         guard let ended, ended.session != current?.session else { return }

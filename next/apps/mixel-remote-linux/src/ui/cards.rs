@@ -120,7 +120,15 @@ pub fn attempt_card(app: &Rc<App>, state: &State, attempt: &Attempt) -> gtk::Box
         move || a.cancel_attempt(),
     ));
     actions.append(&spacer());
-    if failed {
+    if failed && state.setup_offer {
+        // This computer is not added to the account yet: the card offers the step itself.
+        let a = app.clone();
+        actions.append(&primary(&t("Add this computer"), move || {
+            a.cancel_attempt();
+            let setup = Rc::new(super::remote::SetupInputs::new(&a));
+            super::devices::add_this_dialog(&a, &setup);
+        }));
+    } else if failed {
         let (a, peer, unattended) = (app.clone(), attempt.peer, attempt.unattended);
         actions.append(&primary(&t("Try again"), move || {
             a.connect(peer, None, unattended)
