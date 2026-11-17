@@ -117,6 +117,9 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
     public var sessions: [RemoteSessionItem]?
     /// How many technician sessions the engine allows at once (4); `nil` from an older engine (one).
     public var maxSessions: Int?
+    /// The connection to the connection service was lost; the session itself continues and is resumed (engine 2.1.0).
+    public var reconnecting: Bool?
+    public var isReconnecting: Bool { reconnecting == true }
 
     public static let offline = RemoteStatus(phase: "offline")
 
@@ -165,6 +168,7 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
         self.switched = switched
         self.peerFeatures = peerFeatures
         self.passwordSession = nil
+        self.reconnecting = nil
     }
 
     /// Connected to Mixel (this computer can be reached and can connect).
@@ -634,16 +638,24 @@ public struct UpdateInfo: Codable, Equatable, Sendable {
     public var installable: Bool
     /// Nothing would be interrupted and the sign-in survives the restart: install without asking.
     public var silent: Bool
-    public init(version: String, installable: Bool = false, silent: Bool = false) {
+    /// A session is running (or ended a moment ago): the update is ready and installs after it (`waits_for_session`).
+    public var waitsForSession: Bool
+    /// Seconds of idle time still needed after the last session (`idle_seconds_left`), when it is counting down.
+    public var idleSecondsLeft: Int?
+    public init(version: String, installable: Bool = false, silent: Bool = false, waitsForSession: Bool = false, idleSecondsLeft: Int? = nil) {
         self.version = version
         self.installable = installable
         self.silent = silent
+        self.waitsForSession = waitsForSession
+        self.idleSecondsLeft = idleSecondsLeft
     }
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         version = try container.decode(String.self, forKey: .version)
         installable = try container.decodeIfPresent(Bool.self, forKey: .installable) ?? false
         silent = try container.decodeIfPresent(Bool.self, forKey: .silent) ?? false
+        waitsForSession = try container.decodeIfPresent(Bool.self, forKey: .waitsForSession) ?? false
+        idleSecondsLeft = try container.decodeIfPresent(Int.self, forKey: .idleSecondsLeft)
     }
 }
 

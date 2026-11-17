@@ -972,7 +972,7 @@ pub fn run_host() -> Result<(), String> {
                             break;
                         }
                         // Idle: look for a newer version two minutes after start, then every 15 minutes.
-                        if status.phase == "ready" && next_update.is_none_or(|at: std::time::Instant| std::time::Instant::now() >= at) {
+                        if status.phase == "ready" && crate::update_gate::verdict(&status.phase, false).installs() && next_update.is_none_or(|at: std::time::Instant| std::time::Instant::now() >= at) {
                             let first = next_update.is_none();
                             next_update = Some(std::time::Instant::now() + Duration::from_secs(if first { 120 } else { 15 * 60 }));
                             if !first {

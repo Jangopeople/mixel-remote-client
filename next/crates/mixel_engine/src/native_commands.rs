@@ -972,7 +972,11 @@ async fn update_check(context: &Context) -> Result<String, String> {
             return out(Value::Null);
         }
         // Silent only when nothing would be interrupted and the sign-in survives the restart.
-        let idle = matches!(context.remote.status().await.phase.as_str(), "offline" | "error" | "ready");
+        // Never while a session runs here (as technician or as the computer being helped), and not until a
+        // short idle time after the last one (update_gate). The person can still press "Update now".
+        let phase = context.remote.status().await.phase;
+        let verdict = crate::update_gate::verdict(&phase, false);
+        let idle = verdict.installs() && !matches!(phase.as_str(), "connecting");
         let account = context.auth.status().await;
         let keeps_sign_in =
             account.phase != "authenticated" || account.account.as_ref().is_some_and(|account| account.remembered);
@@ -981,6 +985,8 @@ async fn update_check(context: &Context) -> Result<String, String> {
             "installable": true,
             "silent": idle && keeps_sign_in && !crate::self_update::NEEDS_PASSWORD,
             "needs_password": crate::self_update::NEEDS_PASSWORD,
+            "waits_for_session": verdict.waits(),
+            "idle_seconds_left": verdict.seconds_left(),
         }));
     }
     if PLATFORM == "windows" {

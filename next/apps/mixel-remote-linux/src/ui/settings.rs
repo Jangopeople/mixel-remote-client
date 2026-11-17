@@ -203,7 +203,12 @@ impl SettingsPage {
         updates.add(&info_row(&t("Version"), &app.info.version));
         let row = adw::ActionRow::builder().title(t("Check for updates")).build();
         if let Some(update) = &settings.update {
-            row.set_subtitle(&tf("Version %@ is available.", &[&update.version]));
+            let mut subtitle = tf("Version %@ is available.", &[&update.version]);
+            if update.waits_for_session {
+                subtitle.push_str(" ");
+                subtitle.push_str(&t("Update ready, installs after this session"));
+            }
+            row.set_subtitle(&subtitle);
             let a = app.clone();
             let install = if update.installable { primary(&t("Update now"), move || a.install_update()) } else { button(&t("Download"), move || a.open_uri("https://store.mixel.ch/app/mixel-remote")) };
             install.set_valign(gtk::Align::Center);

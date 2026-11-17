@@ -1049,7 +1049,7 @@ msgid "Quit Mixel Remote"
 msgstr "Quitter Mixel Remote"
 
 msgid "Reach every company device in seconds, run several sessions side by side, and file the report without leaving the session."
-msgstr "Atteignez chaque appareil de l’entreprise en quelques secondes, menez plusieurs sessions côte à côte et rédigez le rapport sans quitter la session."
+msgstr "Accédez à chaque appareil de l’entreprise en quelques secondes, menez plusieurs sessions côte à côte et rédigez le rapport sans quitter la session."
 
 msgid "Reaching device"
 msgstr "Joindre l’appareil"
@@ -1071,6 +1071,9 @@ msgstr "Se reconnecter maintenant"
 
 msgid "Reconnecting automatically."
 msgstr "Reconnexion automatique."
+
+msgid "Reconnecting… the session stays open"
+msgstr "Reconnexion… la session reste ouverte"
 
 msgid "Record"
 msgstr "Enregistrer"
@@ -1109,7 +1112,7 @@ msgid "Remote support and access for your devices."
 msgstr "Assistance et accès à distance pour vos appareils."
 
 msgid "Remote support that feels local."
-msgstr "Une assistance à distance qui semble locale."
+msgstr "Une assistance à distance qui paraît locale."
 
 msgid "Remove"
 msgstr "Retirer"
@@ -1459,6 +1462,9 @@ msgstr "La session est prête."
 msgid "The technician wants to show you their screen."
 msgstr "Le technicien souhaite vous montrer son écran."
 
+msgid "The time limit of this password session is reached. The session ends now."
+msgstr "La limite de temps de cette session par mot de passe est atteinte. La session se termine maintenant."
+
 msgid "The update could not be installed: %@"
 msgstr "La mise à jour n’a pas pu être installée : %@"
 
@@ -1531,6 +1537,12 @@ msgstr "C’est la version la plus récente."
 msgid "This session was opened with a one-time password. Continue only if the person at the other computer gave it to you; either side can end it at any time."
 msgstr "Cette session a été ouverte avec un mot de passe à usage unique. Continuez seulement si la personne à l’autre ordinateur vous l’a donné ; chaque partie peut y mettre fin à tout moment."
 
+msgid "This support session ends in %d minutes (support password limit). Ask for a new password to continue."
+msgstr "Cette session de support se termine dans %d minutes (limite du mot de passe de support). Demandez un nouveau mot de passe pour continuer."
+
+msgid "This support session ends in 1 minute (support password limit). Ask for a new password to continue."
+msgstr "Cette session de support se termine dans 1 minute (limite du mot de passe de support). Demandez un nouveau mot de passe pour continuer."
+
 msgid "Ticket number"
 msgstr "Numéro du ticket"
 
@@ -1587,6 +1599,9 @@ msgstr "Mise à jour disponible"
 
 msgid "Update now"
 msgstr "Mettre à jour"
+
+msgid "Update ready, installs after this session"
+msgstr "Mise à jour prête, installation après cette session"
 
 msgid "Update sign-in screen access"
 msgstr "Mettre à jour l’accès à l’écran de connexion"

@@ -138,6 +138,8 @@ public sealed class SettingsModel : Observable
     public Task DisableSignInScreen() => Change(() => app.Engine.PerformAsync("signin_screen_disable"));
     public Task UpdateSignInScreen() => Change(() => app.Engine.PerformAsync("signin_screen_update"));
 
+    private DateTimeOffset lastQuietCheck = DateTimeOffset.MinValue;
+
     public Task CheckForUpdate() => Change(ReadUpdate);
 
     private async Task ReadUpdate()
@@ -150,6 +152,9 @@ public sealed class SettingsModel : Observable
     public async Task CheckForUpdateQuietly()
     {
         if (Installing) return;
+        // A ready update that waits for a session is looked at every minute, so it installs soon after the idle time.
+        if (Update is { WaitsForSession: true } && DateTimeOffset.UtcNow - lastQuietCheck < TimeSpan.FromSeconds(55)) return;
+        lastQuietCheck = DateTimeOffset.UtcNow;
         try { await ReadUpdate(); }
         catch (EngineFailure) { return; }
         if (Update is { Installable: true, Silent: true } && AutoUpdate && !InstallFailed) await InstallUpdate();

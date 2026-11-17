@@ -98,6 +98,8 @@ public sealed record RemoteStatus
     public List<SessionStatus>? Sessions { get; init; }
     /// <summary>How many technician sessions the engine allows at once (4); null from an older engine.</summary>
     public int? MaxSessions { get; init; }
+    /// <summary>The connection to the connection service was lost; the session continues and is resumed (engine 2.1.0).</summary>
+    public bool Reconnecting { get; init; }
 
     public static readonly RemoteStatus Offline = new();
 
@@ -521,6 +523,10 @@ public sealed record UpdateInfo
     /// <summary>Nothing would be interrupted and the sign-in survives the restart.</summary>
     public bool Silent { get; init; }
     public bool NeedsPassword { get; init; }
+    /// <summary>A session is running (or ended a moment ago): the update is ready and installs after it.</summary>
+    public bool WaitsForSession { get; init; }
+    /// <summary>Idle seconds still needed after the last session, while counting down.</summary>
+    public int? IdleSecondsLeft { get; init; }
 }
 
 public sealed record EnrollmentCompany

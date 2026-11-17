@@ -101,7 +101,7 @@ public partial class App : Application
             Model.Start();
             WatchShowRequests();
             updates = main.DispatcherQueue.CreateTimer();
-            updates.Interval = TimeSpan.FromMinutes(30);
+            updates.Interval = TimeSpan.FromMinutes(1);
             updates.Tick += (_, _) => _ = Model.Settings.CheckForUpdateQuietly();
             updates.Start();
             _ = Model.Settings.CheckForUpdateQuietly();

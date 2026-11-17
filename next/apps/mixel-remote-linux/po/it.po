@@ -533,7 +533,7 @@ msgid "End the current session first."
 msgstr "Termina prima la sessione in corso."
 
 msgid "End-to-end encrypted, hosted in Switzerland"
-msgstr "Cifrato end-to-end, ospitato in Svizzera"
+msgstr "Crittografia end-to-end, ospitato in Svizzera"
 
 msgid "Ending the session…"
 msgstr "Chiusura della sessione…"
@@ -614,7 +614,7 @@ msgid "Generated %@"
 msgstr "Generato il %@"
 
 msgid "Get a support ID for your technician"
-msgstr "Ottenga un ID di supporto per il suo tecnico"
+msgstr "Ottenga un ID di assistenza per il suo tecnico"
 
 msgid "Get remote clipboard"
 msgstr "Ottieni gli appunti remoti"
@@ -1072,6 +1072,9 @@ msgstr "Riconnetti ora"
 msgid "Reconnecting automatically."
 msgstr "Riconnessione automatica."
 
+msgid "Reconnecting… the session stays open"
+msgstr "Riconnessione… la sessione resta aperta"
+
 msgid "Record"
 msgstr "Registra"
 
@@ -1459,6 +1462,9 @@ msgstr "La sessione è pronta."
 msgid "The technician wants to show you their screen."
 msgstr "Il tecnico desidera mostrarLe il suo schermo."
 
+msgid "The time limit of this password session is reached. The session ends now."
+msgstr "Il limite di tempo di questa sessione con password è stato raggiunto. La sessione termina ora."
+
 msgid "The update could not be installed: %@"
 msgstr "Non è stato possibile installare l’aggiornamento: %@"
 
@@ -1531,6 +1537,12 @@ msgstr "Questa è la versione più recente."
 msgid "This session was opened with a one-time password. Continue only if the person at the other computer gave it to you; either side can end it at any time."
 msgstr "Questa sessione è stata aperta con una password monouso. Continui solo se la persona all’altro computer gliel’ha data; ciascuna parte può terminarla in qualsiasi momento."
 
+msgid "This support session ends in %d minutes (support password limit). Ask for a new password to continue."
+msgstr "Questa sessione di supporto termina tra %d minuti (limite della password di supporto). Chieda una nuova password per continuare."
+
+msgid "This support session ends in 1 minute (support password limit). Ask for a new password to continue."
+msgstr "Questa sessione di supporto termina tra 1 minuto (limite della password di supporto). Chieda una nuova password per continuare."
+
 msgid "Ticket number"
 msgstr "Numero del ticket"
 
@@ -1588,6 +1600,9 @@ msgstr "Aggiornamento disponibile"
 msgid "Update now"
 msgstr "Aggiorna ora"
 
+msgid "Update ready, installs after this session"
+msgstr "Aggiornamento pronto, verrà installato dopo questa sessione"
+
 msgid "Update sign-in screen access"
 msgstr "Aggiorna l’accesso alla schermata di accesso"
 
@@ -1604,7 +1619,7 @@ msgid "Use another browser"
 msgstr "Usa un altro browser"
 
 msgid "Use your Mixel ID. Your company decides which sign-in methods its members may use."
-msgstr "Usi il suo Mixel ID. La sua azienda decide quali metodi di accesso possono usare i suoi membri."
+msgstr "Usi il suo Mixel ID. La sua azienda decide quali metodi di accesso i suoi membri possono usare."
 
 msgid "Valid for (days)"
 msgstr "Valido (giorni)"

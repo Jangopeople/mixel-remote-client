@@ -127,7 +127,9 @@ public final class SettingsModel: ObservableObject {
     /// At start and every 30 minutes (Mac): a newer signed version installs by itself when nothing
     /// would be interrupted and automatic updates are on, as in the desktop app.
     func periodicUpdateCheck() async {
-        guard !app.isPhone, !installing, Date().timeIntervalSince(lastUpdateCheck) >= 30 * 60 else { return }
+        // A ready update that waits for a session is looked at every minute, so it installs soon after the idle time.
+        let interval: TimeInterval = update?.waitsForSession == true ? 60 : 30 * 60
+        guard !app.isPhone, !installing, Date().timeIntervalSince(lastUpdateCheck) >= interval else { return }
         try? await check(automatic: true)
     }
 

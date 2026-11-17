@@ -98,6 +98,7 @@ public struct SettingsView: View {
                         Button(L("Check for updates")) { settings.checkForUpdate() }.disabled(settings.installing)
                         if let update = settings.update {
                             Text(verbatim: L("Version %@ is available.", update.version)).foregroundStyle(.secondary)
+                            if update.waitsForSession { Text(verbatim: L("Update ready, installs after this session")).foregroundStyle(.secondary) }
                             if update.installable {
                                 Button(L("Update now")) { settings.installUpdate() }.buttonStyle(PrimaryButtonStyle()).disabled(settings.installing)
                             } else {

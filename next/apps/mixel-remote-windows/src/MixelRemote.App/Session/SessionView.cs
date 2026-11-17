@@ -170,7 +170,7 @@ internal sealed class SessionView : Grid
         BuildDrawBar();
         waiting.Visibility = session.Frame is null ? Visibility.Visible : Visibility.Collapsed;
         ((TextBlock)waiting.Children[1]).Text = session.Remote.Phase == "outgoing" ? L("Waiting for the other person to accept your request.") : L("Starting video");
-        var lines = new[] { session.PasswordWarning(), session.Notice, session.MeetingNotice, session.Error, session.RecordingText }.Where(line => line.Length > 0).ToList();
+        var lines = new[] { session.ReconnectingNotice(), session.PasswordWarning(), session.Notice, session.MeetingNotice, session.Error, session.RecordingText }.Where(line => line.Length > 0).ToList();
         notices.Visibility = lines.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         notices.Child = Ui.Column(4, [.. lines.Select(line => (UIElement)new TextBlock { Text = line, Foreground = new SolidColorBrush(line == session.Error ? Windows.UI.Color.FromArgb(255, 0xFF, 0xB4, 0xBD) : Microsoft.UI.Colors.White), TextWrapping = TextWrapping.Wrap, MaxWidth = 620 })]);
         UpdateRecording();
@@ -188,7 +188,7 @@ internal sealed class SessionView : Grid
             recTimer.Tick += (_, _) =>
             {
                 ShowRecordingTime();
-                var warning = session.PasswordWarning();
+                var warning = session.PasswordWarning() + session.ReconnectingNotice();
                 if (warning != lastWarning)
                 {
                     lastWarning = warning;

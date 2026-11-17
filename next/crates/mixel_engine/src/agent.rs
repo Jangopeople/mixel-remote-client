@@ -124,20 +124,50 @@ fn always_on() -> bool {
     false
 }
 
-/// A command arrived from the console (through the broker). Runs it unless one is running or
-/// unattended access is off here; the result goes out with the next check-in.
-pub fn accept(command: AgentCommand, unattended: bool) {
-    if !unattended {
-        if let Ok(mut slot) = RESULT.lock() {
-            *slot = Some(AgentResult { id: command.id, exit_code: -3, output: "Refused: unattended access is turned off on this computer.".into() });
+/// Phase 3 of D4: refuse commands that are not signed. Set when the broker says so (see `set_require_signed`).
+static REQUIRE_SIGNED: AtomicBool = AtomicBool::new(false);
+
+/// The broker's flag "unsigned commands are refused" (contract 4.6, phase 3). Off until the broker sends it.
+pub fn set_require_signed(required: bool) {
+    REQUIRE_SIGNED.store(required, Ordering::Release);
+}
+
+pub fn require_signed() -> bool {
+    REQUIRE_SIGNED.load(Ordering::Acquire)
+}
+
+fn refuse(command: &AgentCommand, key: Option<&str>, why: &str, exit_code: i32) {
+    crate::agent_verify::log_line(command.id, key, &format!("refused: {why}"), None, &command.script);
+    if let Ok(mut slot) = RESULT.lock() {
+        *slot = Some(AgentResult { id: command.id, exit_code, output: format!("Refused: {why}.") });
+    }
+}
+
+/// A command arrived from the console (through the broker). It runs only when it is signed by the pinned
+/// console key and meant for this computer (`device`, `connection_id`), is fresh and new; an unsigned one runs
+/// only until the broker asks for signed commands only. Also needs unattended access on here and no other
+/// command running. The result goes out with the next check-in; every command is logged on the device.
+pub fn accept(command: AgentCommand, unattended: bool, device: uuid::Uuid, connection_id: u32) {
+    let key = match crate::agent_verify::check_and_record(&command, device, connection_id, require_signed()) {
+        Ok(key) => key,
+        Err(refusal) => {
+            let why = if command.signed.is_none() { "commands must be signed" } else { refusal.text() };
+            refuse(&command, command.signed.as_ref().map(|signed| signed.key_id.as_str()), why, -4);
+            return;
         }
+    };
+    if !unattended {
+        refuse(&command, key.as_deref(), "unattended access is turned off on this computer", -3);
         return;
     }
     if RUNNING.swap(true, Ordering::AcqRel) {
+        crate::agent_verify::log_line(command.id, key.as_deref(), "refused: another command is running", None, &command.script);
         return;
     }
+    crate::agent_verify::log_line(command.id, key.as_deref(), "accepted", None, &command.script);
     std::thread::spawn(move || {
         let (exit_code, output) = run_script(&command.shell, &command.script, Duration::from_secs(u64::from(command.timeout_seconds)));
+        crate::agent_verify::log_line(command.id, key.as_deref(), "finished", Some(exit_code), &command.script);
         if let Ok(mut slot) = RESULT.lock() {
             *slot = Some(AgentResult { id: command.id, exit_code, output });
         }

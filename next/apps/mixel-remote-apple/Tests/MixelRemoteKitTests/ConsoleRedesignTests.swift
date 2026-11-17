@@ -72,6 +72,28 @@ final class ConsoleRedesignTests: XCTestCase {
         XCTAssertNil(without.passwordSession, "engines that do not report it yet still decode")
     }
 
+    func testReconnectingIsReadFromTheEngineStatusAndKeepsTheSession() throws {
+        let json = #"{"controller_only":false,"platform":"macos","phase":"active","message":"Reconnecting… the session stays open","received":0,"sharing":false,"control":true,"clipboard":false,"files":false,"recording_permitted":false,"input_access":true,"unattended_enabled":false,"unattended_session":false,"code_required":false,"online":[],"displays":1,"display":0,"display_all":false,"print_jobs":[],"host_actions":[],"host_macs":[],"colleagues":[],"invitations":[],"joined_session":false,"switched":false,"peer_features":[],"reconnecting":true}"#
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let status = try decoder.decode(RemoteStatus.self, from: Data(json.utf8))
+        XCTAssertTrue(status.isReconnecting)
+        XCTAssertEqual(status.phase, "active", "the session stays open while the registration is restored")
+        let without = try decoder.decode(RemoteStatus.self, from: Data(json.replacingOccurrences(of: #","reconnecting":true"#, with: "").utf8))
+        XCTAssertFalse(without.isReconnecting)
+    }
+
+    func testAnUpdateWaitingForASessionIsReadFromTheEngineAnswer() throws {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let waiting = try decoder.decode(UpdateInfo.self, from: Data(#"{"version":"2.1.1","installable":true,"silent":false,"needs_password":false,"waits_for_session":true,"idle_seconds_left":42}"#.utf8))
+        XCTAssertTrue(waiting.waitsForSession)
+        XCTAssertEqual(waiting.idleSecondsLeft, 42)
+        XCTAssertFalse(waiting.silent)
+        let older = try decoder.decode(UpdateInfo.self, from: Data(#"{"version":"2.1.1","installable":true,"silent":true}"#.utf8))
+        XCTAssertFalse(older.waitsForSession)
+    }
+
     func testTheAppRemembersThatItSentAPassword() async throws {
         let engine = MockEngine()
         Fixtures.company(engine)

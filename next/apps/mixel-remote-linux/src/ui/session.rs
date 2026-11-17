@@ -521,15 +521,26 @@ impl SessionView {
     }
 
     fn render_warning(&self, state: &State) {
-        let on = state.remote.peer.is_some_and(|peer| state.password_peers.contains(&peer)) && state.remote.viewing();
-        if on == self.warn.is_visible() && (!on || self.warn.first_child().is_some()) {
+        let extra = crate::logic::session_warnings(&state.remote);
+        let on = (state.session.password_session || !extra.is_empty()) && (state.remote.viewing() || state.remote.reconnecting);
+        let key = format!("{on}|{}", extra.join("|"));
+        if self.warn.widget_name() == key.as_str() && self.warn.first_child().is_some() == on {
             return;
         }
+        self.warn.set_widget_name(&key);
         clear(&self.warn);
         self.warn.set_visible(on);
         if on {
             self.warn.append(&gtk::Image::from_icon_name("dialog-warning-symbolic"));
-            let text = label(&t("This session was opened with a one-time password. Continue only if the person at the other computer gave it to you; either side can end it at any time."));
+            let mut text = String::new();
+            for line in &extra {
+                text.push_str(line);
+                text.push('\n');
+            }
+            if state.session.password_session {
+                text.push_str(&t("This session was opened with a one-time password. Continue only if the person at the other computer gave it to you; either side can end it at any time."));
+            }
+            let text = label(text.trim_end());
             text.set_wrap(true);
             text.set_xalign(0.0);
             self.warn.append(&text);

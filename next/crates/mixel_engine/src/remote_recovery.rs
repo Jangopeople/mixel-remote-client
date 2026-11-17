@@ -91,11 +91,27 @@ pub fn closed(code: Option<CloseCode>) -> Failure {
 #[derive(Default)]
 pub struct Backoff {
     failures: u8,
+    /// Registrations in a row that reached "ready" but ended within a few seconds.
+    short: u8,
 }
+/// A registration that stayed ready this long counts as working: the back-off starts again at its minimum.
+const WORKED: Duration = Duration::from_secs(5);
 impl Backoff {
+    /// `stable`: how long the ended registration was ready (zero when it never was).
     pub fn next(&mut self, stable: Duration) -> Option<Duration> {
-        if stable >= Duration::from_secs(60) {
+        if stable >= WORKED {
+            // Any registration that worked resets the back-off (it used to need a full minute, so a
+            // restart after a long wait sat at the 60 s ceiling).
             self.failures = 0;
+            self.short = 0;
+        } else if !stable.is_zero() {
+            // Ready, then gone within seconds (a restart, a closing connection service): the first time
+            // register again at once, then back off as before.
+            self.short = self.short.saturating_add(1);
+            if self.short == 1 {
+                self.failures = 0;
+                return Some(Duration::from_millis(100 + u64::from(OsRng.next_u32() % 301)));
+            }
         }
         // Quick retries first, then every minute for as long as the network or
         // service is down: an unattended computer must come back on its own.
@@ -135,7 +151,7 @@ mod tests {
     fn continuous_failure_retries_back_off_to_one_minute_and_never_give_up() {
         let mut state = Backoff::default();
         for minimum in [1, 2, 4, 8, 16, 30] {
-            let delay = state.next(Duration::from_secs(2)).unwrap();
+            let delay = state.next(Duration::ZERO).unwrap();
             assert!(
                 delay >= Duration::from_secs(minimum)
                     && delay <= Duration::from_secs(minimum) + Duration::from_millis(500)
@@ -147,5 +163,33 @@ mod tests {
         }
         assert!(state.next(Duration::from_secs(61)).is_some());
         assert_eq!(state.attempt(), 1);
+    }
+
+    #[test]
+    fn a_registration_that_worked_resets_the_back_off_to_its_minimum() {
+        let mut state = Backoff::default();
+        for _ in 0..20 {
+            state.next(Duration::ZERO);
+        }
+        let delay = state.next(Duration::from_secs(8)).unwrap();
+        assert!(delay <= Duration::from_millis(1500), "{delay:?}: back at the minimum after a registration that worked");
+    }
+
+    #[test]
+    fn a_registration_that_ends_within_seconds_is_retried_at_once_only_once() {
+        let mut state = Backoff::default();
+        for _ in 0..20 {
+            state.next(Duration::ZERO);
+        }
+        // Ready, then gone after 2 s (right after ConfigureUnattended): immediate retry, not 60 s.
+        assert!(state.next(Duration::from_secs(2)).unwrap() <= Duration::from_millis(500));
+        // Again within seconds: normal back-off from the start, never a tight loop.
+        let second = state.next(Duration::from_secs(2)).unwrap();
+        assert!(second >= Duration::from_secs(1));
+        let third = state.next(Duration::from_secs(2)).unwrap();
+        assert!(third >= Duration::from_secs(2));
+        // After a registration that held, the quick retry is available again.
+        state.next(Duration::from_secs(70));
+        assert!(state.next(Duration::from_secs(2)).unwrap() <= Duration::from_millis(500));
     }
 }

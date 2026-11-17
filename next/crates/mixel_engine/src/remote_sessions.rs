@@ -254,6 +254,10 @@ impl Registry {
     pub fn iter(&self) -> impl Iterator<Item = &Slot> {
         self.slots.iter()
     }
+    /// Puts a drained session back (it is carried over).
+    pub fn restore(&mut self, slot: Slot) {
+        self.slots.push(slot);
+    }
     pub fn drain(&mut self) -> Vec<Slot> {
         std::mem::take(&mut self.slots)
     }

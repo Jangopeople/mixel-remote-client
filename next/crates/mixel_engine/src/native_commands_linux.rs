@@ -180,7 +180,9 @@ pub(super) async fn update_check(context: &Context) -> Result<String, String> {
         if !newer(&manifest.version) {
             return out(serde_json::Value::Null);
         }
-        let idle = matches!(context.remote.status().await.phase.as_str(), "offline" | "error" | "ready");
+        let phase = context.remote.status().await.phase;
+        let verdict = crate::update_gate::verdict(&phase, false);
+        let idle = verdict.installs() && phase != "connecting";
         let account = context.auth.status().await;
         let keeps_sign_in = account.phase != "authenticated" || account.account.as_ref().is_some_and(|account| account.remembered);
         return out(json!({
@@ -188,6 +190,8 @@ pub(super) async fn update_check(context: &Context) -> Result<String, String> {
             "installable": true,
             "silent": idle && keeps_sign_in && !self_update::NEEDS_PASSWORD,
             "needs_password": self_update::NEEDS_PASSWORD,
+            "waits_for_session": verdict.waits(),
+            "idle_seconds_left": verdict.seconds_left(),
         }));
     }
     #[derive(serde::Deserialize)]
