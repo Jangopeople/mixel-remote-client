@@ -115,6 +115,12 @@ impl PeerConnectionEventHandler for Handler {
         }
     }
 }
+impl NativeTransport {
+    /// The peer connection is connected right now (not disconnected, failed or closed).
+    pub fn connected(&self) -> bool {
+        *self.state.borrow() == RTCPeerConnectionState::Connected
+    }
+}
 pub struct NativeTransport {
     pub peer: Arc<dyn PeerConnection>,
     pub incoming_channels: mpsc::Receiver<Arc<dyn DataChannel>>,

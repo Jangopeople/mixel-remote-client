@@ -2688,6 +2688,34 @@ fn command_session(command: &Command) -> Option<Uuid> {
 /// A transport's end ends its technician session only when it is the session's CURRENT transport. After a renewal
 /// the session's ID for the person (`ui`) is still the first transport's service ID: the end of that replaced
 /// transport must not end the session (the first renewal of a held session ended it right after the take-over).
+/// The connection service closed a technician session: was the computer lost (so an unattended session asks
+/// again) or did somebody end it? `Disconnected` is the service's own word for a lost computer. `Requested` is
+/// what the other side's close looks like, whether the person ended the session or the host gave up on a dead
+/// transport; it counts as lost only when this side's transport was not connected at that moment.
+fn close_means_lost(reason: signaling_server::protocol::CloseReason, transport_lost: bool) -> bool {
+    use signaling_server::protocol::CloseReason;
+    match reason {
+        CloseReason::Disconnected => true,
+        CloseReason::Requested => transport_lost,
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod close_tests {
+    use super::close_means_lost;
+    use signaling_server::protocol::CloseReason::*;
+
+    #[test]
+    fn a_close_after_a_lost_transport_is_a_lost_computer_not_an_end() {
+        assert!(close_means_lost(Disconnected, false));
+        assert!(close_means_lost(Requested, true), "ICE was disconnected when the host's close arrived");
+        assert!(!close_means_lost(Requested, false), "the person at the computer ended it");
+        assert!(!close_means_lost(Expired, true));
+        assert!(!close_means_lost(Rejected, true));
+    }
+}
+
 fn media_end_ends_session(current_transport: Uuid, ended_transport: Uuid) -> bool {
     current_transport == ended_transport
 }
@@ -3874,7 +3902,7 @@ async fn run(
                             if ended.host{state.change(generation,|status|{status.phase="ready".into();status.message="Switching sides".into();status.session=None;status.peer=Some(ended.remote);status.requester=None;}).await;}
                             else{state.slot_end(generation,ended.ui,"Switching sides".into()).await;}
                         },
-                        ServerMessage::Closed{session,reason:signaling_server::protocol::CloseReason::Disconnected} if ctrl.iter().any(|active|(active.id==session || active.ui==session) && !active.joined && active.signals.is_some() && !retries.iter().any(|again|again.host==active.remote) && last_access.get(&active.remote).is_some_and(crate::reconnect::Access::repeatable))=>{
+                        ServerMessage::Closed{session,reason} if matches!(reason,signaling_server::protocol::CloseReason::Disconnected|signaling_server::protocol::CloseReason::Requested) && ctrl.iter().any(|active|(active.id==session || active.ui==session) && !active.joined && !active.host && !active.close_sent && active.signals.is_some() && close_means_lost(reason,active.link.lost.load(std::sync::atomic::Ordering::Acquire)) && !retries.iter().any(|again|again.host==active.remote) && last_access.get(&active.remote).is_some_and(crate::reconnect::Access::repeatable))=>{
                             // The computer this session views went away: only this session asks again.
                             if let Some(index)=ctrl.iter().position(|active|active.id==session || active.ui==session){
                                 let over=ctrl.remove(index);remember_gone(&mut recent,over.id);

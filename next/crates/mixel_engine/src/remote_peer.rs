@@ -38,6 +38,10 @@ pub struct TransportLink {
     pub superseded: Arc<AtomicBool>,
     /// Host: this transport's screen capture is closed (or was never opened).
     pub released: Arc<AtomicBool>,
+    /// Technician: the transport is not connected right now (ICE disconnected or failed). When the
+    /// connection service then reports the session closed, the computer was lost, not ended: an
+    /// unattended session asks again by itself.
+    pub lost: Arc<AtomicBool>,
 }
 impl TransportLink {
     pub fn retire(&self) {
@@ -1662,6 +1666,10 @@ async fn viewer_media(
         #[cfg(feature = "qa-session")]
         let qa_ice = qa_turn.elapsed();
         control.poll(config, channel).await?;
+        config.link.lost.store(
+            !transport.connected(),
+            Ordering::Release,
+        );
         if let Some(report) = report_rx.due(Instant::now()) {
             control.send_video_report(channel, &report).await?;
         }
