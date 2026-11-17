@@ -48,6 +48,9 @@ public struct DeviceConsoleView: View {
         .sheet(isPresented: $addingThis) {
             AddThisComputerSheet(app: app)
         }
+        .onChange(of: app.addThisRequested) { requested in
+            if requested { addingThis = true; app.addThisRequested = false }
+        }
     }
 
     // MARK: Header
@@ -635,6 +638,9 @@ struct ConnectNotices: View {
                 }
             } else {
                 MessageLine(attempt.failure)
+                if app.setupOffer {
+                    Button(L("Add this computer")) { workspace.cancelAttempt(); app.setupOffer = false; app.addThisRequested = true }.buttonStyle(PrimaryButtonStyle())
+                }
             }
             HStack {
                 Button(attempt.failure.isEmpty ? L("Cancel") : L("Close")) { workspace.cancelAttempt() }

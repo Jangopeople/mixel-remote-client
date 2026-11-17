@@ -485,17 +485,40 @@ public sealed class AppModel : Observable
         return false;
     }
 
+    /// <summary>The engine says this computer has no identity for the signed-in account (first use, or one left by another account).</summary>
+    internal static bool NeedsSetup(string text) =>
+        new[] { "No saved device identity", "not enrolled", "No saved controller identity", "not registered", "Register this computer" }.Any(part => text.Contains(part, StringComparison.Ordinal));
+
+    internal const string SetupMessage = "This computer is not added to your account yet. Choose Add this computer, then connect again.";
+
+    /// <summary>The last connect failed because this computer is not set up: the failure offers "Add this computer".</summary>
+    public bool SetupOffer { get => setupOffer; set => Set(ref setupOffer, value); }
+    private bool setupOffer;
+
     private async Task ConnectSteps(uint id, string? password, bool unattended, bool checkPhone = true)
     {
         WentOffline = false;
+        SetupOffer = false;
         if (await Status() is { Disconnected: true })
         {
             Progress = L("Getting this computer ready…");
-            await Engine.PerformAsync("remote_register");
-            if (!await Wait(20, state => state.Phase == "ready"))
+            try { await Engine.PerformAsync("remote_register"); }
+            catch (EngineFailure failure) when (NeedsSetup(failure.Message)) { SetupOffer = true; throw new EngineFailure(SetupMessage); }
+            if (!await Wait(20, state => state.Phase == "ready" || NeedsSetup(state.Message)))
             {
                 throw new EngineFailure("This computer could not go online. Check the internet connection and try again.");
             }
+            if (await Status() is { } now && now.Phase != "ready")
+            {
+                if (NeedsSetup(now.Message)) { SetupOffer = true; throw new EngineFailure(SetupMessage); }
+                throw new EngineFailure(string.IsNullOrEmpty(now.Message) ? "This computer could not go online. Check the internet connection and try again." : now.Message);
+            }
+        }
+        // This computer is just registering: wait for it instead of failing the connect.
+        if (await Status() is { Phase: "connecting" })
+        {
+            Progress = L("Getting this computer ready…");
+            await Wait(20, state => state.Phase != "connecting");
         }
         var phone = false;
         if (checkPhone)

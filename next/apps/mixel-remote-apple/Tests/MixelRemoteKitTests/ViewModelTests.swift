@@ -27,6 +27,53 @@ final class ViewModelTests: XCTestCase {
         XCTAssertEqual(request["unattended"] as? Bool, false)
     }
 
+    func testFirstConnectWithoutIdentityOffersAddThisComputer() async throws {
+        let engine = MockEngine()
+        Fixtures.company(engine, phase: "offline")
+        let app = await Fixtures.app(engine)
+        engine.fail("remote_register", "No saved device identity. Choose Create device identity to generate one locally.")
+        do { try await app.connectSteps(id: 731_204_118, password: nil, unattended: true); XCTFail("must fail") } catch {
+            let text = AppModel.message(error)
+            XCTAssertTrue(text.contains("Add this computer"), text)
+            XCTAssertFalse(text.contains("Create device identity"), text)
+        }
+        XCTAssertTrue(app.setupOffer, "the screen offers the Add this computer button")
+        XCTAssertTrue(engine.calls("remote_request").isEmpty)
+    }
+
+    func testAStaleIdentityShowsTheRealReasonNotTheNetwork() async throws {
+        let engine = MockEngine()
+        Fixtures.company(engine, phase: "offline")
+        let app = await Fixtures.app(engine)
+        // The engine accepts the command and then reports why it cannot go online.
+        engine.handle("remote_register") { _ in
+            engine.reply("remote_status", RemoteStatus(phase: "offline", message: "This computer is not registered for the current account", host: 482_913_557))
+            return .success("null")
+        }
+        do { try await app.connectSteps(id: 731_204_118, password: nil, unattended: true); XCTFail("must fail") } catch {
+            let text = AppModel.message(error)
+            XCTAssertFalse(text.contains("internet connection"), text)
+            XCTAssertTrue(text.contains("Add this computer"), text)
+        }
+        XCTAssertTrue(app.setupOffer)
+    }
+
+    func testConnectWaitsWhileThisComputerIsStillRegistering() async throws {
+        let engine = MockEngine()
+        Fixtures.company(engine)
+        let app = await Fixtures.app(engine)
+        // The first status read says "connecting", every later one "ready".
+        var reads = 0
+        engine.handle("remote_status") { _ in
+            reads += 1
+            let phase = reads <= 1 ? "connecting" : "ready"
+            return .success(#"{"phase":"\#(phase)","message":"","host":482913557,"online":[],"sessions":[]}"#)
+        }
+        try await app.connectSteps(id: 731_204_118, password: nil, unattended: true, checkPhone: false)
+        XCTAssertEqual(engine.calls("remote_request").count, 1, "the request went out once this computer was ready")
+        XCTAssertGreaterThanOrEqual(reads, 2)
+    }
+
     func testPhoneIsClaimedAndWaitedForBeforeTheRequest() async throws {
         let engine = MockEngine()
         Fixtures.company(engine)

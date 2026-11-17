@@ -28,7 +28,9 @@ public final class DrawingModel: ObservableObject {
     public static let fadeAfter: TimeInterval = 5, fadeDuration: TimeInterval = 0.6, inPictureAfter: TimeInterval = 1.5
     static let maxPointsPerMessage = 64, maxPointsPerStroke = 4096, maxStrokes = 100
 
-    let app: AppModel
+    /// Each session has its own board: palette, tool and strokes belong to one session only.
+    unowned let owner: SessionModel
+    var app: AppModel { owner.app }
     @Published public var on = false
     @Published public var tool = Tool.pen
     @Published public var color = 0
@@ -40,16 +42,15 @@ public final class DrawingModel: ObservableObject {
     private var sending = false
     private var session: String?
 
-    init(app: AppModel) { self.app = app }
+    init(owner: SessionModel) { self.owner = owner }
 
     /// The other computer shows drawings (it announced `draw`), and this side is the technician.
     public var available: Bool {
-        // Drawing goes to the focused session.
-        let focused = app.session
-        guard focused.item != nil, focused.focused else { return false }
-        return focused.remote.phase == "active" && focused.remote.peerFeatures.contains("draw")
+        // Drawing goes to this session (the toolbar shows only the focused one's palette).
+        guard owner.item != nil, owner.focused else { return false }
+        return owner.remote.phase == "active" && owner.remote.peerFeatures.contains("draw")
     }
-    var inPicture: Bool { app.session.remote.peerFeatures.contains("drawpic") }
+    var inPicture: Bool { owner.remote.peerFeatures.contains("drawpic") }
 
     func sessionChanged(_ next: String?) {
         guard next != session else { return }
@@ -159,8 +160,7 @@ public final class DrawingModel: ObservableObject {
     struct DrawArgs: Encodable { var session: String; var message: Message }
 
     private func send(_ message: Message) {
-        let focused = app.session
-        guard focused.focused, let session = focused.sessionId else { return }
+        guard owner.focused, let session = owner.session else { return }
         Task { _ = try? await app.engine.run("remote_draw", DrawArgs(session: session, message: message), as: Bool.self) }
     }
 

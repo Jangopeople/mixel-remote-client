@@ -178,6 +178,38 @@ public sealed class ViewModelTests
     }
 
     [TestMethod]
+    public async Task First_connect_without_identity_offers_add_this_computer()
+    {
+        var engine = new MockEngine();
+        DemoFixtures.Company(engine, phase: "offline");
+        engine.Fail("remote_register", "No saved device identity. Choose Create device identity to generate one locally.");
+        var app = await DemoFixtures.App(engine);
+        await app.Connect(731_204_118, unattended: true, checkPhone: false);
+        StringAssert.Contains(app.Error, "Add this computer");
+        Assert.IsFalse(app.Error.Contains("Create device identity"));
+        Assert.IsTrue(app.SetupOffer);
+        Assert.AreEqual(0, engine.CallsOf("remote_request").Count);
+    }
+
+    [TestMethod]
+    public async Task A_stale_identity_shows_the_real_reason_not_the_network()
+    {
+        var engine = new MockEngine();
+        DemoFixtures.Company(engine, phase: "offline");
+        engine.Handle("remote_register", _ =>
+        {
+            engine.Reply("remote_status", """{"phase":"offline","message":"This computer is not registered for the current account","host":482913557}""");
+            return "null";
+        });
+        var app = await DemoFixtures.App(engine);
+        app.WaitStepMilliseconds = 0;
+        await app.Connect(731_204_118, unattended: true, checkPhone: false);
+        Assert.IsFalse(app.Error.Contains("internet connection"), app.Error);
+        StringAssert.Contains(app.Error, "Add this computer");
+        Assert.IsTrue(app.SetupOffer);
+    }
+
+    [TestMethod]
     public async Task Going_offline_stops_the_automatic_reconnect()
     {
         var (engine, app) = await Company(phase: "offline");

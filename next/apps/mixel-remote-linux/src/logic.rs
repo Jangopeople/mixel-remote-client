@@ -427,6 +427,9 @@ pub fn needs_setup(error: &str) -> bool {
     ["No saved device identity", "not enrolled", "No saved controller identity", "not registered", "Register this computer"].iter().any(|text| error.contains(text))
 }
 
+/// What the person reads when a connect finds this computer not set up (and the button next to it).
+pub const SETUP_MESSAGE: &str = "This computer is not added to your account yet. Choose Add this computer, then connect again.";
+
 // ---- Unattended access ----
 
 pub fn unattended_text(remote: &RemoteStatus) -> String {
@@ -1023,6 +1026,8 @@ mod tests {
         assert_eq!(setup_path(Some(&Account::default()), &member), SetupPath::CompanyMember);
         assert!(needs_setup("No saved device identity. Choose Create device identity to generate one locally."));
         assert!(!needs_setup("The connection service cannot be reached"));
+        assert!(needs_setup("This computer is not registered for the current account"), "a stale identity from another account is a set-up problem, not the network");
+        assert!(SETUP_MESSAGE.contains("Add this computer") && !SETUP_MESSAGE.contains("Create device identity"));
     }
 
     #[test]

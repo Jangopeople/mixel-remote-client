@@ -71,6 +71,8 @@ public final class SessionModel: ObservableObject {
     public let peer: UInt32?
     /// The session's stable id (what every engine call carries).
     public private(set) var sessionId: String?
+    /// This session's own drawing board.
+    public lazy var drawing = DrawingModel(owner: self)
     /// The engine's last word on this session.
     public private(set) var item: RemoteSessionItem?
     private var lastStatus: RemoteStatus?
