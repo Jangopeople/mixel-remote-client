@@ -392,7 +392,7 @@ pub fn run(folder: PathBuf, languages: &str) -> i32 {
                 // Other languages: the main screens; English: all of them.
                 let scenes: Vec<&str> = if language == "en" { SCENES.to_vec() } else { vec!["remote-control", "devices", "session", "consent", "settings"] };
                 // MIXEL_SHOT_SCENES=a,b: only these scenes (for quick looks while working on a screen).
-                let only: Vec<String> = std::env::var("MIXEL_SHOT_SCENES").map(|list| list.split(',').map(str::to_owned).collect()).unwrap_or_default();
+                let only: Vec<String> = std::env::var("MIXEL_SHOT_SCENES").map(|list| list.split(",").filter(|item| !item.is_empty()).map(str::to_owned).collect()).unwrap_or_default();
                 for name in scenes {
                     if !only.is_empty() && !only.iter().any(|wanted| wanted == name) {
                         continue;

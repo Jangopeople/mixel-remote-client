@@ -167,6 +167,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_session_choices_are_remembered_across_restarts() {
+        // An older settings file has none of them: the defaults (stay in Devices, tabs, system look).
+        let old: Settings = serde_json::from_str(r#"{"language":"de"}"#).unwrap();
+        assert_eq!((old.when_ready.as_str(), old.open_in.as_str(), old.appearance.as_str()), ("", "", ""));
+        let chosen = Settings { when_ready: "open".into(), open_in: "window".into(), appearance: "dark".into(), ..old };
+        let text = serde_json::to_string(&chosen).unwrap();
+        let back: Settings = serde_json::from_str(&text).unwrap();
+        let workspace = crate::workspace::Workspace::new(crate::workspace::WhenReady::from_id(&back.when_ready), crate::workspace::OpenIn::from_id(&back.open_in));
+        assert_eq!(workspace.when_ready, crate::workspace::WhenReady::Open);
+        assert_eq!(workspace.open_in, crate::workspace::OpenIn::Window);
+        assert_eq!(back.appearance, "dark");
+        let fresh = crate::workspace::Workspace::new(crate::workspace::WhenReady::from_id(&Settings::default().when_ready), crate::workspace::OpenIn::from_id(&Settings::default().open_in));
+        assert_eq!((fresh.when_ready, fresh.open_in), (crate::workspace::WhenReady::Stay, crate::workspace::OpenIn::Tab));
+    }
+
+    #[test]
     fn settings_round_trip_and_mac_memory() {
         let mut store = Store::memory(Settings::default());
         assert!(store.remember_macs(123_456_789, &["aa:bb:cc:dd:ee:ff".into()]));
