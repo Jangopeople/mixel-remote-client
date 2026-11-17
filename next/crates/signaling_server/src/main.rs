@@ -47,10 +47,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "at most {max_connections} open connections (open-file limit {})",
         open_files.map_or("unknown".into(), |n| n.to_string())
     );
+    let require_signed = std::env::var("MIXEL_AGENT_REQUIRE_SIGNED").is_ok_and(|value| value == "1");
     let state = AppState::new(Arc::new(auth), origins)
         .with_max_connections(max_connections)
         .with_support_policy(policy)
+        .with_signed_commands_required(require_signed)
         .with_turn(signaling_server::turn::TurnConfig::from_env()?);
+    // Running sessions survive a broker restart: saved at shutdown, restored at start (no secrets).
+    let handover_file = std::env::var("MIXEL_HANDOVER_FILE").ok().map(std::path::PathBuf::from);
+    if let Some(path) = &handover_file {
+        let restored = signaling_server::handover::load(path, &state.registry);
+        eprintln!("handover: {restored} running sessions restored, waiting for both sides to resume");
+    }
     let listener = tokio::net::TcpListener::bind(address).await?;
     eprintln!(
         "Mixel Remote staging signaling listening on {}",
@@ -69,11 +77,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("session reporting every {} s", signaling_server::sessions::INTERVAL.as_secs());
     }
     let shutdown_registry = registry.clone();
+    let shutdown_state = state.clone();
     axum::serve(listener, router(state))
         .with_graceful_shutdown(async move {
-            let _ = tokio::signal::ctrl_c().await;
-            if let Ok(mut registry) = shutdown_registry.lock() {
-                registry.shutdown();
+            stop_signal().await;
+            shutdown_state.begin_shutdown();
+            match &handover_file {
+                Some(path) => {
+                    let saved = signaling_server::handover::save(path, &shutdown_registry);
+                    eprintln!("handover: {saved} running sessions saved for the next broker");
+                }
+                None => {
+                    if let Ok(mut registry) = shutdown_registry.lock() {
+                        registry.shutdown();
+                    }
+                }
             }
         })
         .await?;
@@ -86,4 +104,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await;
     }
     Ok(())
+}
+
+/// SIGINT (docker stop with STOPSIGNAL SIGINT, Ctrl-C) or SIGTERM.
+async fn stop_signal() {
+    #[cfg(unix)]
+    {
+        let Ok(mut term) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) else {
+            let _ = tokio::signal::ctrl_c().await;
+            return;
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = term.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }

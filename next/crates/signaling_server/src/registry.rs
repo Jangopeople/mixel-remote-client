@@ -52,6 +52,12 @@ pub enum SessionEvent {
     },
 }
 
+/// Seconds from `now` to `until` for the wire (0 when past, at most `u16::MAX - 1`, never the old
+/// "until turned off" value).
+fn remaining_seconds(until: Instant, now: Instant) -> u16 {
+    u16::try_from(until.saturating_duration_since(now).as_secs()).unwrap_or(u16::MAX - 1).min(u16::MAX - 1)
+}
+
 fn unix_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -96,6 +102,8 @@ struct Peer {
     attended_support: bool,
     /// Broker features the app announced (`join`, `switch`).
     features: Vec<String>,
+    /// App version and platform the app reported (`app_version`), for the Devices list.
+    app_version: Option<(String, String)>,
 }
 impl Peer {
     fn unattended_host_only(&self) -> bool {
@@ -114,10 +122,20 @@ impl Peer {
             && self.principal.can_request(&target.principal)
     }
 }
-/// Safety cap for a password the owner has not turned off. The app shows no countdown.
-const CODE_KEEP: Duration = Duration::from_secs(365 * 24 * 60 * 60);
-/// Wire value meaning "until turned off". Any smaller value is a countdown for older apps.
-const CODE_LIFETIME_WIRE: u16 = u16::MAX;
+/// D2: a support password starts sessions for 30 minutes after it was made. The apps get the
+/// remaining time as `lifetime_seconds` (a countdown; 2.0.15 and older showed one already).
+pub const CODE_KEEP: Duration = Duration::from_secs(30 * 60);
+/// D2: a session started with a support password lasts at most this long once connected (also across
+/// transport renewals, switching sides and joined colleagues). Unattended sessions are not limited.
+pub const PASSWORD_SESSION: Duration = Duration::from_secs(2 * 60 * 60);
+/// Longest any other session lasts before the apps have to ask again.
+const SESSION_MAX: Duration = Duration::from_secs(8 * 3600);
+/// `session_ending` warnings before the end of a password session (feature `ending`).
+const ENDING_WARNINGS: [Duration; 2] = [Duration::from_secs(300), Duration::from_secs(60)];
+/// After a broker restart, a session waits this long for both sides to `resume`.
+pub const RESUME_WINDOW: Duration = Duration::from_secs(90);
+/// A handover file older than this is ignored (the sessions it lists are long gone).
+pub const HANDOVER_MAX_AGE_SECONDS: u64 = 120;
 const CODE_ATTEMPTS: u8 = 5;
 
 #[derive(Clone)]
@@ -158,6 +176,56 @@ struct Session {
     record: Uuid,
     /// The record's start was journaled (so its end is journaled exactly once).
     recorded: bool,
+    /// D2: started with a support password (limited to `PASSWORD_SESSION` once connected).
+    password: bool,
+    /// D2: the end already fixed for this support case (set when a switch of sides or a joined
+    /// colleague continues a password session that has already connected).
+    password_until: Option<Instant>,
+    /// `session_ending` warnings already sent (index into `ENDING_WARNINGS`).
+    warned: usize,
+    /// Restored from the previous broker and waiting for both sides to `resume`.
+    parked: Option<Parked>,
+}
+#[derive(Clone, Copy, Debug)]
+struct Parked {
+    controller: HandoverSide,
+    host: HandoverSide,
+    controller_back: bool,
+    host_back: bool,
+}
+/// One side of a session in the handover file: the connection and the signed identity behind it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HandoverSide {
+    pub connection: u32,
+    pub profile: Uuid,
+    pub device: Uuid,
+}
+/// A running session saved at shutdown for the next broker (no secrets: no passwords, no tokens).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HandoverSession {
+    pub id: Uuid,
+    pub controller: HandoverSide,
+    pub host: HandoverSide,
+    pub unattended: bool,
+    pub password: bool,
+    /// Seconds the session may still run (its `active_until`).
+    pub remaining: u64,
+    pub limit_tenant: Option<Uuid>,
+    pub group: Uuid,
+    pub joined: Option<bool>,
+    pub reversed: bool,
+    pub record: Uuid,
+    pub recorded: bool,
+    pub warned: usize,
+}
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Handover {
+    pub version: u8,
+    pub saved_at: u64,
+    pub sessions: Vec<HandoverSession>,
 }
 impl Session {
     /// (technician, helped computer) as authorized by the support policy.
@@ -413,7 +481,7 @@ impl Registry {
         }
         self.sessions
             .iter()
-            .filter(|(_, session)| session.authorized().0 == controller)
+            .filter(|(_, session)| session.authorized().0 == controller && session.parked.is_none())
             .map(|(id, session)| {
                 (
                     *id,
@@ -577,6 +645,7 @@ impl Registry {
                 unattended_enabled: false,
                 attended_support: false,
                 features: Vec::new(),
+                app_version: None,
             },
         );
         self.send(
@@ -593,6 +662,7 @@ impl Registry {
             .cloned()
         {
             let code = gate.code.clone();
+            let remaining = remaining_seconds(gate.expires_at, Instant::now());
             if let Some(peer) = self.peers.get_mut(&host) {
                 peer.code_gate = Some(gate);
             }
@@ -601,7 +671,7 @@ impl Registry {
                 ServerMessage::SupportCode {
                     required: true,
                     code,
-                    lifetime_seconds: CODE_LIFETIME_WIRE,
+                    lifetime_seconds: remaining,
                 },
             );
         }
@@ -709,6 +779,172 @@ impl Registry {
         for s in expired {
             self.close(s, CloseReason::Expired, now);
         }
+        // D2: a support password that is over no longer starts sessions; the host's app is told.
+        let lapsed: Vec<u32> = self
+            .peers
+            .iter()
+            .filter(|(_, peer)| peer.code_gate.as_ref().is_some_and(|gate| gate.code.is_some() && now >= gate.expires_at))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in lapsed {
+            if let Some(gate) = self.peers.get_mut(&id).and_then(|peer| peer.code_gate.as_mut()) {
+                gate.code = None;
+            }
+            self.send(id, ServerMessage::SupportCode { required: true, code: None, lifetime_seconds: 0 });
+        }
+        // D2: warn both sides of a password session before its end (apps that announced `ending`).
+        let mut warnings = Vec::new();
+        for (id, room) in self.sessions.iter_mut() {
+            let (true, Phase::Connected, Some(until), None) = (room.password, room.phase, room.active_until, room.parked) else {
+                continue;
+            };
+            let left = until.saturating_duration_since(now);
+            let mut due = None;
+            while room.warned < ENDING_WARNINGS.len() && left <= ENDING_WARNINGS[room.warned] {
+                room.warned += 1;
+                due = Some(left);
+            }
+            if let Some(left) = due {
+                warnings.push((*id, room.controller, room.host, left));
+            }
+        }
+        for (session, controller, host, left) in warnings {
+            for side in [controller, host] {
+                if self.peers.get(&side).is_some_and(|peer| peer.supports(FEATURE_ENDING)) {
+                    self.send(
+                        side,
+                        ServerMessage::SessionEnding {
+                            session,
+                            seconds: u32::try_from(left.as_secs()).unwrap_or(u32::MAX),
+                            reason: EndingReason::SupportPasswordLimit,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    /// The app announced this broker feature.
+    pub fn supports(&self, id: u32, generation: Uuid, feature: &str) -> bool {
+        self.peers.get(&id).is_some_and(|peer| peer.generation == generation && peer.supports(feature))
+    }
+
+    /// App versions of the enrolled devices connected right now (for the presence report).
+    pub fn device_versions(&self, unix: u64) -> Vec<(u32, String, String)> {
+        let mut versions: Vec<(u32, String, String)> = self
+            .peers
+            .iter()
+            .filter(|(_, peer)| peer.identity.is_some() && peer.principal.expires_at > unix)
+            .filter_map(|(id, peer)| peer.app_version.clone().map(|(version, platform)| (*id, version, platform)))
+            .collect();
+        versions.sort_unstable();
+        versions
+    }
+
+    /// The running sessions to hand to the next broker: connected, both sides with a signed identity.
+    pub fn export_handover(&self, now: Instant, unix: u64) -> Handover {
+        let side = |id: u32| {
+            self.peers.get(&id).and_then(|peer| peer.identity.as_ref()).map(|ticket| HandoverSide {
+                connection: id,
+                profile: Uuid::from_bytes(ticket.identity.profile),
+                device: Uuid::from_bytes(ticket.identity.device),
+            })
+        };
+        let mut sessions: Vec<HandoverSession> = self
+            .sessions
+            .iter()
+            .filter(|(_, room)| matches!(room.phase, Phase::Connected))
+            .filter_map(|(id, room)| {
+                let (controller, host) = match room.parked {
+                    Some(parked) => (parked.controller, parked.host),
+                    None => (side(room.controller)?, side(room.host)?),
+                };
+                let until = room.active_until?;
+                (until > now).then(|| HandoverSession {
+                    id: *id,
+                    controller,
+                    host,
+                    unattended: room.unattended,
+                    password: room.password,
+                    remaining: until.saturating_duration_since(now).as_secs(),
+                    limit_tenant: room.limit_tenant,
+                    group: room.group,
+                    joined: room.joined,
+                    reversed: room.reversed,
+                    record: room.record,
+                    recorded: room.recorded,
+                    warned: room.warned,
+                })
+            })
+            .collect();
+        sessions.sort_by_key(|session| session.id);
+        Handover { version: 1, saved_at: unix, sessions }
+    }
+
+    /// Restores the sessions of the previous broker. Each waits `RESUME_WINDOW` for both sides to come
+    /// back with the same connection, account and device and to send `resume`; otherwise it ends.
+    /// Returns how many were restored.
+    pub fn import_handover(&mut self, handover: Handover, now: Instant, unix: u64) -> usize {
+        if handover.version != 1 || unix.saturating_sub(handover.saved_at) > HANDOVER_MAX_AGE_SECONDS || handover.saved_at > unix + 5 {
+            return 0;
+        }
+        let elapsed = Duration::from_secs(unix.saturating_sub(handover.saved_at));
+        let mut restored = 0;
+        for session in handover.sessions {
+            if self.sessions.len() >= self.max_sessions
+                || self.sessions.contains_key(&session.id)
+                || session.controller.connection == session.host.connection
+                || session.warned > ENDING_WARNINGS.len()
+            {
+                continue;
+            }
+            let Some(left) = Duration::from_secs(session.remaining).checked_sub(elapsed).filter(|left| !left.is_zero()) else {
+                continue;
+            };
+            let until = now + left.min(SESSION_MAX);
+            self.sessions.insert(
+                session.id,
+                Session {
+                    controller: session.controller.connection,
+                    host: session.host.connection,
+                    unattended: session.unattended,
+                    phase: Phase::Connected,
+                    deadline: (now + RESUME_WINDOW).min(until),
+                    identity_from_controller: true,
+                    identity_from_host: true,
+                    active_until: Some(until),
+                    restart_after: now,
+                    limit_tenant: session.limit_tenant,
+                    group: session.group,
+                    joined: session.joined,
+                    reversed: session.reversed,
+                    record: session.record,
+                    recorded: session.recorded,
+                    password: session.password,
+                    password_until: None,
+                    warned: session.warned,
+                    parked: Some(Parked {
+                        controller: session.controller,
+                        host: session.host,
+                        controller_back: false,
+                        host_back: false,
+                    }),
+                },
+            );
+            restored += 1;
+        }
+        restored
+    }
+
+    /// Stops the broker for a restart: the connected sessions go to the handover (no `closed` is sent
+    /// for them and their report stays open); every other session ends; every connection is told to stop.
+    pub fn shutdown_for_handover(&mut self, now: Instant, unix: u64) -> Handover {
+        let handover = self.export_handover(now, unix);
+        for session in &handover.sessions {
+            self.sessions.remove(&session.id);
+        }
+        self.shutdown();
+        handover
     }
     pub fn handle(
         &mut self,
@@ -775,7 +1011,53 @@ impl Registry {
         {
             return Ok(());
         }
+        // A session restored after a broker restart carries nothing until both sides resumed it.
+        if let ClientMessage::Signal { session, .. }
+        | ClientMessage::Restart { session }
+        | ClientMessage::Invite { session, .. }
+        | ClientMessage::SwitchSides { session }
+        | ClientMessage::Decide { session, .. } = &message
+            && self.sessions.get(session).is_some_and(|room| room.parked.is_some())
+        {
+            return Err(ErrorCode::Forbidden);
+        }
         match message {
+            ClientMessage::Resume { session } => {
+                let identity = self
+                    .peers
+                    .get(&from)
+                    .and_then(|peer| peer.identity.as_ref())
+                    .map(|ticket| (Uuid::from_bytes(ticket.identity.profile), Uuid::from_bytes(ticket.identity.device)))
+                    .ok_or(ErrorCode::Forbidden)?;
+                let room = self.sessions.get_mut(&session).ok_or(ErrorCode::Unavailable)?;
+                let Some(parked) = room.parked.as_mut() else {
+                    // Already running here (both sides resumed, or the other side resumed it for us).
+                    return if room.controller == from || room.host == from { Ok(()) } else { Err(ErrorCode::Unavailable) };
+                };
+                let matches = |side: &HandoverSide| side.connection == from && (side.profile, side.device) == identity;
+                if matches(&parked.controller) {
+                    parked.controller_back = true;
+                } else if matches(&parked.host) {
+                    parked.host_back = true;
+                } else {
+                    return Err(ErrorCode::Unavailable);
+                }
+                if parked.controller_back && parked.host_back {
+                    room.parked = None;
+                    room.deadline = room.active_until.unwrap_or(now);
+                    room.restart_after = now;
+                }
+                self.send(from, ServerMessage::Resumed { session });
+                Ok(())
+            }
+            ClientMessage::AppVersion { version, platform } => {
+                if !valid_app_version(&version, &platform) {
+                    return Err(ErrorCode::Invalid);
+                }
+                let peer = self.peers.get_mut(&from).filter(|peer| peer.identity.is_some()).ok_or(ErrorCode::Forbidden)?;
+                peer.app_version = Some((version, platform));
+                Ok(())
+            }
             ClientMessage::Authenticate { .. }
             | ClientMessage::AuthenticateDevice { .. }
             | ClientMessage::ProveDevice { .. }
@@ -808,6 +1090,10 @@ impl Registry {
                 let (group, joined, reversed) = (current.group, current.joined, current.reversed);
                 // A transport restart continues the same reported session.
                 let (record, recorded) = (current.record, current.recorded);
+                let (password, password_until, warned) = (current.password, current.password_until, current.warned);
+                if current.parked.is_some() {
+                    return Err(ErrorCode::Forbidden);
+                }
                 let until = current.active_until.ok_or(ErrorCode::Forbidden)?;
                 if now >= until {
                     return Err(ErrorCode::Forbidden);
@@ -834,6 +1120,10 @@ impl Registry {
                         reversed,
                         record,
                         recorded,
+                        password,
+                        password_until,
+                        warned,
+                        parked: None,
                     },
                 );
                 self.retired.insert(
@@ -938,7 +1228,7 @@ impl Registry {
                     ServerMessage::SupportCode {
                         required,
                         code,
-                        lifetime_seconds: if required { CODE_LIFETIME_WIRE } else { 0 },
+                        lifetime_seconds: if required { remaining_seconds(now + CODE_KEEP, now) } else { 0 },
                     },
                 );
                 Ok(())
@@ -1025,7 +1315,7 @@ impl Registry {
                                     remembered = Some(gate.clone());
                                 }
                             } else {
-                                // The same password keeps working until the owner turns it off.
+                                // The same password starts sessions until its 30 minutes are over (D2).
                                 gate.attempts_left = CODE_ATTEMPTS;
                                 remembered = Some(gate.clone());
                             }
@@ -1070,6 +1360,10 @@ impl Registry {
                         reversed: false,
                         record: Uuid::new_v4(),
                         recorded: false,
+                        password: offered.is_some(),
+                        password_until: None,
+                        warned: 0,
+                        parked: None,
                     },
                 );
                 self.send(from, ServerMessage::Requested { session });
@@ -1181,6 +1475,7 @@ impl Registry {
                     self.invitations.remove(&id);
                     return Err(ErrorCode::Unavailable);
                 };
+                let (primary_password, primary_until) = (room.password, room.active_until);
                 if !matches!(room.phase, Phase::Connected) || room.controller != inviter_connection || room.host != host {
                     self.invitations.remove(&id);
                     return Err(ErrorCode::Unavailable);
@@ -1228,6 +1523,11 @@ impl Registry {
                         reversed: false,
                         record: Uuid::new_v4(),
                         recorded: false,
+                        // A colleague of a password session ends with it (D2).
+                        password: primary_password,
+                        password_until: if primary_password { primary_until } else { None },
+                        warned: 0,
+                        parked: None,
                     },
                 );
                 self.send(from, ServerMessage::Requested { session });
@@ -1263,6 +1563,9 @@ impl Registry {
                 // keeps checking the unattended rules and the helped computer can still end it by
                 // turning unattended access off.
                 let (reversed, limit_tenant, unattended) = (!s.reversed, s.limit_tenant, s.unattended);
+                // D2: switching sides does not extend a password session.
+                let (password, password_until, warned) =
+                    (s.password, if s.password { s.active_until } else { None }, s.warned);
                 let requester = self.peers[&host].principal.clone();
                 let replacement = Uuid::new_v4();
                 // The old session ends first (its pictures stop), then the switched one asks.
@@ -1286,6 +1589,10 @@ impl Registry {
                         // Switched sides: a new session in the report.
                         record: Uuid::new_v4(),
                         recorded: false,
+                        password,
+                        password_until,
+                        warned,
+                        parked: None,
                     },
                 );
                 self.send(host, ServerMessage::Switched { previous: session, session: replacement, host: controller });
@@ -1370,9 +1677,12 @@ impl Registry {
                     }
                     (Signal::Answer(_), Phase::Answer) if from == s.host => {
                         s.phase = Phase::Connected;
-                        let until = *s
-                            .active_until
-                            .get_or_insert(now + Duration::from_secs(8 * 3600));
+                        let limit = if s.password {
+                            s.password_until.unwrap_or(now + PASSWORD_SESSION)
+                        } else {
+                            now + SESSION_MAX
+                        };
+                        let until = *s.active_until.get_or_insert(limit);
                         s.deadline = until;
                         connected = true;
                     }
@@ -1663,7 +1973,7 @@ mod rotation_tests {
         );
     }
     #[test]
-    fn support_password_stays_usable_on_one_host_until_it_is_turned_off() {
+    fn support_password_starts_sessions_for_thirty_minutes_then_needs_a_new_one() {
         let mut registry = Registry::default();
         let now = Instant::now();
         let (controller, mut controller_events) = peer(&mut registry, 123_456_789, 10);
@@ -1683,7 +1993,8 @@ mod rotation_tests {
         else {
             panic!("missing code");
         };
-        assert_eq!(lifetime_seconds, u16::MAX);
+        // D2: a countdown of 30 minutes, never "until turned off".
+        assert_eq!(lifetime_seconds, 1800);
         assert_eq!(
             registry.handle(
                 123_456_789,
@@ -1750,6 +2061,16 @@ mod rotation_tests {
         registry
             .handle(123_456_789, controller, request(), now + Duration::from_secs(300))
             .unwrap();
+        // After 30 minutes the same password starts nothing, and the host's app is told.
+        drain(&mut host_events);
+        assert_eq!(
+            registry.handle(123_456_789, controller, request(), now + CODE_KEEP + Duration::from_secs(1)),
+            Err(ErrorCode::Unavailable)
+        );
+        assert!(drain(&mut host_events).iter().any(|event| matches!(
+            event,
+            ServerMessage::SupportCode { required: true, code: None, lifetime_seconds: 0 }
+        )));
         registry
             .handle(234_567_890, host, ClientMessage::ClearSupportCode, now)
             .unwrap();
@@ -2357,5 +2678,182 @@ mod rotation_tests {
         for bad in [vec!["".to_owned()], vec!["Join".to_owned()], vec!["a".repeat(17)], vec!["x".to_owned(); 17]] {
             assert_eq!(registry.handle(111_111_111, generation, ClientMessage::Capabilities { features: bad }, Instant::now()), Err(ErrorCode::Invalid));
         }
+    }
+
+    fn connected_with_password(registry: &mut Registry, now: Instant, controller: (u32, Uuid), host: (u32, Uuid)) -> Uuid {
+        registry.handle(host.0, host.1, ClientMessage::GenerateSupportCode, now).unwrap();
+        let code = registry.peers[&host.0].code_gate.as_ref().unwrap().code.clone().unwrap();
+        registry.handle(controller.0, controller.1, ClientMessage::RequestWithCode { host: host.0, code }, now).unwrap();
+        let session = *registry.sessions.keys().next().unwrap();
+        connect(registry, now, controller, host, session);
+        session
+    }
+
+    #[test]
+    fn a_password_session_is_warned_and_ends_after_two_hours() {
+        let mut registry = Registry::default();
+        let now = Instant::now();
+        let (technician, mut technician_events) = peer(&mut registry, 111_111_111, 10);
+        let (host, mut host_events) = peer(&mut registry, 222_222_222, 11);
+        // Only the technician's app understands `session_ending`.
+        registry.handle(111_111_111, technician, ClientMessage::Capabilities { features: vec![FEATURE_ENDING.into()] }, now).unwrap();
+        let session = connected_with_password(&mut registry, now, (111_111_111, technician), (222_222_222, host));
+        drain(&mut technician_events);
+        drain(&mut host_events);
+        // A transport renewal keeps the limit.
+        registry.handle(111_111_111, technician, ClientMessage::Restart { session }, now + Duration::from_secs(40)).unwrap();
+        let session = *registry.sessions.keys().next().unwrap();
+        connect_renewed(&mut registry, now + Duration::from_secs(41), (111_111_111, technician), (222_222_222, host), session);
+        drain(&mut technician_events);
+        drain(&mut host_events);
+        registry.expire(now + PASSWORD_SESSION - Duration::from_secs(301));
+        assert!(drain(&mut technician_events).is_empty());
+        registry.expire(now + PASSWORD_SESSION - Duration::from_secs(300));
+        assert!(matches!(drain(&mut technician_events).as_slice(),
+            [ServerMessage::SessionEnding { session: warned, seconds: 300, reason: EndingReason::SupportPasswordLimit }] if *warned == session));
+        assert!(
+            drain(&mut host_events).iter().all(|event| !matches!(event, ServerMessage::SessionEnding { .. })),
+            "an app without `ending` gets no new message type"
+        );
+        registry.expire(now + PASSWORD_SESSION - Duration::from_secs(200));
+        assert!(drain(&mut technician_events).is_empty(), "warned once per step");
+        registry.expire(now + PASSWORD_SESSION - Duration::from_secs(60));
+        assert!(matches!(drain(&mut technician_events).as_slice(), [ServerMessage::SessionEnding { seconds: 60, .. }]));
+        registry.expire(now + PASSWORD_SESSION);
+        assert!(matches!(drain(&mut technician_events).as_slice(),
+            [ServerMessage::Closed { session: closed, reason: CloseReason::Expired }] if *closed == session));
+        assert!(matches!(drain(&mut host_events).as_slice(), [ServerMessage::Closed { reason: CloseReason::Expired, .. }]));
+        assert_eq!(registry.counts(), (2, 0));
+    }
+
+    fn connect_renewed(registry: &mut Registry, now: Instant, controller: (u32, Uuid), host: (u32, Uuid), session: Uuid) {
+        registry.handle(controller.0, controller.1, ClientMessage::Signal { session, payload: Signal::Offer("v=0".into()) }, now).unwrap();
+        registry.handle(host.0, host.1, ClientMessage::Signal { session, payload: Signal::Answer("v=0".into()) }, now).unwrap();
+    }
+
+    #[test]
+    fn sessions_without_a_password_are_not_limited_to_two_hours() {
+        let mut registry = Registry::default();
+        let now = Instant::now();
+        let (technician, mut technician_events) = peer(&mut registry, 111_111_111, 10);
+        let (host, _host_events) = peer(&mut registry, 222_222_222, 11);
+        registry.handle(111_111_111, technician, ClientMessage::Capabilities { features: vec![FEATURE_ENDING.into()] }, now).unwrap();
+        registry.handle(222_222_222, host, ClientMessage::ConfigureUnattended { enabled: true }, now).unwrap();
+        registry.handle(111_111_111, technician, ClientMessage::RequestUnattended { host: 222_222_222 }, now).unwrap();
+        let session = *registry.sessions.keys().next().unwrap();
+        connect(&mut registry, now, (111_111_111, technician), (222_222_222, host), session);
+        drain(&mut technician_events);
+        registry.expire(now + PASSWORD_SESSION + Duration::from_secs(60));
+        assert!(drain(&mut technician_events).is_empty());
+        assert_eq!(registry.counts(), (2, 1), "an unattended session keeps running after two hours");
+    }
+
+    #[test]
+    fn a_switch_of_sides_does_not_extend_a_password_session() {
+        let mut registry = Registry::default();
+        let now = Instant::now();
+        let (technician, _technician_events) = peer(&mut registry, 111_111_111, 10);
+        let (host, _host_events) = peer(&mut registry, 222_222_222, 11);
+        for (id, generation) in [(111_111_111, technician), (222_222_222, host)] {
+            features(&mut registry, id, generation);
+        }
+        let session = connected_with_password(&mut registry, now, (111_111_111, technician), (222_222_222, host));
+        let later = now + Duration::from_secs(3600);
+        registry.handle(111_111_111, technician, ClientMessage::SwitchSides { session }, later).unwrap();
+        let switched = *registry.sessions.keys().next().unwrap();
+        // The switched session runs the other way: the old host is the controller now.
+        connect(&mut registry, later, (222_222_222, host), (111_111_111, technician), switched);
+        assert_eq!(registry.sessions[&switched].active_until, Some(now + PASSWORD_SESSION));
+    }
+
+    #[test]
+    fn running_sessions_are_handed_to_the_next_broker_and_resume_with_the_same_identities() {
+        let mut old = Registry::default();
+        let now = Instant::now();
+        let (technician, _a) = peer(&mut old, 111_111_111, 10);
+        let (host, _b) = peer(&mut old, 222_222_222, 11);
+        let (third, _c) = peer(&mut old, 333_333_333, 12);
+        let session = connected_with_password(&mut old, now, (111_111_111, technician), (222_222_222, host));
+        // A session still asking for consent is not handed over.
+        old.handle(333_333_333, third, ClientMessage::Request { host: 111_111_111 }, now).unwrap();
+        let handover = old.shutdown_for_handover(now, 1_000_000);
+        assert_eq!(handover.sessions.len(), 1);
+        assert_eq!(handover.sessions[0].id, session, "the asking session stays behind");
+        assert!(handover.sessions[0].password);
+        assert_eq!(old.counts(), (0, 0));
+        let text = serde_json::to_string(&handover).unwrap();
+        assert!(!text.contains("code") && !text.contains("token"), "no secrets in the handover: {text}");
+
+        // Too old, or from the future: ignored.
+        let mut stale = Registry::default();
+        assert_eq!(stale.import_handover(handover.clone(), now, 1_000_000 + HANDOVER_MAX_AGE_SECONDS + 1), 0);
+        assert_eq!(stale.import_handover(handover.clone(), now, 999_000), 0);
+
+        let mut next = Registry::default();
+        let later = now + Duration::from_secs(3);
+        assert_eq!(next.import_handover(handover, later, 1_000_003), 1);
+        let (technician, mut technician_events) = peer(&mut next, 111_111_111, 10);
+        let (host, mut host_events) = peer(&mut next, 222_222_222, 11);
+        // Another account on the technician's ID cannot take the session over.
+        let (impostor, mut impostor_events) = peer(&mut next, 444_444_444, 10);
+        assert_eq!(next.handle(444_444_444, impostor, ClientMessage::Resume { session }, later), Err(ErrorCode::Unavailable));
+        assert!(drain(&mut impostor_events).iter().all(|event| !matches!(event, ServerMessage::Resumed { .. })));
+        // Nothing passes until both sides are back.
+        drain(&mut technician_events);
+        drain(&mut host_events);
+        next.handle(111_111_111, technician, ClientMessage::Resume { session }, later).unwrap();
+        assert!(matches!(drain(&mut technician_events).as_slice(), [ServerMessage::Resumed { session: back }] if *back == session));
+        assert_eq!(
+            next.handle(111_111_111, technician, ClientMessage::Signal { session, payload: Signal::Ice("candidate".into()) }, later),
+            Err(ErrorCode::Forbidden)
+        );
+        assert!(next.controlled_policy_checks(111_111_111, technician, 100).is_empty(), "no policy re-check while parked");
+        next.handle(222_222_222, host, ClientMessage::Resume { session }, later).unwrap();
+        next.handle(111_111_111, technician, ClientMessage::Signal { session, payload: Signal::Ice("candidate".into()) }, later).unwrap();
+        assert!(drain(&mut host_events).iter().any(|event| matches!(event, ServerMessage::Signal { .. })));
+        assert_eq!(next.controlled_policy_checks(111_111_111, technician, 100).len(), 1);
+        // The D2 limit carried over: still two hours from the original connect.
+        next.expire(later + PASSWORD_SESSION);
+        assert_eq!(next.counts().1, 0);
+    }
+
+    #[test]
+    fn a_handed_over_session_ends_when_a_side_does_not_resume() {
+        let mut old = Registry::default();
+        let now = Instant::now();
+        let (technician, _a) = peer(&mut old, 111_111_111, 10);
+        let (host, _b) = peer(&mut old, 222_222_222, 11);
+        let session = *{
+            old.handle(111_111_111, technician, ClientMessage::Request { host: 222_222_222 }, now).unwrap();
+            old.sessions.keys().next().unwrap()
+        };
+        connect(&mut old, now, (111_111_111, technician), (222_222_222, host), session);
+        let handover = old.shutdown_for_handover(now, 2_000_000);
+        let mut next = Registry::default();
+        assert_eq!(next.import_handover(handover, now, 2_000_000), 1);
+        let (technician, mut technician_events) = peer(&mut next, 111_111_111, 10);
+        next.handle(111_111_111, technician, ClientMessage::Resume { session }, now).unwrap();
+        drain(&mut technician_events);
+        next.expire(now + RESUME_WINDOW);
+        assert!(drain(&mut technician_events).iter().any(|event| matches!(event, ServerMessage::Closed { session: closed, .. } if *closed == session)));
+        assert_eq!(next.counts(), (1, 0));
+        assert_eq!(next.handle(111_111_111, technician, ClientMessage::Resume { session }, now), Err(ErrorCode::Unavailable));
+    }
+
+    #[test]
+    fn app_versions_are_validated_and_listed_for_presence() {
+        let mut registry = Registry::default();
+        let now = Instant::now();
+        let (host, _events) = peer(&mut registry, 222_222_222, 11);
+        for (version, platform) in [("2.0.19; rm", "macos"), ("2", "macos"), ("2.0.19", "MacOS"), ("2.0.19", ""), ("1.2.3.4.5", "x")] {
+            assert_eq!(
+                registry.handle(222_222_222, host, ClientMessage::AppVersion { version: version.into(), platform: platform.into() }, now),
+                Err(ErrorCode::Invalid),
+                "{version} {platform}"
+            );
+        }
+        registry.handle(222_222_222, host, ClientMessage::AppVersion { version: "2.0.19".into(), platform: "macos-arm64".into() }, now).unwrap();
+        assert_eq!(registry.device_versions(100), vec![(222_222_222, "2.0.19".into(), "macos-arm64".into())]);
+        assert!(registry.device_versions(900).is_empty(), "expired sign-ins are not listed");
     }
 }

@@ -358,14 +358,21 @@ do $$ begin
     exception when insufficient_privilege then null; end;
     begin perform public.remote_saas_remove_device(pg_temp.id('tenant_a'), pg_temp.id('d2')); raise exception 'remove without access';
     exception when insufficient_privilege then null; end;
+    -- Migration 031: renaming and moving devices is for owners and admins only.
+    begin perform public.remote_saas_move_device(pg_temp.id('tenant_a'), pg_temp.id('d1'), pg_temp.id('g1')); raise exception 'technician moved';
+    exception when insufficient_privilege then null; end;
+    begin perform public.remote_saas_rename_device(pg_temp.id('tenant_a'), pg_temp.id('d1'), 'Reception'); raise exception 'technician renamed';
+    exception when insufficient_privilege then null; end;
+    perform pg_temp.act('owner_a');
     perform public.remote_saas_move_device(pg_temp.id('tenant_a'), pg_temp.id('d1'), pg_temp.id('g1'));
     if public.remote_saas_rename_device(pg_temp.id('tenant_a'), pg_temp.id('d1'), 'Reception') <> 'Reception (2)' then
         raise exception 'rename must keep names unique';
     end if;
+    perform pg_temp.act('tech_a');
     if (select count(*) from public.remote_saas_groups(pg_temp.id('tenant_a'))) <> 1 then raise exception 'technician group list'; end if;
     begin perform public.remote_saas_create_group(pg_temp.id('tenant_a'), 'Mine'); raise exception 'technician created group';
     exception when insufficient_privilege then null; end;
-    raise notice 'PASS: technicians reach ungrouped and granted groups only; rename keeps names unique; move checks both groups';
+    raise notice 'PASS: technicians reach ungrouped and granted groups only and may not rename or move; rename keeps names unique';
 end $$;
 reset role;
 do $$ begin

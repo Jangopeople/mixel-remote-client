@@ -94,22 +94,63 @@ impl PresenceReporter {
             .is_ok_and(|response| response.status().is_success())
     }
 
+    /// The app versions of devices whose version is new or changed since the last accepted report
+    /// (SQL 031 `remote_presence_versions`, next to the presence function, same token).
+    pub async fn report_versions(&self, versions: &[(u32, String, String)]) -> bool {
+        if versions.is_empty() {
+            return true;
+        }
+        let mut endpoint = self.endpoint.clone();
+        let path = endpoint.path().replace("/rpc/remote_presence_report", "/rpc/remote_presence_versions");
+        endpoint.set_path(&path);
+        let body: Vec<serde_json::Value> = versions
+            .iter()
+            .take(MAX_REPORT)
+            .map(|(id, version, platform)| serde_json::json!({ "connection_id": id, "version": version, "platform": platform }))
+            .collect();
+        self.client
+            .post(endpoint)
+            .bearer_auth(self.token.as_str())
+            .header("apikey", self.token.as_str())
+            .json(&serde_json::json!({ "versions": body }))
+            .send()
+            .await
+            .is_ok_and(|response| response.status().is_success())
+    }
+
     /// Reports every `INTERVAL` until the process ends. Failures are logged once per change.
     pub fn spawn(self, registry: Arc<Mutex<Registry>>) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(INTERVAL);
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             let mut failing = false;
+            // Versions the database accepted, per connection ID (only changes are sent again).
+            let mut reported: std::collections::HashMap<u32, (String, String)> = std::collections::HashMap::new();
             loop {
                 ticker.tick().await;
                 let unix = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .map_or(0, |time| time.as_secs());
-                let online = match registry.lock() {
-                    Ok(registry) => registry.online_devices(unix),
+                let (online, versions) = match registry.lock() {
+                    Ok(registry) => (registry.online_devices(unix), registry.device_versions(unix)),
                     Err(_) => return,
                 };
                 let ok = self.report(&online).await;
+                if ok {
+                    let changed: Vec<(u32, String, String)> = versions
+                        .into_iter()
+                        .filter(|(id, version, platform)| {
+                            reported.get(id).is_none_or(|(old_version, old_platform)| old_version != version || old_platform != platform)
+                        })
+                        .collect();
+                    if self.report_versions(&changed).await {
+                        for (id, version, platform) in changed {
+                            reported.insert(id, (version, platform));
+                        }
+                    }
+                    // A device that went offline reports again when it comes back (its row may be new).
+                    reported.retain(|id, _| online.binary_search(id).is_ok());
+                }
                 if ok == failing {
                     eprintln!(
                         "presence report {}",

@@ -2,7 +2,7 @@ use crate::{
     auth::{AuthError, EnrolledPrincipal, IsmAuth, Principal},
     protocol::*,
     registry::Registry,
-    support_policy::{Grant, SupportPair, SupportPolicy},
+    support_policy::{Decision, Grant, SupportPair, SupportPolicy},
 };
 use axum::{
     Router,
@@ -14,14 +14,25 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use futures_util::{SinkExt, StreamExt};
+use futures_util::StreamExt;
 use std::{
     collections::HashSet,
     future::Future,
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+/// A running session survives policy re-checks that get no answer (the policy service restarting)
+/// for this long; an explicit refusal still ends it at the next re-check.
+pub const RECHECK_GRACE: Duration = Duration::from_secs(60);
+/// How often a connected app that announced `policy` gets its device policy again.
+pub const DEVICE_POLICY_REFRESH: Duration = Duration::from_secs(600);
+/// WebSocket close code "service restart" (RFC 6455 / IANA 1012): the apps reconnect at once.
+const CLOSE_RESTART: u16 = 1012;
 use tokio::sync::{Semaphore, mpsc, watch};
 
 type AuthFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, AuthError>> + Send + 'a>>;
@@ -67,6 +78,10 @@ pub struct AppState {
     /// Separate slots for re-checking running sessions, so a flood of new requests cannot make
     /// the re-checks fail and end other companies' sessions.
     recheck_slots: Arc<Semaphore>,
+    /// Set when the broker stops for a restart: connections close with 1012.
+    shutting_down: Arc<AtomicBool>,
+    /// D4 phase 3: remote commands only for apps that announced `signed` (MIXEL_AGENT_REQUIRE_SIGNED=1).
+    require_signed: bool,
 }
 impl AppState {
     pub fn with_turn(mut self, config: Option<crate::turn::TurnConfig>) -> Self {
@@ -86,6 +101,15 @@ impl AppState {
         self.policy = Some(Arc::new(policy));
         self
     }
+    /// D4 phase 3: hand remote commands only to apps that check signatures.
+    pub fn with_signed_commands_required(mut self, required: bool) -> Self {
+        self.require_signed = required;
+        self
+    }
+    /// The broker is stopping for a restart: open connections close with code 1012.
+    pub fn begin_shutdown(&self) {
+        self.shutting_down.store(true, Ordering::SeqCst);
+    }
 
     async fn support_allowed(
         &self,
@@ -98,17 +122,22 @@ impl AppState {
         policy.allows(pair, unattended, accept_session).await
     }
 
-    /// Periodic re-check of a running session. A refusal, an error or a timeout of the policy
-    /// service ends the session (fail closed).
-    async fn still_allowed(&self, pair: &SupportPair, unattended: bool) -> bool {
+    /// Periodic re-check of a running session. A refusal ends the session at once; no answer
+    /// (error, timeout, 5xx, no free slot) ends it once `RECHECK_GRACE` passed since the last allow.
+    async fn recheck(&self, pair: &SupportPair, unattended: bool) -> Decision {
         let Some(policy) = self.policy.as_ref() else {
-            return false;
+            return Decision::Refused;
         };
-        // Waiting briefly for a slot is fine: re-checks run every 10 s. No slot in time: fail closed.
+        // Waiting briefly for a slot is fine: re-checks run every 10 s.
         let Ok(Ok(_slot)) = tokio::time::timeout(Duration::from_secs(5), self.recheck_slots.acquire()).await else {
-            return false;
+            return Decision::Unreachable;
         };
-        policy.allows(pair, unattended, None).await.is_some()
+        policy.decide(pair, unattended, None).await
+    }
+
+    #[cfg(test)]
+    async fn still_allowed(&self, pair: &SupportPair, unattended: bool) -> bool {
+        matches!(self.recheck(pair, unattended).await, Decision::Allowed(_))
     }
 
     pub fn new(auth: Arc<dyn Authenticator>, origins: HashSet<String>) -> Self {
@@ -122,6 +151,8 @@ impl AppState {
             policy: None,
             policy_slots: Arc::new(Semaphore::new(64)),
             recheck_slots: Arc::new(Semaphore::new(64)),
+            shutting_down: Arc::new(AtomicBool::new(false)),
+            require_signed: false,
         }
     }
 }
@@ -248,6 +279,8 @@ async fn connection(mut socket: WebSocket, state: AppState) {
         return;
     }
     let (tx, mut rx) = mpsc::channel(64);
+    // For answers that arrive after a network call (device policy), in order with the registry's.
+    let own_tx = tx.clone();
     let (stop, mut stopped) = watch::channel(false);
     let registered = match state.registry.lock() {
         Ok(mut r) => match &enrolled {
@@ -280,6 +313,9 @@ async fn connection(mut socket: WebSocket, state: AppState) {
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     let mut policy_tick = tokio::time::interval(Duration::from_secs(10));
     policy_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Last time each running session was allowed by a re-check (or first seen here).
+    let mut allowed_at: std::collections::HashMap<uuid::Uuid, Instant> = std::collections::HashMap::new();
+    let mut device_policy_sent: Option<Instant> = None;
     loop {
         tokio::select! {
             _ = stopped.changed() => break,
@@ -298,21 +334,39 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                     Ok(registry) => registry.controlled_policy_checks(id, generation, unix_now()),
                     Err(_) => break,
                 };
-                let denied = futures_util::future::join_all(checks.into_iter().map(|(session, check)| {
+                let decisions = futures_util::future::join_all(checks.into_iter().map(|(session, check)| {
                     let state = &state;
                     async move {
-                        let allowed = match check {
-                            Some(check) => state.still_allowed(&check.pair, check.unattended).await,
-                            None => false,
+                        let decision = match check {
+                            Some(check) => state.recheck(&check.pair, check.unattended).await,
+                            None => Decision::Refused,
                         };
-                        (!allowed).then_some(session)
+                        (session, decision)
                     }
                 })).await;
+                let now = Instant::now();
+                let mut denied = Vec::new();
+                let mut seen = HashSet::new();
+                for (session, decision) in decisions {
+                    seen.insert(session);
+                    let since = *allowed_at.entry(session).or_insert(now);
+                    match decision {
+                        Decision::Allowed(_) => { allowed_at.insert(session, now); }
+                        Decision::Refused => denied.push(session),
+                        Decision::Unreachable if now.duration_since(since) >= RECHECK_GRACE => denied.push(session),
+                        Decision::Unreachable => {}
+                    }
+                }
+                allowed_at.retain(|session, _| seen.contains(session));
                 if let Ok(mut registry) = state.registry.lock() {
-                    for session in denied.into_iter().flatten() {
-                        registry.policy_revoked(session, (id, generation), Instant::now());
+                    for session in denied {
+                        registry.policy_revoked(session, (id, generation), now);
                     }
                 } else { break; }
+                if device_policy_sent.is_some_and(|at| at.elapsed() >= DEVICE_POLICY_REFRESH) {
+                    device_policy_sent = Some(Instant::now());
+                    send_device_policy(&state, id, generation, own_tx.clone());
+                }
             }
             event = rx.recv() => {
                 let Some(event) = event else { break; };
@@ -397,6 +451,18 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                                 (Some(policy), Some(binding), Ok(_slot)) => policy.agent(binding, inventory.as_deref(), result.as_ref()).await.unwrap_or(None),
                                 _ => None,
                             };
+                            // D4: the signature goes only to apps that check it (2.0.18 and older parse
+                            // the command strictly); in phase 3 the others get no command at all.
+                            let signed_ok = match state.registry.lock() {
+                                Ok(registry) => registry.supports(id, generation, crate::protocol::FEATURE_SIGNED),
+                                Err(_) => break,
+                            };
+                            let command = command.and_then(|mut command| {
+                                if signed_ok { return Some(command); }
+                                if state.require_signed { return None; }
+                                command.signed = None;
+                                Some(command)
+                            });
                             if !send(&mut socket, &ServerMessage::Agent { command }).await { break; }
                             continue;
                         }
@@ -507,6 +573,7 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                         if let Ok(ClientMessage::ConfigureUnattended { enabled }) = &parsed {
                             eprintln!("ConfigureUnattended from={id} enabled={enabled}");
                         }
+                        let announces_policy = matches!(&parsed, Ok(ClientMessage::Capabilities { features }) if features.iter().any(|name| name == crate::protocol::FEATURE_POLICY));
                         let result = match parsed {
                             Ok(ClientMessage::Ice{session})=>{
                                 let permission=if enrolled.is_some(){match state.registry.lock(){Ok(mut registry)=>registry.ice_permission(id,generation,session,now,unix_now()),Err(_)=>break}}else{Err(ErrorCode::Forbidden)};
@@ -516,6 +583,10 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                             Ok(message) => match state.registry.lock() { Ok(mut r) => r.handle(id, generation, message, now), Err(_) => break },
                             Err(_) => Err(ErrorCode::Invalid),
                         };
+                        if result.is_ok() && announces_policy && device_policy_sent.is_none() {
+                            device_policy_sent = Some(Instant::now());
+                            send_device_policy(&state, id, generation, own_tx.clone());
+                        }
                         if let Err(code) = result
                             && !send(&mut socket, &ServerMessage::Error { code }).await { break; }
                     }
@@ -527,7 +598,30 @@ async fn connection(mut socket: WebSocket, state: AppState) {
     if let Ok(mut registry) = state.registry.lock() {
         registry.disconnect(id, generation);
     }
-    let _ = tokio::time::timeout(Duration::from_secs(1), socket.close()).await;
+    // Restart: the apps reconnect at once (their back-off treats 1012 as temporary).
+    let frame = state
+        .shutting_down
+        .load(Ordering::SeqCst)
+        .then(|| axum::extract::ws::CloseFrame { code: CLOSE_RESTART, reason: "restart".into() });
+    let _ = tokio::time::timeout(Duration::from_secs(1), socket.send(Message::Close(frame))).await;
+}
+
+/// Looks up the device policy of a connected app (outside the registry lock) and queues it for the app.
+fn send_device_policy(state: &AppState, id: u32, generation: uuid::Uuid, tx: mpsc::Sender<ServerMessage>) {
+    let (Some(policy), Ok(registry)) = (state.policy.clone(), state.registry.lock()) else {
+        return;
+    };
+    let Some(binding) = registry.agent_binding(id, generation, unix_now()) else {
+        return;
+    };
+    drop(registry);
+    let slots = state.policy_slots.clone();
+    tokio::spawn(async move {
+        let Ok(_slot) = slots.try_acquire() else { return };
+        if let Some((unattended_default, unattended_allowed)) = policy.device_policy(&binding).await {
+            let _ = tx.try_send(ServerMessage::DevicePolicy { unattended_default, unattended_allowed });
+        }
+    });
 }
 
 #[cfg(test)]

@@ -184,8 +184,14 @@ end $$;
 \echo '-- a technician demoted to member keeps no device it only renamed or moved'
 select pg_temp.act('tech_a');
 do $$ begin
+    -- Migration 031: renaming is for owners and admins only.
     perform public.remote_saas_rename_device(pg_temp.id('tenant_a'), pg_temp.id('dev_open'), 'QA Sec Open 2');
-exception when others then perform pg_temp.result('technician renames a device through the RPC', false, sqlerrm); end $$;
+    perform pg_temp.result('a technician may not rename a device through the RPC', false, 'renamed');
+exception when insufficient_privilege then null; end $$;
+select pg_temp.act('owner_a');
+do $$ begin
+    perform public.remote_saas_rename_device(pg_temp.id('tenant_a'), pg_temp.id('dev_open'), 'QA Sec Open 2');
+exception when others then perform pg_temp.result('owner renames a device through the RPC', false, sqlerrm); end $$;
 select pg_temp.act('owner_a');
 do $$ begin perform public.remote_saas_set_member_role(pg_temp.id('tenant_a'), pg_temp.id('tech_a_profile'), 'member');
 exception when others then perform pg_temp.result('owner demotes the technician', false, sqlerrm); end $$;

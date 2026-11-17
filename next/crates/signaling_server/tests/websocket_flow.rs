@@ -1116,7 +1116,8 @@ async fn support_policy_blocks_direct_id_and_revokes_pending_or_active_sessions(
     let ServerMessage::SupportCode {
         required: true,
         code: Some(code),
-        lifetime_seconds: u16::MAX,
+        // D2: a 30-minute countdown.
+        lifetime_seconds: 1800,
     } = event(&mut host).await
     else {
         panic!("one-time password was not generated");
@@ -2372,4 +2373,157 @@ async fn unattended_access_only_for_controllers_the_policy_allows() {
 /// Nothing arrives on the socket for a moment.
 async fn quiet(socket: &mut Socket) -> bool {
     timeout(Duration::from_millis(150), socket.next()).await.is_err()
+}
+
+/// Server additions of 17 Nov 2026 on a real broker: new message types and fields reach only apps
+/// that announced them (2.0.14-2.0.18 parse every server message strictly), the device policy (D1),
+/// signed commands (D4), the policy re-check riding out a restart of the policy service but not a
+/// refusal, and the 1012 close code on a broker restart.
+#[tokio::test]
+async fn server_additions_reach_only_apps_that_announced_them_and_old_apps_keep_working() {
+    use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
+    use ed25519_dalek::SigningKey;
+    use signaling_server::{delegated_auth::TicketAuth, support_policy::SupportPolicy};
+    use std::sync::atomic::{AtomicU8, Ordering};
+
+    const TOKEN: &str = "6333663366336633663366336633663366336633663366336633663366336633";
+    const OLD_HOST: u32 = 123_456_789;
+    const NEW_HOST: u32 = 123_456_790;
+    const VIEWER: u32 = 200_000_011;
+    // 0: allow, 1: unreachable (503), 2: refuse (403).
+    let mode = Arc::new(AtomicU8::new(0));
+    let policy = Router::new()
+        .route(
+            "/api/internal/remote/authorize",
+            post(|State(mode): State<Arc<AtomicU8>>| async move {
+                match mode.load(Ordering::SeqCst) {
+                    0 => StatusCode::NO_CONTENT,
+                    1 => StatusCode::SERVICE_UNAVAILABLE,
+                    _ => StatusCode::FORBIDDEN,
+                }
+            }),
+        )
+        .route(
+            "/api/internal/remote/device-policy",
+            post(|| async { Json(serde_json::json!({ "unattended_default": true, "unattended_allowed": false })) }),
+        )
+        .route(
+            "/api/internal/remote/agent",
+            post(|Json(request): Json<serde_json::Value>| async move {
+                let binding = &request["binding"];
+                Json(serde_json::json!({
+                    "id": Uuid::from_u128(4242), "shell": "sh", "script": "uname -a", "timeout_seconds": 300,
+                    "signed": {
+                        "key_id": "58b522e9976086ec", "device": binding["device"], "connection_id": binding["connection_id"],
+                        "issued_at": 1_794_900_000u64, "expires_at": 1_794_986_400u64,
+                        "nonce": "ab".repeat(32), "signature": "cd".repeat(64),
+                    }
+                }))
+            }),
+        )
+        .with_state(mode.clone());
+    let policy_socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let policy_url = format!("http://{}/api/internal/remote/authorize", policy_socket.local_addr().unwrap());
+    let policy_task = tokio::spawn(async move { axum::serve(policy_socket, policy).await.unwrap() });
+    let signer = SigningKey::from_bytes(&[63; 32]);
+    let state = AppState::new(Arc::new(TicketAuth::new(vec![signer.verifying_key()]).unwrap()), HashSet::new())
+        .with_support_policy(SupportPolicy::new(policy_url.parse().unwrap(), TOKEN.into()).unwrap());
+    let registry = state.registry.clone();
+    let shutdown = state.clone();
+    let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/v1/ws", socket.local_addr().unwrap());
+    let broker = tokio::spawn(async move { axum::serve(socket, router(state)).await.unwrap() });
+    let peer = |profile: u128, device: u128, connection_id: u32, key_byte: u8| SignedPeer {
+        profile: Uuid::from_u128(profile),
+        device: Uuid::from_u128(device),
+        tenant: Some(Uuid::from_u128(1)),
+        connection_id,
+        generation: 1,
+        key_byte,
+    };
+    // A 2.0.18 app announces join and switch only; a new app also the new features.
+    let mut old_host = signed_peer(&url, &signer, peer(10, 20, OLD_HOST, 70)).await;
+    let mut new_host = signed_peer(&url, &signer, peer(14, 24, NEW_HOST, 74)).await;
+    let mut viewer = signed_peer(&url, &signer, peer(11, 21, VIEWER, 71)).await;
+    send(&mut old_host, ClientMessage::Capabilities { features: vec![FEATURE_JOIN.into(), FEATURE_SWITCH.into()] }).await;
+    send(&mut new_host, ClientMessage::Capabilities {
+        features: [FEATURE_JOIN, FEATURE_SWITCH, FEATURE_ENDING, FEATURE_POLICY, FEATURE_RESUME, FEATURE_SIGNED].map(String::from).to_vec(),
+    })
+    .await;
+    assert!(matches!(event(&mut new_host).await,
+        ServerMessage::DevicePolicy { unattended_default: true, unattended_allowed: false }));
+    assert!(quiet(&mut old_host).await, "an old app got a device policy");
+
+    // App version: accepted from any app, reported with presence.
+    send(&mut new_host, ClientMessage::AppVersion { version: "2.0.19".into(), platform: "linux-x64".into() }).await;
+    send(&mut old_host, ClientMessage::AppVersion { version: "not a version".into(), platform: "x".into() }).await;
+    assert!(matches!(event(&mut old_host).await, ServerMessage::Error { code: ErrorCode::Invalid }));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let unix = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    assert_eq!(registry.lock().unwrap().device_versions(unix), vec![(NEW_HOST, "2.0.19".into(), "linux-x64".into())]);
+
+    // D4: the signature goes to the app that checks it; the old app gets the old shape, byte for byte.
+    async fn raw_agent(socket: &mut Socket) -> String {
+        send(socket, ClientMessage::Agent { inventory: None, result: None }).await;
+        loop {
+            let message = timeout(Duration::from_secs(3), socket.next()).await.unwrap().unwrap().unwrap();
+            if let Message::Text(text) = message && text.contains("\"agent\"") {
+                return text.to_string();
+            }
+        }
+    }
+    let old_agent = raw_agent(&mut old_host).await;
+    assert!(old_agent.contains("uname -a") && !old_agent.contains("signed"), "{old_agent}");
+    let new_agent = raw_agent(&mut new_host).await;
+    let ServerMessage::Agent { command: Some(AgentCommand { signed: Some(signed), .. }) } = serde_json::from_str(&new_agent).unwrap() else {
+        panic!("{new_agent}");
+    };
+    assert_eq!((signed.device, signed.connection_id), (Uuid::from_u128(24), NEW_HOST));
+
+    // A running session rides out a policy service that does not answer, and ends on a refusal.
+    send(&mut viewer, ClientMessage::Request { host: OLD_HOST }).await;
+    let ServerMessage::Requested { session } = event(&mut viewer).await else { panic!("request refused") };
+    assert!(matches!(event(&mut old_host).await, ServerMessage::Consent { session: asked, .. } if asked == session));
+    send(&mut old_host, ClientMessage::Decide { session, accept: true }).await;
+    assert!(matches!(event(&mut viewer).await, ServerMessage::Accepted { .. }));
+    assert!(matches!(event(&mut old_host).await, ServerMessage::Accepted { .. }));
+    send(&mut viewer, ClientMessage::Signal { session, payload: Signal::Offer("v=0".into()) }).await;
+    assert!(matches!(event(&mut old_host).await, ServerMessage::Signal { .. }));
+    send(&mut old_host, ClientMessage::Signal { session, payload: Signal::Answer("v=0".into()) }).await;
+    assert!(matches!(event(&mut viewer).await, ServerMessage::Signal { .. }));
+    mode.store(1, Ordering::SeqCst);
+    // Two re-checks (every 10 s) without an answer: the session stays.
+    let until = tokio::time::Instant::now() + Duration::from_secs(22);
+    while tokio::time::Instant::now() < until {
+        if let Ok(Some(Ok(Message::Text(raw)))) = tokio::time::timeout_at(until, viewer.next()).await {
+            panic!("the session ended while the policy service did not answer: {raw}");
+        }
+    }
+    mode.store(2, Ordering::SeqCst);
+    let until = tokio::time::Instant::now() + Duration::from_secs(13);
+    loop {
+        let Ok(Some(Ok(message))) = tokio::time::timeout_at(until, viewer.next()).await else {
+            panic!("a refused session was not ended");
+        };
+        if let Message::Text(raw) = message {
+            assert!(matches!(serde_json::from_str::<ServerMessage>(&raw).unwrap(), ServerMessage::Closed { session: closed, .. } if closed == session));
+            break;
+        }
+    }
+
+    // A broker restart closes every connection with 1012, which the apps treat as temporary.
+    shutdown.begin_shutdown();
+    registry.lock().unwrap().shutdown();
+    for socket in [&mut old_host, &mut new_host, &mut viewer] {
+        let code = loop {
+            match timeout(Duration::from_secs(3), socket.next()).await.unwrap() {
+                Some(Ok(Message::Close(frame))) => break frame.map(|frame| u16::from(frame.code)),
+                Some(Ok(_)) => continue,
+                other => panic!("no close frame: {other:?}"),
+            }
+        };
+        assert_eq!(code, Some(1012));
+    }
+    policy_task.abort();
+    broker.abort();
 }

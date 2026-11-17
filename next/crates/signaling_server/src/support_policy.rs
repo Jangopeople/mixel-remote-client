@@ -61,6 +61,16 @@ pub struct SessionLimit {
     pub max_sessions: u32,
 }
 
+/// The policy service's answer about a pair.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Decision {
+    Allowed(Grant),
+    /// The service answered and refused.
+    Refused,
+    /// No usable answer: connection error, timeout or 5xx (for example while it restarts).
+    Unreachable,
+}
+
 /// A policy decision that allowed the session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Grant {
@@ -133,16 +143,26 @@ impl SupportPolicy {
         })
     }
 
-    /// `None`: refused. 204: allowed without a broker-side limit (linked companies, personal
-    /// accounts). 200 with `{"tenant": uuid, "max_sessions": n}`: allowed for a Remote SaaS tenant,
-    /// which may hold at most `n` sessions at once on this broker.
+    /// `None`: refused or not answered. 204: allowed without a broker-side limit (linked companies,
+    /// personal accounts). 200 with `{"tenant": uuid, "max_sessions": n}`: allowed for a Remote SaaS
+    /// tenant, which may hold at most `n` sessions at once on this broker.
     pub(crate) async fn allows(
         &self,
         pair: &SupportPair,
         unattended: bool,
         accept_session: Option<Uuid>,
     ) -> Option<Grant> {
-        let response = self
+        match self.decide(pair, unattended, accept_session).await {
+            Decision::Allowed(grant) => Some(grant),
+            Decision::Refused | Decision::Unreachable => None,
+        }
+    }
+
+    /// As `allows`, but tells a refusal (the service answered 4xx or an invalid body) apart from no
+    /// answer (connection error, timeout, 5xx), so a running session can ride out a restart of the
+    /// policy service.
+    pub(crate) async fn decide(&self, pair: &SupportPair, unattended: bool, accept_session: Option<Uuid>) -> Decision {
+        let Ok(response) = self
             .client
             .post(self.endpoint.clone())
             .bearer_auth(self.token.as_str())
@@ -152,23 +172,61 @@ impl SupportPolicy {
             }))
             .send()
             .await
-            .ok()?;
+        else {
+            return Decision::Unreachable;
+        };
         match response.status() {
-            StatusCode::NO_CONTENT => Some(Grant { limit: None }),
+            StatusCode::NO_CONTENT => Decision::Allowed(Grant { limit: None }),
             StatusCode::OK => {
                 let mut stream = response.bytes_stream();
                 let mut body = Vec::new();
                 while let Some(chunk) = stream.next().await {
-                    let chunk = chunk.ok()?;
+                    let Ok(chunk) = chunk else { return Decision::Unreachable };
                     if body.len() + chunk.len() > 512 {
-                        return None;
+                        return Decision::Refused;
                     }
                     body.extend_from_slice(&chunk);
                 }
-                Grant::from_tenant_limit(&body)
+                Grant::from_tenant_limit(&body).map_or(Decision::Refused, Decision::Allowed)
             }
-            _ => None,
+            status if status.is_server_error() => Decision::Unreachable,
+            _ => Decision::Refused,
         }
+    }
+
+    /// D1 / device administration: `(unattended_default, unattended_allowed)` of a connected device.
+    /// `None`: no answer, or no current enrolment for this binding.
+    pub(crate) async fn device_policy(&self, binding: &DeviceBinding) -> Option<(bool, bool)> {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Policy {
+            unattended_default: bool,
+            unattended_allowed: bool,
+        }
+        let mut endpoint = self.endpoint.clone();
+        endpoint.set_path("/api/internal/remote/device-policy");
+        let response = self
+            .client
+            .post(endpoint)
+            .bearer_auth(self.token.as_str())
+            .json(&serde_json::json!({ "binding": binding }))
+            .send()
+            .await
+            .ok()?;
+        if response.status() != StatusCode::OK {
+            return None;
+        }
+        let mut stream = response.bytes_stream();
+        let mut body = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.ok()?;
+            if body.len() + chunk.len() > 256 {
+                return None;
+            }
+            body.extend_from_slice(&chunk);
+        }
+        let policy: Policy = serde_json::from_slice(&body).ok()?;
+        Some((policy.unattended_default, policy.unattended_allowed))
     }
     pub(crate) async fn allows_startup_host(
         &self,
@@ -223,6 +281,9 @@ impl SupportPolicy {
                     || command.script.is_empty()
                     || command.script.len() > crate::protocol::MAX_AGENT_SCRIPT
                     || !(1..=3600).contains(&command.timeout_seconds)
+                    || command.signed.as_ref().is_some_and(|signed| {
+                        !signed.well_formed() || signed.device != binding.device || signed.connection_id != binding.connection_id
+                    })
                 {
                     return Err(AuthError);
                 }

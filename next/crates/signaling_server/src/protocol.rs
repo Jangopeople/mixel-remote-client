@@ -110,6 +110,12 @@ pub enum ClientMessage {
         inventory: Option<String>,
         result: Option<AgentResult>,
     },
+    /// After a broker restart: continue the running session `session` (feature `resume`). Both sides
+    /// resume; until then the session is parked (see `Registry::import_handover`).
+    Resume { session: Uuid },
+    /// The app's version and platform, reported with presence (Devices list). Sent once after
+    /// `capabilities`; an older broker answers `invalid`, which the app ignores.
+    AppVersion { version: String, platform: String },
 }
 pub const MAX_AGENT_INVENTORY: usize = 8192;
 pub const MAX_AGENT_OUTPUT: usize = 16384;
@@ -129,6 +135,47 @@ pub struct AgentCommand {
     pub shell: String,
     pub script: String,
     pub timeout_seconds: u16,
+    /// D4: the console's signature. Sent only to apps that announced `signed`; apps of 2.0.18 and
+    /// older parse this struct strictly and never receive the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed: Option<CommandSignature>,
+}
+/// Signature of a remote command, made when it was queued in the console (contract 4.6).
+#[derive(Clone, Deserialize, Serialize, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CommandSignature {
+    pub key_id: String,
+    pub device: Uuid,
+    pub connection_id: u32,
+    pub issued_at: u64,
+    pub expires_at: u64,
+    pub nonce: String,
+    pub signature: String,
+}
+impl CommandSignature {
+    /// Shape check only (the app verifies the signature with its pinned key).
+    pub fn well_formed(&self) -> bool {
+        let hex = |value: &str, len: usize| value.len() == len && value.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
+        hex(&self.key_id, 16)
+            && hex(&self.nonce, 64)
+            && hex(&self.signature, 128)
+            && (100_000_000..=999_999_999).contains(&self.connection_id)
+            && self.expires_at > self.issued_at
+    }
+}
+pub const MAX_APP_VERSION: usize = 19;
+pub const MAX_PLATFORM: usize = 32;
+/// `1.2`, `2.0.19`, `2.0.19.4`: 1-3 digit major, up to 3 more parts of 1-4 digits.
+pub fn valid_app_version(version: &str, platform: &str) -> bool {
+    let parts: Vec<&str> = version.split('.').collect();
+    version.len() <= MAX_APP_VERSION
+        && (2..=4).contains(&parts.len())
+        && parts.iter().enumerate().all(|(index, part)| {
+            !part.is_empty() && part.len() <= if index == 0 { 3 } else { 4 } && part.bytes().all(|b| b.is_ascii_digit())
+        })
+        && !platform.is_empty()
+        && platform.len() <= MAX_PLATFORM
+        && platform.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 #[derive(Clone, Deserialize, Serialize, Debug)]
 #[serde(
@@ -270,6 +317,27 @@ pub enum ServerMessage {
     Error {
         code: ErrorCode,
     },
+    /// D2: a session started with a support password ends in `seconds` (feature `ending`).
+    SessionEnding {
+        session: Uuid,
+        seconds: u32,
+        reason: EndingReason,
+    },
+    /// D1 / device administration: the device's default for unattended access and whether its
+    /// administrator allows it (feature `policy`).
+    DevicePolicy {
+        unattended_default: bool,
+        unattended_allowed: bool,
+    },
+    /// The session is known again after a broker restart and this side is back in it (feature `resume`).
+    Resumed {
+        session: Uuid,
+    },
+}
+#[derive(Clone, Copy, Deserialize, Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EndingReason {
+    SupportPasswordLimit,
 }
 #[derive(Clone, Copy, Deserialize, Serialize, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -285,6 +353,14 @@ pub enum CloseReason {
 pub const FEATURE_JOIN: &str = "join";
 /// Broker feature: switching sides in a running session.
 pub const FEATURE_SWITCH: &str = "switch";
+/// Broker feature: `session_ending` warnings (D2).
+pub const FEATURE_ENDING: &str = "ending";
+/// Broker feature: `device_policy` (D1, admin setting).
+pub const FEATURE_POLICY: &str = "policy";
+/// Broker feature: `resume` / `resumed` after a broker restart.
+pub const FEATURE_RESUME: &str = "resume";
+/// Broker feature: signed remote commands (D4).
+pub const FEATURE_SIGNED: &str = "signed";
 #[derive(Clone, Copy, Deserialize, Serialize, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Joining {
