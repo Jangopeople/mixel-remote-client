@@ -409,3 +409,160 @@ fn valid_h264_payload(payload: &[u8], marker: bool) -> bool {
         _ => false,
     }
 }
+
+/// Puts picture packets back in order and waits a moment for one that is missing, so a packet the
+/// host sends again on request (NACK) can still complete its picture. Without it every lost packet
+/// made the technician's side drop the picture and wait for a complete one (one to several seconds
+/// on a long or lossy line: at 1 % loss a moving full-HD screen arrived at about one picture a
+/// second). A gap that is not filled within `wait` is passed on as it is: the assembler then sees
+/// the gap and asks for a complete picture, as before.
+pub struct PacketReorder<P> {
+    expected: Option<u16>,
+    held: std::collections::BTreeMap<u16, P>,
+    gap_since: Option<std::time::Instant>,
+    wait: std::time::Duration,
+}
+
+/// Packets held behind one gap at most; beyond that the gap is given up at once.
+const REORDER_MAX_HELD: usize = 1024;
+
+impl<P> PacketReorder<P> {
+    pub fn new(wait: std::time::Duration) -> Self {
+        Self { expected: None, held: std::collections::BTreeMap::new(), gap_since: None, wait }
+    }
+
+    /// One packet arrived; returns the packets that are now in order (possibly none).
+    pub fn push(&mut self, sequence: u16, packet: P, now: std::time::Instant) -> Vec<P> {
+        let Some(expected) = self.expected else {
+            self.expected = Some(sequence.wrapping_add(1));
+            return vec![packet];
+        };
+        let ahead = sequence.wrapping_sub(expected);
+        if ahead >= 0x8000 {
+            // Older than what was already passed on: a duplicate, or a repeat that came too late.
+            return Vec::new();
+        }
+        if ahead == 0 {
+            self.expected = Some(sequence.wrapping_add(1));
+            let mut ready = vec![packet];
+            self.drain(&mut ready);
+            self.gap_since = (!self.held.is_empty()).then_some(now);
+            return ready;
+        }
+        // A key is the distance from `expected`, so the map's order is the packets' order.
+        self.held.entry(ahead).or_insert(packet);
+        self.gap_since.get_or_insert(now);
+        if self.held.len() > REORDER_MAX_HELD {
+            return self.give_up();
+        }
+        Vec::new()
+    }
+
+    /// Packets passed on because the gap in front of them was not filled in time.
+    pub fn expire(&mut self, now: std::time::Instant) -> Vec<P> {
+        match self.gap_since {
+            Some(since) if now.saturating_duration_since(since) >= self.wait => self.give_up(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Whether packets are waiting behind a gap.
+    pub fn waiting(&self) -> bool {
+        !self.held.is_empty()
+    }
+
+    fn drain(&mut self, ready: &mut Vec<P>) {
+        // Every held key is a distance from the old `expected`, one less now for each packet passed on.
+        let mut shift = 1u16;
+        loop {
+            match self.held.first_key_value().map(|(key, _)| *key) {
+                Some(key) if key == shift => {
+                    let (_, packet) = self.held.pop_first().unwrap_or_else(|| unreachable!());
+                    ready.push(packet);
+                    shift = shift.wrapping_add(1);
+                }
+                _ => break,
+            }
+        }
+        if let Some(expected) = self.expected {
+            let passed = shift.wrapping_sub(1);
+            self.expected = Some(expected.wrapping_add(passed));
+            if passed > 0 {
+                self.held = std::mem::take(&mut self.held).into_iter().map(|(key, packet)| (key - shift, packet)).collect();
+            } else {
+                self.held = std::mem::take(&mut self.held).into_iter().map(|(key, packet)| (key - 1, packet)).collect();
+            }
+        }
+    }
+
+    fn give_up(&mut self) -> Vec<P> {
+        let last = self.held.last_key_value().map(|(key, _)| *key);
+        if let (Some(expected), Some(last)) = (self.expected, last) {
+            self.expected = Some(expected.wrapping_add(last).wrapping_add(1));
+        }
+        self.gap_since = None;
+        std::mem::take(&mut self.held).into_values().collect()
+    }
+}
+
+#[cfg(test)]
+mod reorder_tests {
+    use super::PacketReorder;
+    use std::time::{Duration, Instant};
+
+    fn feed(reorder: &mut PacketReorder<u16>, sequences: &[u16], now: Instant) -> Vec<u16> {
+        sequences.iter().flat_map(|sequence| reorder.push(*sequence, *sequence, now)).collect()
+    }
+
+    #[test]
+    fn packets_in_order_pass_at_once() {
+        let mut reorder = PacketReorder::new(Duration::from_millis(400));
+        let now = Instant::now();
+        assert_eq!(feed(&mut reorder, &[10, 11, 12, 13], now), [10, 11, 12, 13]);
+        assert!(!reorder.waiting());
+    }
+
+    #[test]
+    fn a_packet_sent_again_completes_the_picture_in_order() {
+        let mut reorder = PacketReorder::new(Duration::from_millis(400));
+        let now = Instant::now();
+        assert_eq!(feed(&mut reorder, &[10, 11, 13, 14, 15], now), [10, 11]);
+        assert!(reorder.waiting());
+        assert!(reorder.expire(now + Duration::from_millis(100)).is_empty(), "still waiting for 12");
+        assert_eq!(reorder.push(12, 12, now + Duration::from_millis(150)), [12, 13, 14, 15]);
+        assert!(!reorder.waiting());
+        assert_eq!(feed(&mut reorder, &[16, 17], now), [16, 17]);
+        assert!(reorder.push(12, 12, now).is_empty(), "a late duplicate is dropped");
+    }
+
+    #[test]
+    fn two_gaps_are_filled_one_after_the_other() {
+        let mut reorder = PacketReorder::new(Duration::from_millis(400));
+        let now = Instant::now();
+        assert_eq!(feed(&mut reorder, &[1, 3, 5, 6], now), [1]);
+        assert_eq!(reorder.push(2, 2, now), [2, 3]);
+        assert!(reorder.waiting());
+        assert_eq!(reorder.push(4, 4, now), [4, 5, 6]);
+        assert_eq!(feed(&mut reorder, &[7], now), [7]);
+    }
+
+    #[test]
+    fn a_gap_that_is_not_filled_in_time_is_passed_on() {
+        let mut reorder = PacketReorder::new(Duration::from_millis(400));
+        let now = Instant::now();
+        assert_eq!(feed(&mut reorder, &[100, 102, 103], now), [100]);
+        assert_eq!(reorder.expire(now + Duration::from_millis(401)), [102, 103]);
+        assert!(!reorder.waiting());
+        assert_eq!(feed(&mut reorder, &[104, 105], now), [104, 105], "the stream goes on after the gap");
+        assert!(reorder.push(101, 101, now).is_empty(), "the lost packet arriving later is dropped");
+    }
+
+    #[test]
+    fn numbering_wraps_around() {
+        let mut reorder = PacketReorder::new(Duration::from_millis(400));
+        let now = Instant::now();
+        assert_eq!(feed(&mut reorder, &[65534, 65535, 1, 2], now), [65534, 65535]);
+        assert_eq!(reorder.push(0, 0, now), [0, 1, 2]);
+        assert_eq!(feed(&mut reorder, &[3], now), [3]);
+    }
+}

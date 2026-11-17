@@ -787,6 +787,11 @@ async fn pump_ice(config: &mut Config, transport: &mut NativeTransport) -> Resul
     Ok(())
 }
 
+/// How long the technician's side waits for a picture packet the host sends again on request
+/// before it gives the picture up: a request goes out within 100 ms of the gap, so this covers a
+/// round trip of about 300 ms (a long relay path) and one more request.
+const REPEAT_WAIT: Duration = Duration::from_millis(450);
+
 /// Packets taken from the picture stream before the control channel is served again.
 const PACKETS_PER_TURN: u32 = 512;
 
@@ -1398,6 +1403,10 @@ async fn viewer_media(
         }
     };
     let mut assembler = H264Assembler::default();
+    // A packet lost on the way is asked for again (NACK) and waited for this long before the
+    // picture is given up and a complete one is requested.
+    let mut reorder = core_protocol::media::PacketReorder::new(REPEAT_WAIT);
+    let mut in_order = std::collections::VecDeque::new();
     let mut decoder =
         session_platform::H264Decoder::new(1920, 1920).map_err(|error| error.to_string())?;
     let mut previous_rtp: Option<u32> = None;
@@ -1487,9 +1496,26 @@ async fn viewer_media(
         // control channel waited for seconds (measured in the lab, 14 Nov 2026: turns of 1.4 to
         // 2.4 s over twenty packets; the confirmation of every second input came too late).
         let (mut taken, mut picture_complete) = (0u32, false);
+        // Packets held behind a gap the host did not fill in time go on to the assembler now.
+        in_order.extend(reorder.expire(Instant::now()));
         while turn_goes_on(taken, picture_complete) {
             taken += 1;
-            match tokio::time::timeout(packet_wait(taken), track.poll()).await {
+            let event = match in_order.pop_front() {
+                Some(packet) => Ok(Some(TrackRemoteEvent::OnRtpPacket(packet))),
+                None => match tokio::time::timeout(packet_wait(taken), track.poll()).await {
+                    Ok(Some(TrackRemoteEvent::OnRtpPacket(packet))) => {
+                        let sequence = packet.header.sequence_number;
+                        in_order.extend(reorder.push(sequence, packet, Instant::now()));
+                        match in_order.pop_front() {
+                            Some(packet) => Ok(Some(TrackRemoteEvent::OnRtpPacket(packet))),
+                            // Held behind a gap: the host may still send the missing packet.
+                            None => continue,
+                        }
+                    }
+                    other => other,
+                },
+            };
+            match event {
                 Ok(Some(TrackRemoteEvent::OnRtpPacket(packet))) => {
                     #[cfg(feature = "qa-session")]
                     {

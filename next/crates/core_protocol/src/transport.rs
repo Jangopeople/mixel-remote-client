@@ -15,25 +15,29 @@ use webrtc::{
     },
 };
 
-/// The media stack's default set of helpers for every stream, without one of them: the one that
-/// sends a lost packet again when the other side asks for it (NACK responder).
+/// How often the technician's side asks again for one lost packet (the stack's default is without
+/// limit: on a link that had just dropped a burst it asked for the same packets every 100 ms).
+const NACKS_PER_PACKET: u16 = 3;
+/// Packets the host keeps to send again on request (about two seconds of a moving full-HD screen).
+const REPEAT_BUFFER: u16 = 1024;
+
+/// The media stack's default set of helpers for every stream, with a lost picture packet sent
+/// again when the other side asks (NACK) and asked for at most [`NACKS_PER_PACKET`] times.
 ///
-/// The side that shows the pictures takes a gap in the packet numbering for a damaged picture at
-/// once and asks for a complete one; a packet that arrives later with an old number is dropped
-/// (`H264Assembler`). So a packet sent again was never used, by any version. It only cost: on a
-/// link that had just dropped part of a burst, every missing packet was asked for again and again
-/// and sent again each time, unpaced. Measured on a 2 Mbit/s link: about 460 kB of pictures in
-/// twelve seconds and 20 MB of repeats on top, which left no room for the next complete picture;
-/// the session ended with "Remote video delivery timed out".
+/// History. Until 2.0.16 the host did not answer these requests: the technician's side took a gap
+/// for a damaged picture at once and asked for a complete one, so a packet sent again was never
+/// used; and before pacing (14 Nov 2026) every burst lost on a slow link was asked for again and
+/// again and sent again unpaced (2 Mbit/s: 460 kB of pictures and 20 MB of repeats in 12 s).
+/// Since 2.0.16 the technician's side waits a moment for the missing packet (`PacketReorder`),
+/// pictures leave paced, and requests are bounded, so a repeat now saves the picture: on a line
+/// with 1 % loss the technician got about one picture a second without it (lab, 17 Nov 2026).
+/// Older technicians still ask without limit; each request stops once the packet has arrived.
 ///
-/// Everything else is what the stack's `register_default_interceptors` sets up, in its order:
-/// the part that asks for repeats, the arrival feedback and the reports. The asking part stays so
-/// that nothing else about a session changes: the session description is the same, and a
-/// published host still answers it as before. (The stack's `NoopInterceptor` is no stand-in for
-/// the left-out part: despite its name it ends the inbound control traffic for everything behind
-/// it.)
+/// Everything else is what the stack's `register_default_interceptors` sets up: the arrival
+/// feedback and the reports. (The stack's `NoopInterceptor` is no stand-in for a left-out part:
+/// despite its name it ends the inbound control traffic for everything behind it.)
 fn interceptors(media_engine: &mut MediaEngine) -> Result<Registry, webrtc::error::Error> {
-    use rtc::interceptor::{NackGeneratorBuilder, Slot};
+    use rtc::interceptor::{NackGeneratorBuilder, NackResponderBuilder, Slot};
     use rtc::peer_connection::configuration::interceptor_registry::{
         configure_rtcp_reports, configure_simulcast_extension_headers, configure_twcc_receiver_only,
     };
@@ -44,7 +48,9 @@ fn interceptors(media_engine: &mut MediaEngine) -> Result<Registry, webrtc::erro
     }
     configure_simulcast_extension_headers(media_engine)?;
     let registry = configure_twcc_receiver_only(Registry::new(), media_engine)?;
-    Ok(configure_rtcp_reports(registry).with(Slot::NackGenerator, NackGeneratorBuilder::new().build()))
+    Ok(configure_rtcp_reports(registry)
+        .with(Slot::NackGenerator, NackGeneratorBuilder::new().with_max_nacks_per_packet(NACKS_PER_PACKET).build())
+        .with(Slot::NackResponder, NackResponderBuilder::new().with_size(REPEAT_BUFFER).build()))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -447,18 +453,17 @@ mod receive_buffer_tests {
 mod repeat_tests {
     use super::*;
 
-    /// The media stack is set up as the published apps have it, without the part that sends a
-    /// lost packet again. The part that asks for repeats, the arrival feedback and the reports are
-    /// there as before, in the same order.
+    /// The media stack has the stack's default parts, in the same order: since 2.0.16 with the part
+    /// that sends a lost packet again (the asking part is bounded, see `interceptors`).
     #[test]
-    fn lost_packets_are_not_sent_again_and_the_rest_is_as_before() {
+    fn lost_packets_are_sent_again_on_request_and_the_rest_is_as_before() {
         let names = |registry: Registry| -> Vec<String> { registry.slots().into_iter().map(|(_, name)| name).collect() };
         let mut media_engine = MediaEngine::default();
         let default = names(webrtc::peer_connection::register_default_interceptors(Registry::new(), &mut media_engine).unwrap());
         assert_eq!(default, ["NackResponderInterceptor", "NackGeneratorInterceptor", "TwccReceiverInterceptor", "ReceiverReportInterceptor", "SenderReportInterceptor"]);
         let mut media_engine = MediaEngine::default();
         let ours = names(interceptors(&mut media_engine).unwrap());
-        assert_eq!(ours, default[1..], "the default set without its first part, the one that resends");
+        assert_eq!(ours, default, "the default set, including the part that resends");
     }
 
     /// The session description is the one the published apps offer and answer (the list of
