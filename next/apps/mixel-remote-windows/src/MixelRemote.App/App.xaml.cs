@@ -97,6 +97,9 @@ public partial class App : Application
             tray = new TrayIcon(main, Model);
             consent = new ConsentWindow(Model);
             Model.PropertyChanged += OnModelChanged;
+#if LAB
+            Lab.LabHook.Start(Model);
+#endif
             if (!options.Hidden) main.Show();
             Model.Start();
             WatchShowRequests();
