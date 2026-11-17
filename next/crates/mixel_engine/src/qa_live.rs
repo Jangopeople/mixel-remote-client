@@ -381,6 +381,14 @@ async fn session(check: &mut Check<'_>, suffix: &str, tenant: &str, mine: u64) {
     if active["files"] == true && let Some(consent) = check.status().await["consent"].as_str().map(str::to_owned) {
         let path = check.folder.join("qa-file-send.bin");
         let _ = std::fs::write(&path, qa_file_bytes());
+        // As the apps do: offer only once the file channel says it is connected.
+        let ready = Instant::now();
+        while ready.elapsed() < Duration::from_secs(60)
+            && check.call("remote_file_status", json!({ "consent": consent })).await.ok().is_none_or(|view| view["connected"] != true)
+        {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        check.print(&format!("file channel connected {} ms after asked", ready.elapsed().as_millis()));
         let started = Instant::now();
         let offered = check.call("remote_file_send", json!({ "consent": consent, "path": path.to_string_lossy() })).await;
         let mut phase = String::new();
