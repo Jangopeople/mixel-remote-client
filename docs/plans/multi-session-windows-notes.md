@@ -39,3 +39,11 @@ Branch `feat/multi-20261117`. App: `next/apps/mixel-remote-windows`. Engine API:
 - No live run against a real engine with four hosts (the engine has its own tests and a broker test).
 - Starting a second connection while the first is still prepared replaces the connect panel of the first (its session still turns up as a tab/notice, but a
   refusal of the first would not be shown in the panel).
+
+## After the merge of feat/2.1.0 (engine: make-before-break renewal, stable `sessions[].session`)
+- Merged tree rebuilt on win-build: engine (`mixel_core_capi`) builds, app publishes with the new `mixel_core.dll`; `dotnet test`: 94 passed, 0 failed;
+  `cargo test -p mixel_engine --lib multi_session`: 6 passed. Keying by `id` is unchanged, so nothing in the app depended on `session` changing at renewal.
+- `SessionModel.ReconnectingNotice()` exists per session model and the session view shows it with `PasswordWarning()`. `reconnecting` is connection-wide,
+  so the banner appears in every open session (correct). `password_session` is a single top-level field of the engine (not per session): with several
+  sessions the password-limit warning would show in all of them. Engine need: `password_session` inside each `sessions[]` item.
+- Still not verified: no interactive launch (see above).
