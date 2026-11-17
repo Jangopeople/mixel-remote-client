@@ -189,6 +189,9 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
             let provider: Option<String> = args.get("provider")?;
             let app_callback: Option<String> = args.get("app_callback")?;
             let url = auth.begin_with(provider.as_deref(), app_callback.as_deref()).await?;
+            // An address the person typed (Linux): offered to the sign-in page as the standard `login_hint`.
+            let hint: Option<String> = args.get("login_hint")?;
+            let url = with_login_hint(url, hint.as_deref());
             // The app opens the page itself (`show_link`: it shows the link to copy instead).
             if args.get::<Option<bool>>("open_browser")?.unwrap_or(false)
                 && let Err(error) = browser(&url).await
@@ -1580,5 +1583,35 @@ mod tests {
             serde_json::from_str(&dispatch(&context, "legal_url", r#"{"page":"privacy","lang":"fr"}"#).await.unwrap()).unwrap();
         assert_eq!(url, "https://remote.mixel.ch/legal/privacy?lang=fr");
         assert!(dispatch(&context, "legal_url", r#"{"page":"../x"}"#).await.is_err());
+    }
+}
+
+/// The sign-in address with `login_hint=<e-mail>` added when the person typed one (an address only, otherwise unchanged).
+fn with_login_hint(url: String, hint: Option<&str>) -> String {
+    let Some(hint) = hint.map(str::trim).filter(|hint| hint.len() <= 254 && hint.contains('@') && !hint.contains(char::is_whitespace)) else {
+        return url;
+    };
+    match reqwest::Url::parse(&url) {
+        Ok(mut parsed) => {
+            parsed.query_pairs_mut().append_pair("login_hint", hint);
+            parsed.to_string()
+        }
+        Err(_) => url,
+    }
+}
+
+#[cfg(test)]
+mod login_hint_tests {
+    use super::with_login_hint;
+
+    #[test]
+    fn a_typed_address_is_added_as_login_hint_and_nothing_else_changes() {
+        let url = "https://id.example.test/authorize?client_id=x&state=y".to_owned();
+        let hinted = with_login_hint(url.clone(), Some(" tech@kunde-ag.example "));
+        assert!(hinted.starts_with("https://id.example.test/authorize?client_id=x&state=y&login_hint="));
+        assert!(hinted.ends_with("tech%40kunde-ag.example"));
+        assert_eq!(with_login_hint(url.clone(), None), url);
+        assert_eq!(with_login_hint(url.clone(), Some("")), url);
+        assert_eq!(with_login_hint(url.clone(), Some("not an address")), url);
     }
 }
