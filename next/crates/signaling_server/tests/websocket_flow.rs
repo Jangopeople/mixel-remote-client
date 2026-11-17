@@ -2527,3 +2527,115 @@ async fn server_additions_reach_only_apps_that_announced_them_and_old_apps_keep_
     policy_task.abort();
     broker.abort();
 }
+
+/// Several sessions at once (Mixel Remote 2.1): one technician holds four sessions to four hosts on a
+/// real broker, each with its own signaling; a fifth is refused; sessions end in mixed order, from either
+/// side, without touching the others; a freed place can be used again.
+#[tokio::test]
+async fn one_technician_holds_four_sessions_that_end_in_any_order() {
+    let state = AppState::new(
+        Arc::new(Fixture),
+        HashSet::from(["https://staging.example".into()]),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/v1/ws", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router(state)).await.unwrap();
+    });
+    let (mut viewer, _) = peer(&url, "viewer").await;
+    let mut hosts = Vec::new();
+    for _ in 0..5 {
+        hosts.push(peer(&url, "host").await);
+    }
+    let mut fifth = hosts.pop().unwrap();
+    // Four requests from the same technician, each accepted by its own host.
+    let mut sessions = Vec::new();
+    for (host, id) in hosts.iter_mut() {
+        let session = request(&mut viewer, host, *id).await;
+        send(host, ClientMessage::Decide { session, accept: true }).await;
+        let ServerMessage::Accepted { nonce, .. } = event(&mut viewer).await else {
+            panic!("accept expected")
+        };
+        assert_ne!(nonce, [0; 32]);
+        assert!(matches!(event(host).await, ServerMessage::Accepted { session: id, .. } if id == session));
+        // Offer and answer, per session.
+        send(&mut viewer, ClientMessage::Signal { session, payload: Signal::Offer(format!("offer {id}")) }).await;
+        assert!(matches!(event(host).await, ServerMessage::Signal { payload: Signal::Offer(_), session: s, .. } if s == session));
+        send(host, ClientMessage::Signal { session, payload: Signal::Answer(format!("answer {id}")) }).await;
+        assert!(matches!(event(&mut viewer).await, ServerMessage::Signal { payload: Signal::Answer(_), session: s, .. } if s == session));
+        sessions.push(session);
+    }
+    assert_eq!(sessions.len(), 4);
+    let distinct: HashSet<_> = sessions.iter().collect();
+    assert_eq!(distinct.len(), 4, "four independent sessions");
+    // A fifth session of the same technician is refused with a typed answer, not dropped.
+    send(&mut viewer, ClientMessage::Request { host: fifth.1 }).await;
+    assert!(matches!(
+        event(&mut viewer).await,
+        ServerMessage::Error { code: ErrorCode::Busy }
+    ));
+    assert!(quiet(&mut fifth.0).await, "the refused host was not bothered");
+    // Signaling is per session: a message of session 2 reaches host 2 and nobody else.
+    send(
+        &mut viewer,
+        ClientMessage::Signal { session: sessions[1], payload: Signal::Ice("two".into()) },
+    )
+    .await;
+    assert!(matches!(
+        event(&mut hosts[1].0).await,
+        ServerMessage::Signal { session, .. } if session == sessions[1]
+    ));
+    for index in [0, 2, 3] {
+        assert!(quiet(&mut hosts[index].0).await, "host {index} heard nothing of session 2");
+    }
+    // End session 3 from the technician, session 1 from its host, in mixed order.
+    send(&mut viewer, ClientMessage::Close { session: sessions[2] }).await;
+    assert!(matches!(event(&mut viewer).await, ServerMessage::Closed { session, .. } if session == sessions[2]));
+    assert!(matches!(event(&mut hosts[2].0).await, ServerMessage::Closed { session, .. } if session == sessions[2]));
+    send(&mut hosts[0].0, ClientMessage::Close { session: sessions[0] }).await;
+    assert!(matches!(event(&mut hosts[0].0).await, ServerMessage::Closed { session, .. } if session == sessions[0]));
+    assert!(matches!(event(&mut viewer).await, ServerMessage::Closed { session, .. } if session == sessions[0]));
+    // The two others still carry signaling, both ways.
+    for index in [1, 3] {
+        send(
+            &mut viewer,
+            ClientMessage::Signal { session: sessions[index], payload: Signal::Ice(format!("alive {index}")) },
+        )
+        .await;
+        assert!(matches!(
+            event(&mut hosts[index].0).await,
+            ServerMessage::Signal { session, .. } if session == sessions[index]
+        ));
+        send(
+            &mut hosts[index].0,
+            ClientMessage::Signal { session: sessions[index], payload: Signal::Ice(format!("back {index}")) },
+        )
+        .await;
+        assert!(matches!(
+            event(&mut viewer).await,
+            ServerMessage::Signal { session, .. } if session == sessions[index]
+        ));
+    }
+    // Two places are free again: the fifth host can be asked now.
+    let again = request(&mut viewer, &mut fifth.0, fifth.1).await;
+    send(&mut fifth.0, ClientMessage::Decide { session: again, accept: true }).await;
+    assert!(matches!(event(&mut viewer).await, ServerMessage::Accepted { .. }));
+    assert!(matches!(event(&mut fifth.0).await, ServerMessage::Accepted { .. }));
+    send(&mut viewer, ClientMessage::Signal { session: again, payload: Signal::Offer("offer".into()) }).await;
+    assert!(matches!(event(&mut fifth.0).await, ServerMessage::Signal { payload: Signal::Offer(_), .. }));
+    send(&mut fifth.0, ClientMessage::Signal { session: again, payload: Signal::Answer("answer".into()) }).await;
+    assert!(matches!(event(&mut viewer).await, ServerMessage::Signal { payload: Signal::Answer(_), .. }));
+    // End the rest in the order 4, 2, new: each closes alone.
+    for (order, session) in [(3, sessions[3]), (1, sessions[1])] {
+        send(&mut viewer, ClientMessage::Close { session }).await;
+        assert!(matches!(event(&mut viewer).await, ServerMessage::Closed { session: id, .. } if id == session));
+        assert!(matches!(event(&mut hosts[order].0).await, ServerMessage::Closed { session: id, .. } if id == session));
+    }
+    send(
+        &mut viewer,
+        ClientMessage::Signal { session: again, payload: Signal::Ice("last".into()) },
+    )
+    .await;
+    assert!(matches!(event(&mut fifth.0).await, ServerMessage::Signal { session, .. } if session == again));
+    task.abort();
+}

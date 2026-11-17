@@ -4189,3 +4189,237 @@ mod unattended_choice {
         }
     }
 }
+
+/// Several technician sessions at once: the state machine the registration loop drives, run here with
+/// the loop's own calls (the broker side is covered by `signaling_server/tests/websocket_flow.rs` and
+/// the lab run). Four sessions, each with its own pictures, input, clipboard and drawing, started, ended
+/// and lost in mixed order.
+#[cfg(test)]
+mod multi_session_tests {
+    use super::*;
+    use crate::remote_video::VideoPacket;
+    use zeroize::Zeroizing;
+
+    struct Open {
+        id: Uuid,
+        session: Uuid,
+        cancel: Arc<AtomicBool>,
+        /// Key usages the host side of this session received.
+        seen: mpsc::UnboundedReceiver<u16>,
+        draw: mpsc::Receiver<core_protocol::annotation::Message>,
+    }
+
+    async fn registered() -> (RemoteSession, mpsc::Receiver<Command>) {
+        let remote = RemoteSession::default();
+        let (tx, rx) = mpsc::channel(64);
+        {
+            let mut inner = remote.0.lock().await;
+            inner.commands = Some(tx);
+            inner.status.phase = "ready".into();
+            inner.status.host = Some(111_111_111);
+        }
+        (remote, rx)
+    }
+
+    /// What the loop does when the broker answers and the media task grants the session.
+    async fn open(remote: &RemoteSession, commands: &mut mpsc::Receiver<Command>, device: u32) -> Open {
+        let id = remote.request(device, None, false).await.unwrap();
+        let Some(Command::Request(host, _, _, slot)) = commands.recv().await else { panic!("request expected") };
+        assert_eq!((host, slot), (device, id));
+        let session = Uuid::new_v4();
+        let cancel = Arc::new(AtomicBool::new(false));
+        remote
+            .slot_track(0, id, session, cancel.clone(), Uuid::new_v4(), Arc::new(AtomicBool::new(false)), false, false)
+            .await
+            .unwrap();
+        let (input_tx, mut input) = mpsc::channel::<InputCommand>(8);
+        let (seen_tx, seen) = mpsc::unbounded_channel();
+        // The host side of the session: confirms every input and reports what it was.
+        tokio::spawn(async move {
+            while let Some(command) = input.recv().await {
+                if let InputEvent::Key { usage, .. } = command.event {
+                    let _ = seen_tx.send(usage);
+                }
+                let _ = command.reply.send(Ok(true));
+            }
+        });
+        let (clip_tx, _clip) = mpsc::channel(1);
+        let (draw_tx, draw) = mpsc::channel(8);
+        remote.grant(0, session, true, Some(input_tx), true, Some(clip_tx)).await;
+        remote.set_drawing(0, session, draw_tx).await;
+        remote.update_peer(0, session, "Remote screen shared", 1).await;
+        Open { id, session, cancel, seen, draw }
+    }
+
+    fn key(usage: u16) -> InputEvent {
+        InputEvent::Key { usage, down: true }
+    }
+
+    fn lands(open: &mut Open, usage: u16) -> bool {
+        open.seen.try_recv() == Ok(usage)
+    }
+
+    #[tokio::test]
+    async fn four_sessions_run_side_by_side_and_a_fifth_fails_with_a_typed_error() {
+        let (remote, mut commands) = registered().await;
+        let mut sessions = Vec::new();
+        for n in 0..4 {
+            sessions.push(open(&remote, &mut commands, 200_000_001 + n).await);
+        }
+        let status = remote.status().await;
+        assert_eq!(status.sessions.len(), 4);
+        assert_eq!(status.max_sessions, 4);
+        assert!(status.sessions.iter().all(|view| view.phase == "active" && view.control));
+        let error = remote.request(200_000_099, None, false).await.unwrap_err();
+        let json: serde_json::Value = serde_json::from_str(&error).unwrap();
+        assert_eq!(json["hint"], "too_many_sessions");
+        assert_eq!(remote.status().await.sessions.len(), 4, "the refused request left nothing behind");
+        assert!(commands.try_recv().is_err(), "and sent nothing to the broker");
+        // The same device twice is refused as well.
+        let again = remote.request(200_000_001, None, false).await.unwrap_err();
+        assert!(again.contains("already_connected") || again.contains("too_many_sessions"));
+        drop(sessions);
+    }
+
+    #[tokio::test]
+    async fn input_clipboard_drawing_and_pictures_stay_with_their_own_session() {
+        let (remote, mut commands) = registered().await;
+        let mut sessions = Vec::new();
+        for n in 0..4 {
+            sessions.push(open(&remote, &mut commands, 200_000_001 + n).await);
+        }
+        // Input goes to the session named, by stable id or by the broker's current id, and to no other.
+        for index in 0..4 {
+            let usage = 4 + index as u16;
+            let named = if index % 2 == 0 { sessions[index].id } else { sessions[index].session };
+            assert!(remote.input(named, key(usage)).await.unwrap());
+            for (other, session) in sessions.iter_mut().enumerate() {
+                assert_eq!(lands(session, usage), other == index, "key {usage} for session {index}, seen by {other}");
+            }
+        }
+        // Drawings the same way.
+        let clear = core_protocol::annotation::Message::Clear;
+        assert!(remote.draw(sessions[2].id, clear).await.unwrap());
+        assert!(sessions[2].draw.try_recv().is_ok());
+        for other in [0, 1, 3] {
+            assert!(sessions[other].draw.try_recv().is_err());
+        }
+        // Each session has its own picture mailbox: a picture of one never shows in another.
+        for (index, session) in sessions.iter().enumerate() {
+            let video = remote.slot_video(session.id).await.unwrap();
+            video
+                .publish(VideoPacket { session: session.session, bytes: Zeroizing::new(vec![index as u8 + 1; 8]) })
+                .unwrap();
+        }
+        for index in [3, 1, 0, 2] {
+            let picture = remote.next_video(sessions[index].id, false).await.unwrap();
+            assert_eq!(picture, vec![index as u8 + 1; 8], "session {index} gets its own picture");
+            assert!(remote.next_video(sessions[index].session, false).await.unwrap().is_empty(), "and only once");
+        }
+        // Picture figures per session.
+        remote.update_peer(0, sessions[1].session, "Remote screen shared", 40).await;
+        let status = remote.status().await;
+        assert_eq!(status.sessions[1].quality.pictures, 40);
+        assert_eq!(status.sessions[0].quality.pictures, 1);
+    }
+
+    #[tokio::test]
+    async fn sessions_end_and_get_lost_in_mixed_order_without_touching_the_others() {
+        let (remote, mut commands) = registered().await;
+        let mut sessions = Vec::new();
+        for n in 0..4 {
+            sessions.push(open(&remote, &mut commands, 200_000_001 + n).await);
+        }
+        // The technician closes the third tab: only that session stops.
+        remote.close(sessions[2].id).await.unwrap();
+        assert!(matches!(commands.recv().await, Some(Command::Close(id)) if id == sessions[2].session));
+        assert!(sessions[2].cancel.load(Ordering::Acquire));
+        assert!(!remote.input(sessions[2].id, key(9)).await.unwrap(), "no input reaches a closing session");
+        let status = remote.status().await;
+        let phases: Vec<&str> = status.sessions.iter().map(|view| view.phase.as_str()).collect();
+        assert_eq!(phases, ["active", "active", "closing", "active"]);
+        for other in [0, 1, 3] {
+            assert!(!sessions[other].cancel.load(Ordering::Acquire));
+            assert!(remote.input(sessions[other].id, key(10)).await.unwrap());
+            assert!(lands(&mut sessions[other], 10));
+        }
+        // The broker confirms: the session leaves the list, the others stay.
+        remote.slot_end(0, sessions[2].session, "Session closed".into()).await;
+        assert_eq!(remote.status().await.sessions.len(), 3);
+        // One is lost (its peer stopped): again only that one.
+        remote.slot_end(0, sessions[0].session, "The other computer left".into()).await;
+        let status = remote.status().await;
+        assert_eq!(status.sessions.iter().map(|view| view.id).collect::<Vec<_>>(), vec![sessions[1].id, sessions[3].id]);
+        assert!(status.sessions.iter().all(|view| view.phase == "active" && view.control));
+        assert!(remote.input(sessions[1].id, key(11)).await.unwrap());
+        assert!(lands(&mut sessions[1], 11));
+        // Places free up: a new session can start while the two others run.
+        let fresh = open(&remote, &mut commands, 200_000_077).await;
+        assert_eq!(remote.status().await.sessions.len(), 3);
+        // End the rest in yet another order; the last one ends with the registration.
+        remote.close(sessions[3].id).await.unwrap();
+        assert!(matches!(commands.recv().await, Some(Command::Close(_))));
+        assert!(remote.input(fresh.id, key(12)).await.unwrap());
+        assert!(!remote.input(sessions[3].id, key(12)).await.unwrap());
+        {
+            let mut inner = remote.0.lock().await;
+            RemoteSession::end_all_slots(&mut inner, "Connection lost; sharing stopped");
+        }
+        let status = remote.status().await;
+        assert!(status.sessions.is_empty());
+        assert!(fresh.cancel.load(Ordering::Acquire) && sessions[1].cancel.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn a_session_that_is_closed_before_the_broker_answers_never_starts() {
+        let (remote, mut commands) = registered().await;
+        let id = remote.request(200_000_001, None, false).await.unwrap();
+        let Some(Command::Request(..)) = commands.recv().await else { panic!("request expected") };
+        remote.close(id).await.unwrap();
+        // The loop is told by the id it knows; the broker names the session later.
+        assert!(matches!(commands.recv().await, Some(Command::Close(target)) if target == id));
+        let late = remote
+            .slot_track(0, id, Uuid::new_v4(), Arc::new(AtomicBool::new(false)), Uuid::new_v4(), Arc::new(AtomicBool::new(false)), false, false)
+            .await;
+        assert!(late.is_err(), "a closed request cannot become a session");
+    }
+
+    #[tokio::test]
+    async fn a_transport_renewal_keeps_the_stable_id_and_the_other_sessions() {
+        let (remote, mut commands) = registered().await;
+        let mut first = open(&remote, &mut commands, 200_000_001).await;
+        let mut second = open(&remote, &mut commands, 200_000_002).await;
+        // The broker replaced the first session's transport: a new session id, the same tab.
+        let renewed = Uuid::new_v4();
+        remote
+            .slot_track(0, first.session, renewed, Arc::new(AtomicBool::new(false)), Uuid::new_v4(), Arc::new(AtomicBool::new(false)), false, false)
+            .await
+            .unwrap();
+        let status = remote.status().await;
+        assert_eq!(status.sessions[0].id, first.id);
+        assert_eq!(status.sessions[0].session, Some(renewed));
+        assert!(first.cancel.load(Ordering::Acquire), "the old transport is stopped");
+        assert_eq!(status.sessions[1].session, Some(second.session));
+        assert!(!second.cancel.load(Ordering::Acquire), "the other session is not touched");
+        assert!(remote.input(second.id, key(5)).await.unwrap());
+        assert!(lands(&mut second, 5));
+        assert!(!remote.input(first.id, key(5)).await.unwrap(), "until the new transport grants input");
+        first.session = renewed;
+    }
+
+    #[tokio::test]
+    async fn the_single_session_form_still_works() {
+        let (remote, mut commands) = registered().await;
+        let mut only = open(&remote, &mut commands, 200_000_001).await;
+        let status = remote.status().await;
+        // What an app that knows one session reads: the top-level fields describe it.
+        assert_eq!(status.phase, "active");
+        assert_eq!(status.session, Some(only.session));
+        assert_eq!(status.peer, Some(200_000_001));
+        assert!(status.control && status.clipboard);
+        assert!(remote.input(status.session.unwrap(), key(7)).await.unwrap());
+        assert!(lands(&mut only, 7));
+        remote.close(status.session.unwrap()).await.unwrap();
+        assert!(matches!(commands.recv().await, Some(Command::Close(id)) if id == only.session));
+    }
+}
