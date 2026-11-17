@@ -245,6 +245,10 @@ public sealed class WorkspaceModel : Observable
             {
                 // The request was sent and the session is gone again: declined, timed out or refused.
                 // With other sessions open the connection's own message is theirs, so only a lone connection has a sentence to give.
+                var refusal = status.LastRefusal;
+                if (refusal is not null && refusal.Peer == current.Peer && DateTimeOffset.UtcNow.ToUnixTimeSeconds() - refusal.At < 120 && refusal.Message.Length > 0)
+                    failure = Translator.Shared.Translate(refusal.Message);
+                else
                 failure = status.Message.Length == 0 || status.Phase == "ready" || status.TechnicianSessions.Count > 0
                     ? L("The connection was not established. The other side declined, did not answer, or unattended access is not allowed.")
                     : Translator.Shared.Translate(status.Message);

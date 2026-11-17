@@ -68,9 +68,13 @@ public sealed record RemoteStatus
     public RecordingView? PreviousRecording { get; init; }
     public bool InputAccess { get; init; } = true;
     public bool UnattendedEnabled { get; init; }
+    /// <summary>The reason the last request was refused, kept apart from the message of the session in front (engine: <c>last_refusal</c>).</summary>
+    public Refusal? LastRefusal { get; init; }
     /// <summary>enabling, disabling, … while the connection service confirms a change.</summary>
     public string? UnattendedPending { get; init; }
     public bool UnattendedSession { get; init; }
+    /// <summary>Unattended access was asked for but this computer is not set up for it: the person there was asked instead.</summary>
+    public bool UnattendedRefused { get; init; }
     public PairingPrompt? Pairing { get; init; }
     public string? PairingMessage { get; init; }
     public bool CodeRequired { get; init; }
@@ -129,7 +133,7 @@ public sealed record RemoteStatus
                 Received = Received, Control = Control, Clipboard = Clipboard, Files = Files, RecordingPermitted = RecordingPermitted,
                 Recording = Recording, Displays = Displays, Display = Display, DisplayAll = DisplayAll, PrintJobs = PrintJobs,
                 HostActions = HostActions, SigninId = SigninId, HostMacs = HostMacs, MeetingOffer = MeetingOffer, PeerFeatures = PeerFeatures,
-                JoinedSession = JoinedSession, Switched = Switched, PasswordSession = PasswordSession, UnattendedSession = UnattendedSession,
+                JoinedSession = JoinedSession, Switched = Switched, PasswordSession = PasswordSession, UnattendedSession = UnattendedSession, UnattendedRefused = UnattendedRefused,
             },
         ];
     }
@@ -193,6 +197,8 @@ public sealed record SessionStatus
     /// <summary>This session was started with a support password: when it ends (the 5 and 1 minute warnings belong to this session only).</summary>
     public PasswordSession? PasswordSession { get; init; }
     public bool UnattendedSession { get; init; }
+    /// <summary>Unattended access was asked for but this computer is not set up for it: the person there was asked instead.</summary>
+    public bool UnattendedRefused { get; init; }
 
     /// <summary>The request waits for the person at the other computer to accept (not a session that asks its computer again).</summary>
     public bool Asking => Phase == "outgoing" && !Reconnecting && !ReconnectFailed;
@@ -212,7 +218,7 @@ public sealed record SessionStatus
         HostActions = HostActions, SigninId = SigninId, HostMacs = HostMacs, MeetingOffer = MeetingOffer, PeerFeatures = PeerFeatures,
         JoinedSession = JoinedSession, Switched = Switched,
         // The engine reports these per session: the top-level values (one session) belong to an older engine only.
-        PasswordSession = PasswordSession, UnattendedSession = UnattendedSession,
+        PasswordSession = PasswordSession, UnattendedSession = UnattendedSession, UnattendedRefused = UnattendedRefused,
         PeerReconnecting = Reconnecting, ReconnectFailed = ReconnectFailed,
     };
 }
@@ -642,4 +648,12 @@ public static class SelfRemoval
         "stale" => SelfRemovalStatus.Stale,
         _ => null,
     };
+}
+
+public sealed record Refusal
+{
+    public uint Peer { get; init; }
+    public string Message { get; init; } = "";
+    /// <summary>Seconds since the Unix epoch.</summary>
+    public long At { get; init; }
 }

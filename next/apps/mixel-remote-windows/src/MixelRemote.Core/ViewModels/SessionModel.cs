@@ -277,6 +277,9 @@ public sealed class SessionModel : Observable
     /// A session started with a support password ends after 2 hours: "ends in 5 minutes" and "ends in 1 minute"
     /// (the broker's session_ending, as remote_status.password_session). Empty when there is nothing to say.
     /// </summary>
+    /// <summary>Unattended access fell back to asking the person (engine: <c>sessions[].unattended_refused</c>).</summary>
+    public string ModeNotice() => Remote.UnattendedRefused && !Remote.UnattendedSession ? L("This computer is not set up for unattended access; asking the person there") : "";
+
     public string ReconnectingNotice() => Remote.Reconnecting ? L("Reconnecting… the session stays open") : "";
 
     /// <summary>The remote computer went away and this session asks for it again (engine: <c>sessions[].reconnecting</c>).</summary>

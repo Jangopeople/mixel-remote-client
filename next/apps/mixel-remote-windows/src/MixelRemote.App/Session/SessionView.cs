@@ -179,7 +179,7 @@ internal sealed class SessionView : Grid
         ((ProgressRing)waiting.Children[0]).IsActive = !session.ReconnectFailed;
         ((ProgressRing)waiting.Children[0]).Visibility = session.ReconnectFailed ? Visibility.Collapsed : Visibility.Visible;
         retry.Visibility = session.ReconnectFailed ? Visibility.Visible : Visibility.Collapsed;
-        var lines = new[] { session.ReconnectingNotice(), session.PasswordWarning(), session.Notice, session.MeetingNotice, session.Error, session.RecordingText }.Where(line => line.Length > 0).ToList();
+        var lines = new[] { session.ModeNotice(), session.ReconnectingNotice(), session.PasswordWarning(), session.Notice, session.MeetingNotice, session.Error, session.RecordingText }.Where(line => line.Length > 0).ToList();
         notices.Visibility = lines.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         notices.Child = Ui.Column(4, [.. lines.Select(line => (UIElement)new TextBlock { Text = line, Foreground = new SolidColorBrush(line == session.Error ? Windows.UI.Color.FromArgb(255, 0xFF, 0xB4, 0xBD) : Microsoft.UI.Colors.White), TextWrapping = TextWrapping.Wrap, MaxWidth = 620 })]);
         UpdateRecording();
@@ -341,7 +341,7 @@ internal sealed class SessionView : Grid
 
         // Who: the system tile, the name, and the ID with "E2E encrypted · Unattended".
         var facts = new List<string> { Format.RemoteId(remote.Peer), L("E2E encrypted") };
-        if (remote.UnattendedSession || session.RequestedUnattended) facts.Add(L("Unattended"));
+        facts.Add(remote.UnattendedSession || (session.RequestedUnattended && !remote.UnattendedRefused) ? L("Unattended") : L("Attended"));
         if (!remote.Control) facts.Add(L("View only"));
         detailLine = Ui.Caption(string.Join(" · ", facts));
         detailLine.FontSize = 12;
