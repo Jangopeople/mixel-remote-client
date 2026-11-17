@@ -17,6 +17,8 @@ LANGS = ['de', 'fr', 'it']
 
 # English: (German (Swiss spelling), French, Italian) — texts only the Linux app shows.
 LINUX = {
+    "You already have %d computers open. End one before connecting to another.": ("Sie haben bereits %d Computer geöffnet. Beenden Sie eine Sitzung, bevor Sie sich mit einem weiteren Computer verbinden.", "Vous avez déjà %d ordinateurs ouverts. Terminez une session avant de vous connecter à un autre ordinateur.", "Ha già %d computer aperti. Termini una sessione prima di collegarsi a un altro computer."),
+    "You are already connected to this computer.": ("Sie sind bereits mit diesem Computer verbunden.", "Vous êtes déjà connecté à cet ordinateur.", "È già collegato a questo computer."),
     "Add computer": ("Computer hinzufügen", "Ajouter un ordinateur", "Aggiungi computer"),
     "%@ is in its own window": ("%@ ist in einem eigenen Fenster", "%@ est dans sa propre fenêtre", "%@ è in una finestra separata"),
     "Account & security": ("Konto und Sicherheit", "Compte et sécurité", "Account e sicurezza"),

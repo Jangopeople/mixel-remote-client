@@ -41,6 +41,8 @@ const CSS_DARK: &str = include_str!("style-dark.css");
 /// instead while the session is in its own window.
 struct SessionTab {
     peer: u32,
+    /// The session's view: one per session, in the tab's slot or in the session's own window.
+    view: Rc<session::SessionView>,
     page: adw::TabPage,
     slot: gtk::Box,
     popped: gtk::Box,
@@ -69,7 +71,6 @@ struct Parts {
     account: account::AccountPage,
     settings: settings::SettingsPage,
     reports: reports::ReportsPage,
-    session: session::SessionView,
     section: Cell<Section>,
 }
 
@@ -193,6 +194,16 @@ impl Ui {
                 parts.sidebar_visible(!window.is_fullscreen());
             }
         });
+        // The window in front decides which session gets input, clipboard and toolbar actions.
+        let (a, weak) = (app.clone(), Rc::downgrade(&ui));
+        ui.window.connect_is_active_notify(move |_| {
+            let (a, ui) = (a.clone(), weak.clone());
+            glib::idle_add_local_once(move || {
+                if ui.upgrade().is_some() {
+                    a.sync_focus();
+                }
+            });
+        });
         let weak = Rc::downgrade(&ui);
         let close_app = app.clone();
         ui.window.connect_close_request(move |window| {
@@ -231,9 +242,7 @@ impl Ui {
         self.toasts.set_child(Some(&parts.root));
         self.parts.replace(Some(parts));
         self.consent.rebuild(app);
-        if let Some(texture) = app.texture.borrow().as_ref() {
-            self.set_frame(Some(texture));
-        }
+        // The session views are made again with the next render, each with its session's picture.
     }
 
     pub fn present(&self) {
@@ -248,8 +257,8 @@ impl Ui {
         if let Some(tray) = self.tray.borrow().as_ref() {
             tray.update(state);
         }
-        if let Some(peer) = state.session.note_for {
-            app.state.borrow_mut().session.note_for = None;
+        if let Some(peer) = state.note_for {
+            app.state.borrow_mut().note_for = None;
             let a = app.clone();
             dialogs::form(
                 &self.window,
@@ -265,20 +274,39 @@ impl Ui {
             );
         }
         // The app's own shortcuts go to the remote computer while its screen is in front.
-        let viewing = state.remote.viewing() && (state.workspace.is_in_window(state.remote.peer.unwrap_or(0)) || matches!(state.workspace.selected, Tab::Session(_)));
+        let viewing = state.focus.is_some() && state.remote.viewing() && (state.workspace.is_in_window(state.remote.peer.unwrap_or(0)) || matches!(state.workspace.selected, Tab::Session(_)));
         if viewing != self.session_keys.get() {
             self.session_keys.set(viewing);
             self.session_shortcuts(viewing);
         }
-        if !state.remote.viewing() && self.fullscreen_session.replace(false) {
+        if !viewing && !state.remote.viewing() && self.fullscreen_session.replace(false) {
             self.window.unfullscreen();
         }
     }
 
-    pub fn set_frame(&self, texture: Option<&gdk::Texture>) {
+    /// A new picture of the session `id` (stable id): only its own view shows it.
+    pub fn set_frame(&self, id: &str, texture: Option<&gdk::Texture>) {
         if let Some(parts) = self.parts.borrow().as_ref() {
-            parts.session.set_frame(texture);
+            for entry in parts.session_tabs.borrow().iter().filter(|entry| entry.view.id() == id) {
+                entry.view.set_frame(texture);
+            }
         }
+    }
+
+    /// Which session the person works in, as far as the windows tell: `Some(Some(peer))` a session
+    /// window is active, or the main window is active with that session's tab; `Some(None)` the main
+    /// window is active with Devices; `None` none of our windows is active.
+    pub fn front_peer(&self, workspace: &crate::workspace::Workspace) -> Option<Option<u32>> {
+        if let Some(peer) = self.popouts.borrow().iter().find(|(_, window)| window.is_active()).map(|(peer, _)| *peer) {
+            return Some(Some(peer));
+        }
+        if self.window.is_active() {
+            return Some(match workspace.selected {
+                Tab::Session(peer) => Some(peer),
+                Tab::Console => None,
+            });
+        }
+        None
     }
 
     /// Full screen for the session in front: its own window when popped out, else this window.
@@ -318,8 +346,10 @@ impl Ui {
                 let window = self.popouts.borrow_mut().remove(&peer);
                 if let Some(window) = window {
                     // The session view goes back to its tab (the next render puts it there).
-                    if let Some(parts) = self.parts.borrow().as_ref() {
-                        adopt(&parts.session.widget);
+                    if let Some(parts) = self.parts.borrow().as_ref()
+                        && let Some(entry) = parts.session_tabs.borrow().iter().find(|entry| entry.peer == peer)
+                    {
+                        adopt(&entry.view.widget);
                     }
                     window.destroy();
                 }
@@ -346,11 +376,28 @@ impl Ui {
         header.pack_start(&back);
         content.append(&header);
         if let Some(parts) = self.parts.borrow().as_ref() {
-            let widget = adopt(&parts.session.widget);
+            // The view exists already unless the window opens in the same turn as the session's tab.
+            let tab = app.state.borrow().workspace.tab(peer).cloned();
+            let mut list = parts.session_tabs.borrow_mut();
+            if let Some(tab) = tab {
+                parts.ensure_tab(app, &mut list, &tab);
+            }
+            let Some(entry) = list.iter().find(|entry| entry.peer == peer) else { return };
+            let widget = adopt(&entry.view.widget);
             widget.set_vexpand(true);
             content.append(&widget);
         }
         window.set_content(Some(&content));
+        // The window in front is the session whose input, clipboard and toolbar are live.
+        let (a, weak_ui) = (app.clone(), Rc::downgrade(self));
+        window.connect_is_active_notify(move |_| {
+            let (a, ui) = (a.clone(), weak_ui.clone());
+            glib::idle_add_local_once(move || {
+                if ui.upgrade().is_some() {
+                    a.sync_focus();
+                }
+            });
+        });
         let (a, weak) = (app.clone(), Rc::downgrade(self));
         window.connect_close_request(move |_| {
             // Closing the window puts the session back into its tab; the session goes on.
@@ -587,7 +634,6 @@ impl Parts {
         // Pinned: the Devices tab has no close button.
         tabs.set_page_pinned(&console_page, true);
 
-        let session = session::SessionView::new(app);
         let session_tabs: Rc<RefCell<Vec<SessionTab>>> = Rc::new(RefCell::new(Vec::new()));
         let forced_close = Rc::new(Cell::new(false));
         {
@@ -608,8 +654,10 @@ impl Parts {
                     view.close_page_finish(page, true);
                     return glib::Propagation::Stop;
                 }
-                if list.borrow().iter().any(|entry| entry.page == *page) {
-                    a.end_session();
+                // Only this tab's session ends, whichever tab is in front.
+                let peer = list.borrow().iter().find(|entry| entry.page == *page).map(|entry| entry.peer);
+                if let Some(peer) = peer {
+                    a.end_session_peer(peer);
                 }
                 view.close_page_finish(page, false);
                 glib::Propagation::Stop
@@ -671,7 +719,6 @@ impl Parts {
             account,
             settings,
             reports,
-            session,
             section: Cell::new(Section::Devices),
         }
     }
@@ -710,10 +757,34 @@ impl Parts {
             Section::Computer => self.computer.render(app, state),
             Section::Account => self.account.render(app, state),
         }
-        if state.remote.viewing() || !state.workspace.tabs.is_empty() {
-            self.session.render(app, state, ui);
+        for entry in self.session_tabs.borrow().iter() {
+            entry.view.render(app, state, ui);
         }
         let _ = (&self.leaflet, &self.back);
+    }
+
+    /// The tab (page, slot and session view) of a session, made once.
+    fn ensure_tab(&self, app: &Rc<App>, list: &mut Vec<SessionTab>, tab: &crate::workspace::SessionTab) {
+        if list.iter().any(|entry| entry.peer == tab.peer) {
+            return;
+        }
+        let holder = vbox(0);
+        let slot = vbox(0);
+        slot.set_vexpand(true);
+        let popped = vbox(10);
+        popped.set_valign(gtk::Align::Center);
+        popped.set_halign(gtk::Align::Center);
+        popped.set_vexpand(true);
+        popped.set_visible(false);
+        holder.append(&slot);
+        holder.append(&popped);
+        let page = self.tabs.append(&holder);
+        let view = Rc::new(session::SessionView::new(app, &tab.id));
+        if let Some(texture) = app.textures.borrow().get(&tab.id) {
+            view.set_frame(Some(texture));
+        }
+        slot.append(&view.widget);
+        list.push(SessionTab { peer: tab.peer, view, page, slot, popped });
     }
 
     /// Brings the tab bar in line with the workspace: one tab per session, the selected one in front,
@@ -725,31 +796,18 @@ impl Parts {
         let gone: Vec<usize> = list.iter().enumerate().filter(|(_, entry)| !workspace.has_tab(entry.peer)).map(|(index, _)| index).collect();
         for index in gone.into_iter().rev() {
             let entry = list.remove(index);
-            if entry.slot.first_child().is_some() {
-                adopt(&self.session.widget);
-            }
+            // Its view goes with it (a window it was in is closed by the workspace's effect).
+            adopt(&entry.view.widget);
             self.forced_close.set(true);
             self.tabs.close_page(&entry.page);
             self.forced_close.set(false);
         }
         for tab in &workspace.tabs {
-            if !list.iter().any(|entry| entry.peer == tab.peer) {
-                let holder = vbox(0);
-                let slot = vbox(0);
-                slot.set_vexpand(true);
-                let popped = vbox(10);
-                popped.set_valign(gtk::Align::Center);
-                popped.set_halign(gtk::Align::Center);
-                popped.set_vexpand(true);
-                popped.set_visible(false);
-                holder.append(&slot);
-                holder.append(&popped);
-                let page = self.tabs.append(&holder);
-                list.push(SessionTab { peer: tab.peer, page, slot, popped });
-            }
+            self.ensure_tab(app, &mut list, tab);
         }
         for tab in &workspace.tabs {
             let Some(entry) = list.iter().find(|entry| entry.peer == tab.peer) else { continue };
+            entry.view.set_id(&tab.id);
             entry.page.set_title(&tab.name);
             entry.page.set_icon(Some(&os_icon_of(&tab.os)));
             entry.page.set_tooltip(&tf("Session with %@", &[&tab.name]));
@@ -764,9 +822,9 @@ impl Parts {
                 entry.popped.append(&button(&t("Show the window"), move || a.show_session(peer)));
                 let (a, peer) = (app.clone(), tab.peer);
                 entry.popped.append(&primary(&t("Move back into a tab"), move || a.dock(peer, true)));
-            } else if self.session.widget.parent().as_ref() != Some(entry.slot.upcast_ref::<gtk::Widget>()) {
-                adopt(&self.session.widget);
-                entry.slot.append(&self.session.widget);
+            } else if entry.view.widget.parent().as_ref() != Some(entry.slot.upcast_ref::<gtk::Widget>()) {
+                adopt(&entry.view.widget);
+                entry.slot.append(&entry.view.widget);
             }
         }
         let wanted = match workspace.selected {

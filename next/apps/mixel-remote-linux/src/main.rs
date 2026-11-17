@@ -19,6 +19,8 @@ mod live_check;
 mod logic;
 #[cfg(target_os = "linux")]
 mod mock;
+#[cfg(all(test, target_os = "linux"))]
+mod multi_tests;
 #[cfg(target_os = "linux")]
 mod report_export;
 #[cfg(target_os = "linux")]

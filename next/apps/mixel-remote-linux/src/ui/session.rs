@@ -20,6 +20,8 @@ use std::{
 };
 
 pub struct SessionView {
+    /// The session's stable id (changes only for an engine without stable ids that renewed).
+    id: Rc<RefCell<String>>,
     pub widget: gtk::Box,
     toolbar: gtk::Box,
     drawbar: gtk::Box,
@@ -70,9 +72,52 @@ struct Pressed {
     wheel: logic::Wheel,
 }
 
+/// Reads from the state of the session a view shows (not necessarily the one in front).
+fn with_state<R: Default>(app: &App, id: &RefCell<String>, read: impl FnOnce(&State, &crate::app::SessionState) -> R) -> R {
+    let state = app.state.borrow();
+    state.session_state(&id.borrow()).map(|session| read(&state, session)).unwrap_or_default()
+}
+
+/// This view's session is the one in front: only then do the app's input actions belong to it.
+fn mine(app: &App, id: &RefCell<String>) -> bool {
+    app.state.borrow().focus.as_deref() == Some(id.borrow().as_str())
+}
+
 impl SessionView {
-    pub fn new(app: &Rc<App>) -> Self {
+    pub fn id(&self) -> String {
+        self.id.borrow().clone()
+    }
+
+    pub fn set_id(&self, id: &str) {
+        if *self.id.borrow() != id {
+            *self.id.borrow_mut() = id.to_owned();
+        }
+    }
+
+    pub fn new(app: &Rc<App>, session_id: &str) -> Self {
+        let id = Rc::new(RefCell::new(session_id.to_owned()));
         let widget = vbox(0);
+        // Whatever the person touches in this view (a click, a key in an entry) puts its session in
+        // front: the toolbar, the clipboard and the input then act on it, and on no other.
+        {
+            let (a, own) = (app.clone(), id.clone());
+            let press = gtk::GestureClick::new();
+            press.set_button(0);
+            press.set_propagation_phase(gtk::PropagationPhase::Capture);
+            press.connect_pressed(move |gesture, _, _, _| {
+                a.focus_session(Some(own.borrow().clone()));
+                gesture.set_state(gtk::EventSequenceState::None);
+            });
+            widget.add_controller(press);
+            let (a, id) = (app.clone(), id.clone());
+            let within = gtk::EventControllerFocus::new();
+            within.connect_contains_focus_notify(move |controller| {
+                if controller.contains_focus() {
+                    a.focus_session(Some(id.borrow().clone()));
+                }
+            });
+            widget.add_controller(within);
+        }
         // One bar: the device, picture quality, Files, Chat, Draw, More … Full screen, Window, End.
         let bar = vbox(0);
         bar.add_css_class("mixel-session-bar");
@@ -166,9 +211,9 @@ impl SessionView {
         let ticket = entry(&t("Ticket number"));
         let board = Rc::new(RefCell::new(Board::default()));
         {
-            let (a, shown) = (app.clone(), board.clone());
+            let (a, shown, own) = (app.clone(), board.clone(), id.clone());
             ink.set_draw_func(move |_, cr, width, height| {
-                let (w, h) = a.state.borrow().session.size;
+                let (w, h) = with_state(&a, &own, |_, session| session.size);
                 if w == 0 || h == 0 {
                     return;
                 }
@@ -208,9 +253,11 @@ impl SessionView {
             });
             // Drawings fade as on the other computer: a finished stroke goes once the picture shows
             // it (hosts that draw into their picture), all of them a while after the last change.
-            let (a, board, ink) = (app.clone(), board.clone(), ink.clone());
+            let (a, board, ink, own) = (app.clone(), board.clone(), ink.downgrade(), id.clone());
             glib::timeout_add_local(std::time::Duration::from_millis(200), move || {
-                let in_picture = a.state.borrow().remote.peer_features.iter().any(|feature| feature == "drawpic");
+                // The view is gone (its session ended): the timer ends with it.
+                let Some(ink) = ink.upgrade() else { return glib::ControlFlow::Break };
+                let in_picture = a.state.borrow().session_item(&own.borrow()).is_some_and(|item| item.peer_features.iter().any(|feature| feature == "drawpic"));
                 let mut board = board.borrow_mut();
                 let before = board.strokes.len();
                 let now = std::time::Instant::now();
@@ -235,6 +282,7 @@ impl SessionView {
             });
         }
         let view = Self {
+            id,
             ink,
             board,
             ai_address,
@@ -268,20 +316,30 @@ impl SessionView {
     fn connect_input(&self, app: &Rc<App>) {
         let pressed = Rc::new(RefCell::new(Pressed::default()));
         let picture = self.picture.clone();
+        let id = self.id.clone();
+        // Input reaches the engine only while this view's session is the one in front and may be controlled.
+        let ready = {
+            let id = id.clone();
+            move |app: &App| mine(app, &id) && app.state.borrow().controllable_session(&id.borrow())
+        };
+        let ready = Rc::new(ready);
         // Where the pointer is in the remote picture (0…1), aspect fit; clamped while a button is held.
         let point = {
-            let picture = picture.clone();
+            let (picture, id) = (picture.clone(), id.clone());
             move |app: &App, x: f64, y: f64, clamp: bool| -> Option<(f64, f64)> {
-                let (w, h) = app.state.borrow().session.size;
+                let (w, h) = with_state(app, &id, |_, session| session.size);
                 logic::picture_point((f64::from(picture.width()), f64::from(picture.height())), (w as f64, h as f64), (x, y), clamp)
             }
         };
         let point = Rc::new(point);
 
         let motion = gtk::EventControllerMotion::new();
-        let (a, p, held, board, ink) = (app.clone(), point.clone(), pressed.clone(), self.board.clone(), self.ink.clone());
+        let (a, p, held, board, ink, own, ok) = (app.clone(), point.clone(), pressed.clone(), self.board.clone(), self.ink.clone(), id.clone(), ready.clone());
         motion.connect_motion(move |_, x, y| {
-            if a.state.borrow().session.drawing {
+            if !mine(&a, &own) {
+                return;
+            }
+            if with_state(&a, &own, |_, session| session.drawing) {
                 let Some(index) = board.borrow().current else { return };
                 if let Some((px, py)) = p(&a, x, y, true) {
                     let message = {
@@ -299,10 +357,7 @@ impl SessionView {
                 return;
             }
             let _ = &held;
-            let (controllable, pointer_mode) = {
-                let state = a.state.borrow();
-                (state.controllable(), state.session.pointer_mode && state.remote.viewing())
-            };
+            let (controllable, pointer_mode) = (ok(&a), with_state(&a, &own, |state, session| session.pointer_mode && state.session_item(&own.borrow()).is_some_and(|item| item.phase == "active")));
             if !(controllable || pointer_mode) {
                 return;
             }
@@ -314,13 +369,12 @@ impl SessionView {
 
         let click = gtk::GestureClick::new();
         click.set_button(0);
-        let (a, p, held, focus, board) = (app.clone(), point.clone(), pressed.clone(), picture.clone(), self.board.clone());
+        let (a, p, held, focus, board, own, ok) = (app.clone(), point.clone(), pressed.clone(), picture.clone(), self.board.clone(), id.clone(), ready.clone());
         click.connect_pressed(move |gesture, presses, x, y| {
             focus.grab_focus();
-            let drawing = {
-                let state = a.state.borrow();
-                state.session.drawing.then(|| (state.session.draw_tool, state.session.draw_color, state.session.draw_width.max(1)))
-            };
+            // The click puts this session in front (the view's own press handler did already).
+            a.focus_session(Some(own.borrow().clone()));
+            let drawing = with_state(&a, &own, |_, session| session.drawing.then(|| (session.draw_tool, session.draw_color, session.draw_width.max(1))));
             if let Some((tool, color, width)) = drawing {
                 if gesture.current_button() != 1 {
                     return;
@@ -338,10 +392,7 @@ impl SessionView {
                 gesture.set_state(gtk::EventSequenceState::Claimed);
                 return;
             }
-            let (controllable, pointer_mode) = {
-                let state = a.state.borrow();
-                (state.controllable(), state.session.pointer_mode)
-            };
+            let (controllable, pointer_mode) = (ok(&a), with_state(&a, &own, |_, session| session.pointer_mode));
             if !controllable || pointer_mode {
                 return;
             }
@@ -352,8 +403,13 @@ impl SessionView {
             a.send_input(input::button(button, true, presses.clamp(1, 3) as u8));
             gesture.set_state(gtk::EventSequenceState::Claimed);
         });
-        let (a, p, held, board) = (app.clone(), point.clone(), pressed.clone(), self.board.clone());
+        let (a, p, held, board, own) = (app.clone(), point.clone(), pressed.clone(), self.board.clone(), id.clone());
         click.connect_released(move |gesture, presses, x, y| {
+            if !mine(&a, &own) {
+                // The session lost the front with a button held: it was let go then.
+                held.borrow_mut().buttons.clear();
+                return;
+            }
             let current = board.borrow_mut().current.take();
             if let Some(index) = current {
                 let mut messages = Vec::new();
@@ -389,9 +445,9 @@ impl SessionView {
         picture.add_controller(click);
 
         let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::BOTH_AXES);
-        let (a, held) = (app.clone(), pressed.clone());
+        let (a, held, ok) = (app.clone(), pressed.clone(), ready.clone());
         scroll.connect_scroll(move |_, dx, dy| {
-            if !a.state.borrow().controllable() {
+            if !ok(&a) {
                 return glib::Propagation::Proceed;
             }
             if let Some((horizontal, vertical)) = held.borrow_mut().wheel.add(dx, dy) {
@@ -404,13 +460,13 @@ impl SessionView {
         // Keys travel by position (HID usage), so the remote computer's own layout applies.
         // Ctrl+Alt+Escape gives the keyboard back to this computer.
         let keys = gtk::EventControllerKey::new();
-        let (a, held, focus) = (app.clone(), pressed.clone(), picture.clone());
+        let (a, held, focus, own, ok) = (app.clone(), pressed.clone(), picture.clone(), id.clone(), ready.clone());
         keys.connect_key_pressed(move |_, key, code, modifiers| {
-            if !a.state.borrow().controllable() {
+            if !ok(&a) {
                 return glib::Propagation::Proceed;
             }
             if key == gdk::Key::Escape && modifiers.contains(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK) {
-                release_all(&a, &held);
+                release_all(&a, &own, &held);
                 if let Some(root) = focus.root() {
                     root.set_focus(None::<&gtk::Widget>);
                 }
@@ -421,22 +477,33 @@ impl SessionView {
             a.send_input(input::key(usage, true));
             glib::Propagation::Stop
         });
-        let (a, held) = (app.clone(), pressed.clone());
+        let (a, held, own) = (app.clone(), pressed.clone(), id.clone());
         keys.connect_key_released(move |_, _, code, _| {
             let Some(usage) = keymap::usage(code) else { return };
             if held.borrow_mut().keys.remove(&usage) {
-                a.send_input(input::key(usage, false));
+                a.send_input_to(&own.borrow(), input::key(usage, false));
             }
         });
         picture.add_controller(keys);
 
         let focus = gtk::EventControllerFocus::new();
-        let (a, held) = (app.clone(), pressed.clone());
-        focus.connect_leave(move |_| release_all(&a, &held));
+        let (a, held, own) = (app.clone(), pressed.clone(), id.clone());
+        focus.connect_leave(move |_| release_all(&a, &own, &held));
         picture.add_controller(focus);
     }
 
+    /// Shows this view's own session: the state of the session in front as it is, any other session's
+    /// status and state as that session sees them.
     pub fn render(&self, app: &Rc<App>, state: &State, ui: &super::Ui) {
+        let id = self.id();
+        if state.focus.as_deref() == Some(id.as_str()) {
+            self.render_own(app, state, ui);
+        } else if let Some(view) = state.viewed_as(&id) {
+            self.render_own(app, &view, ui);
+        }
+    }
+
+    fn render_own(&self, app: &Rc<App>, state: &State, ui: &super::Ui) {
         let remote = &state.remote;
         let session = &state.session;
         self.wait.set_visible(!session.has_frame);
@@ -444,7 +511,7 @@ impl SessionView {
         // The one pointer of the session view: the remote computer's own is in the picture.
         self.picture.set_cursor_from_name(Some(logic::picture_cursor(session.pointer_mode)));
         self.render_warning(state);
-        if session.has_frame && state.controllable() && !self.picture.has_focus() && self.picture.root().and_then(|root| root.focus()).is_none() {
+        if session.has_frame && mine(app, &self.id) && state.controllable() && !self.picture.has_focus() && self.picture.root().and_then(|root| root.focus()).is_none() {
             self.picture.grab_focus();
         }
         self.render_toolbar(app, state);
@@ -454,7 +521,7 @@ impl SessionView {
     }
 
     fn render_warning(&self, state: &State) {
-        let on = state.session.password_session && state.remote.viewing();
+        let on = state.remote.peer.is_some_and(|peer| state.password_peers.contains(&peer)) && state.remote.viewing();
         if on == self.warn.is_visible() && (!on || self.warn.first_child().is_some()) {
             return;
         }
@@ -609,7 +676,7 @@ impl SessionView {
             add(icon_button("window-new-symbolic", &t("Open in its own window"), move || a.pop_out(peer)));
         }
         let a = app.clone();
-        let end = destructive(&t("End"), move || a.end_session());
+        let end = destructive(&t("End"), move || a.end_session_peer(peer));
         end.set_tooltip_text(Some(&format!("{} (Ctrl+.)", t("End session"))));
         end.update_property(&[gtk::accessible::Property::Label(&t("End session"))]);
         end.set_sensitive(!session.stopping);
@@ -1044,7 +1111,7 @@ impl SessionView {
     }
 }
 
-fn release_all(app: &Rc<App>, held: &Rc<RefCell<Pressed>>) {
+fn release_all(app: &Rc<App>, id: &RefCell<String>, held: &Rc<RefCell<Pressed>>) {
     let mut held = held.borrow_mut();
     if held.buttons.is_empty() && held.keys.is_empty() {
         return;
@@ -1053,7 +1120,7 @@ fn release_all(app: &Rc<App>, held: &Rc<RefCell<Pressed>>) {
     held.keys.clear();
     held.wheel.clear();
     drop(held);
-    app.send_input(input::release_all());
+    app.send_input_to(&id.borrow(), input::release_all());
 }
 
 /// Invite a colleague into this session: by the Remote ID of their computer, or with a meeting link.

@@ -4,9 +4,10 @@
 //! data without GTK: the window asks it what to show, and it answers with `Effect`s (open, close or
 //! raise a session window) that the window carries out. Unit-tested here.
 //!
-//! Sessions are keyed by the other computer's Remote ID, not by the engine's session id: the session id
-//! changes when the connection is renewed, the computer does not. Everything is a list so several
-//! sessions at once only need `observe` to read more than one session from the engine.
+//! Tabs and windows are keyed by the other computer's Remote ID (one session per device, so it is unique)
+//! and carry the session's stable id (`SessionTab::id`), which every engine command uses. A transport
+//! renewal changes neither, so the tab stays. One tab (or window) per session the engine reports, up to
+//! the engine's limit; each ends alone.
 use std::collections::BTreeSet;
 
 /// What happens when a session is ready to be shown.
@@ -74,6 +75,8 @@ pub enum TabState {
 /// One session tab.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionTab {
+    /// The session's stable id (the key of every engine command for it).
+    pub id: String,
     /// The other computer's Remote ID.
     pub peer: u32,
     pub name: String,
@@ -106,25 +109,36 @@ pub enum Effect {
     Focus(u32),
 }
 
+/// One technician session as the workspace reads it.
+#[derive(Clone, Debug, Default)]
+pub struct ObservedSession {
+    /// The stable id.
+    pub id: String,
+    pub peer: u32,
+    pub phase: String,
+    /// The first picture of this session is shown.
+    pub frame_shown: bool,
+    pub name: String,
+    pub os: String,
+}
+
 /// What the engine reports, reduced to what the workspace reads.
 #[derive(Clone, Debug, Default)]
 pub struct Observed {
-    pub peer: Option<u32>,
-    pub sharing: bool,
-    pub has_session: bool,
-    pub phase: String,
-    /// The first picture of the session is shown.
-    pub frame_shown: bool,
-    /// This app is in a session (any phase from the request to the end).
-    pub in_session: bool,
+    /// Every technician session of this app, oldest first (any phase from the request to the end).
+    pub sessions: Vec<ObservedSession>,
     /// An app action (the connect steps) is still running.
     pub busy: bool,
     /// The app's error line, already in the person's language.
     pub error: String,
     /// The sentence for "the request was sent and the session is gone again", already translated.
     pub declined: String,
-    pub name: String,
-    pub os: String,
+}
+
+impl Observed {
+    pub fn session_of(&self, peer: u32) -> Option<&ObservedSession> {
+        self.sessions.iter().find(|session| session.peer == peer)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -150,29 +164,23 @@ impl Workspace {
         }
     }
 
-    /// The sessions this app views as technician. Today the engine runs one session at a time; when
-    /// it reports several this is the only place that reads them.
+    /// The tabs of the sessions this app views as technician: one per session the engine reports.
     pub fn session_tabs(observed: &Observed) -> Vec<SessionTab> {
-        let Some(peer) = observed.peer else {
-            return Vec::new();
-        };
-        if observed.sharing || !observed.has_session {
-            return Vec::new();
-        }
-        let state = match observed.phase.as_str() {
-            "active" if observed.frame_shown => TabState::Ready,
-            "active" => TabState::Starting,
-            "closing" => TabState::Ending,
-            // "outgoing" and "negotiating" are the connecting card; a tab exists once the other side
-            // accepted (the picture is coming).
-            _ => return Vec::new(),
-        };
-        vec![SessionTab {
-            peer,
-            name: observed.name.clone(),
-            os: observed.os.clone(),
-            state,
-        }]
+        observed
+            .sessions
+            .iter()
+            .filter_map(|session| {
+                let state = match session.phase.as_str() {
+                    "active" if session.frame_shown => TabState::Ready,
+                    "active" => TabState::Starting,
+                    "closing" => TabState::Ending,
+                    // "outgoing" and "negotiating" are the connecting card; a tab exists once the other
+                    // side accepted (the picture is coming).
+                    _ => return None,
+                };
+                Some(SessionTab { id: session.id.clone(), peer: session.peer, name: session.name.clone(), os: session.os.clone(), state })
+            })
+            .collect()
     }
 
     /// Called when the remote status or the first picture changes.
@@ -209,13 +217,13 @@ impl Workspace {
         let Some(mut current) = self.attempt.clone() else {
             return;
         };
-        let matches = observed.peer == Some(current.peer);
+        let session = observed.session_of(current.peer);
         let mut step = current.step;
-        if matches {
-            match observed.phase.as_str() {
+        if let Some(session) = session {
+            match session.phase.as_str() {
                 "outgoing" => step = step.max(1),
                 "negotiating" => step = step.max(2),
-                "active" => step = step.max(if observed.frame_shown { 4 } else { 3 }),
+                "active" => step = step.max(if session.frame_shown { 4 } else { 3 }),
                 _ => {}
             }
         }
@@ -224,7 +232,7 @@ impl Workspace {
             self.attempt = None;
             return;
         }
-        let running = matches && observed.in_session;
+        let running = session.is_some();
         if current.failure.is_empty() && !observed.busy && !running {
             if !observed.error.is_empty() {
                 current.failure = observed.error.clone();
@@ -366,6 +374,11 @@ impl Workspace {
         self.dock(peer, true, false);
     }
 
+    /// The stable id of the session shown for this Remote ID.
+    pub fn id_of(&self, peer: u32) -> Option<&str> {
+        self.tab(peer).map(|tab| tab.id.as_str())
+    }
+
     pub fn has_tab(&self, peer: u32) -> bool {
         self.tabs.iter().any(|tab| tab.peer == peer)
     }
@@ -397,44 +410,36 @@ mod tests {
     use super::*;
 
     const PEER: u32 = 731_204_118;
+    const OTHER: u32 = 205_118_340;
 
+    fn session(id: &str, peer: u32, phase: &str, frame: bool) -> ObservedSession {
+        ObservedSession { id: id.into(), peer, phase: phase.into(), frame_shown: frame, name: format!("PC {peer}"), os: "windows".into() }
+    }
+    fn observe(sessions: Vec<ObservedSession>) -> Observed {
+        Observed { sessions, ..Observed::default() }
+    }
     fn viewing(frame: bool) -> Observed {
-        Observed {
-            peer: Some(PEER),
-            has_session: true,
-            phase: "active".into(),
-            frame_shown: frame,
-            in_session: true,
-            name: "Reception PC".into(),
-            os: "windows".into(),
-            ..Observed::default()
-        }
+        observe(vec![session("s-1", PEER, "active", frame)])
     }
     fn ended() -> Observed {
-        Observed {
-            phase: "ready".into(),
-            ..Observed::default()
-        }
+        Observed::default()
     }
     fn ready(when: WhenReady, open_in: OpenIn) -> (Workspace, Vec<Effect>) {
         let mut ws = Workspace::new(when, open_in);
         let effects = ws.refresh(&viewing(true));
         (ws, effects)
     }
+    fn many(count: u32) -> Observed {
+        observe((0..count).map(|n| session(&format!("s-{n}"), PEER + n, "active", true)).collect())
+    }
 
     #[test]
     fn ready_session_becomes_a_tab_and_stays_in_devices_with_a_notice() {
         let (ws, effects) = ready(WhenReady::Stay, OpenIn::Tab);
-        assert_eq!(
-            ws.tabs.iter().map(|tab| tab.peer).collect::<Vec<_>>(),
-            vec![PEER]
-        );
+        assert_eq!(ws.tabs.iter().map(|tab| tab.peer).collect::<Vec<_>>(), vec![PEER]);
         assert_eq!(ws.tabs[0].state, TabState::Ready);
-        assert_eq!(
-            ws.selected,
-            Tab::Console,
-            "Connect must not jump away from Devices"
-        );
+        assert_eq!(ws.tabs[0].id, "s-1", "the tab is bound to the stable id");
+        assert_eq!(ws.selected, Tab::Console, "Connect must not jump away from Devices");
         assert_eq!(ws.ready_notices, vec![PEER]);
         assert!(effects.is_empty());
     }
@@ -460,24 +465,83 @@ mod tests {
     }
 
     #[test]
-    fn connecting_and_hosting_have_no_tab() {
-        let mut observed = viewing(true);
-        observed.phase = "outgoing".into();
-        assert!(Workspace::session_tabs(&observed).is_empty());
-        observed.phase = "negotiating".into();
-        assert!(Workspace::session_tabs(&observed).is_empty());
-        observed.phase = "active".into();
-        observed.sharing = true;
-        assert!(
-            Workspace::session_tabs(&observed).is_empty(),
-            "this computer is being viewed"
-        );
-        observed.sharing = false;
-        observed.phase = "closing".into();
-        assert_eq!(
-            Workspace::session_tabs(&observed)[0].state,
-            TabState::Ending
-        );
+    fn connecting_has_no_tab_and_a_closing_session_is_ending() {
+        for phase in ["outgoing", "negotiating"] {
+            assert!(Workspace::session_tabs(&observe(vec![session("s-1", PEER, phase, true)])).is_empty());
+        }
+        let tabs = Workspace::session_tabs(&observe(vec![session("s-1", PEER, "closing", true)]));
+        assert_eq!(tabs[0].state, TabState::Ending);
+    }
+
+    #[test]
+    fn two_to_four_sessions_give_two_to_four_tabs() {
+        for count in 2..=4u32 {
+            let mut ws = Workspace::new(WhenReady::Stay, OpenIn::Tab);
+            ws.refresh(&many(count));
+            assert_eq!(ws.tabs.len(), count as usize);
+            let ids: Vec<&str> = ws.tabs.iter().map(|tab| tab.id.as_str()).collect();
+            assert_eq!(ids, (0..count).map(|n| format!("s-{n}")).collect::<Vec<_>>());
+            assert_eq!(ws.ready_notices.len(), count as usize, "each ready session has its own notice");
+        }
+    }
+
+    #[test]
+    fn a_session_that_connects_does_not_disturb_the_others() {
+        let mut ws = Workspace::new(WhenReady::Stay, OpenIn::Tab);
+        ws.refresh(&viewing(true));
+        ws.selected = Tab::Session(PEER);
+        let mut next = viewing(true);
+        next.sessions.push(session("s-2", OTHER, "outgoing", false));
+        ws.refresh(&next);
+        assert_eq!(ws.tabs.len(), 1, "the second one is still connecting");
+        assert_eq!(ws.selected, Tab::Session(PEER));
+        next.sessions[1].phase = "active".into();
+        next.sessions[1].frame_shown = true;
+        ws.refresh(&next);
+        assert_eq!(ws.tabs.len(), 2);
+        assert_eq!(ws.selected, Tab::Session(PEER), "the new tab does not take the focus away");
+        assert!(ws.ready_notices.contains(&OTHER), "the new session announces itself with a notice");
+    }
+
+    #[test]
+    fn one_session_ending_removes_only_its_tab_window_and_notice() {
+        let mut ws = Workspace::new(WhenReady::Open, OpenIn::Tab);
+        ws.refresh(&many(3));
+        ws.pop_out(PEER + 1);
+        ws.selected = Tab::Session(PEER + 1);
+        ws.selected = Tab::Session(PEER + 2);
+        ws.pop_out(PEER + 2);
+        let mut next = many(3);
+        next.sessions.remove(1);
+        let effects = ws.refresh(&next);
+        assert_eq!(ws.tabs.iter().map(|tab| tab.peer).collect::<Vec<_>>(), vec![PEER, PEER + 2]);
+        assert_eq!(effects, vec![Effect::Close(PEER + 1)]);
+        assert!(ws.is_in_window(PEER + 2), "the other window stays");
+        assert!(!ws.is_in_window(PEER + 1));
+        // The one in front ends: back to Devices.
+        ws.selected = Tab::Session(PEER);
+        let mut last = many(3);
+        last.sessions.remove(0);
+        last.sessions.remove(0);
+        ws.refresh(&last);
+        assert_eq!(ws.selected, Tab::Console);
+        assert_eq!(ws.tabs.len(), 1);
+    }
+
+    #[test]
+    fn a_transport_renewal_keeps_the_tab_the_window_and_the_selection() {
+        let (mut ws, _) = ready(WhenReady::Open, OpenIn::Tab);
+        ws.pop_out(PEER);
+        let before = ws.clone();
+        // Same stable id, new transport: the engine reports the same item (only its `session` changed).
+        ws.refresh(&viewing(true));
+        assert_eq!(ws, before);
+        assert!(ws.is_in_window(PEER));
+        // An old engine renews the only id it has: the tab (keyed by the device) stays, with the new id.
+        ws.refresh(&observe(vec![session("s-renewed", PEER, "active", true)]));
+        assert_eq!(ws.tabs.len(), 1);
+        assert_eq!(ws.tabs[0].id, "s-renewed");
+        assert!(ws.is_in_window(PEER));
     }
 
     #[test]
@@ -496,11 +560,7 @@ mod tests {
     #[test]
     fn closing_the_window_docks_it() {
         let (mut ws, _) = ready(WhenReady::Stay, OpenIn::Window);
-        assert_eq!(
-            ws.show(PEER, None),
-            vec![Effect::Open(PEER)],
-            "default own window"
-        );
+        assert_eq!(ws.show(PEER, None), vec![Effect::Open(PEER)], "default own window");
         assert!(ws.is_in_window(PEER));
         ws.window_closed(PEER);
         assert!(!ws.is_in_window(PEER));
@@ -537,15 +597,10 @@ mod tests {
         ws.connect(PEER, "Reception PC", "windows", true, 0.0, None);
         ws.open_attempt_in_window();
         assert!(ws.attempt.as_ref().unwrap().in_window);
-        let mut observed = viewing(true);
-        observed.phase = "outgoing".into();
-        ws.refresh(&observed);
+        ws.refresh(&observe(vec![session("s-1", PEER, "outgoing", false)]));
         let effects = ws.refresh(&viewing(true));
         assert_eq!(effects, vec![Effect::Open(PEER)]);
-        assert!(
-            ws.attempt.is_none(),
-            "the card goes away when the session is ready"
-        );
+        assert!(ws.attempt.is_none(), "the card goes away when the session is ready");
         assert!(ws.ready_notices.is_empty());
     }
 
@@ -553,26 +608,32 @@ mod tests {
     fn attempt_steps_follow_the_phase_and_never_go_back() {
         let mut ws = Workspace::new(WhenReady::Stay, OpenIn::Tab);
         ws.connect(PEER, "Reception PC", "windows", false, 1.0, None);
-        let mut observed = Observed {
-            peer: Some(PEER),
-            has_session: true,
-            in_session: true,
-            phase: "outgoing".into(),
-            busy: true,
-            ..Observed::default()
-        };
+        let mut observed = observe(vec![session("s-1", PEER, "outgoing", false)]);
+        observed.busy = true;
         ws.refresh(&observed);
         assert_eq!(ws.attempt.as_ref().unwrap().step, 1);
-        observed.phase = "negotiating".into();
+        observed.sessions[0].phase = "negotiating".into();
         ws.refresh(&observed);
         assert_eq!(ws.attempt.as_ref().unwrap().step, 2);
-        observed.phase = "outgoing".into();
+        observed.sessions[0].phase = "outgoing".into();
         ws.refresh(&observed);
         assert_eq!(ws.attempt.as_ref().unwrap().step, 2);
-        observed.phase = "active".into();
+        observed.sessions[0].phase = "active".into();
         ws.refresh(&observed);
         assert_eq!(ws.attempt.as_ref().unwrap().step, 3);
         assert_eq!(ws.state_of(PEER), Some("starting"));
+    }
+
+    #[test]
+    fn the_attempt_follows_its_own_device_among_several_sessions() {
+        let mut ws = Workspace::new(WhenReady::Stay, OpenIn::Tab);
+        ws.refresh(&viewing(true));
+        ws.connect(OTHER, "Server", "linux", false, 1.0, None);
+        let mut observed = viewing(true);
+        observed.sessions.push(session("s-2", OTHER, "negotiating", false));
+        ws.refresh(&observed);
+        assert_eq!(ws.attempt.as_ref().unwrap().step, 2, "the first computer's session does not advance it");
+        assert_eq!(ws.tabs.len(), 1);
     }
 
     #[test]
@@ -580,11 +641,7 @@ mod tests {
         let mut ws = Workspace::new(WhenReady::Stay, OpenIn::Tab);
         ws.connect(PEER, "Reception PC", "windows", false, 1.0, None);
         // The connect steps stopped with an error.
-        let observed = Observed {
-            phase: "ready".into(),
-            error: "Could not reach".into(),
-            ..Observed::default()
-        };
+        let observed = Observed { error: "Could not reach".into(), ..Observed::default() };
         ws.refresh(&observed);
         assert_eq!(ws.attempt.as_ref().unwrap().failure, "Could not reach");
         assert_eq!(ws.state_of(PEER), None);
@@ -593,20 +650,8 @@ mod tests {
 
         // Declined after the request was sent.
         ws.connect(PEER, "Reception PC", "windows", false, 1.0, None);
-        let mut observed = Observed {
-            peer: Some(PEER),
-            has_session: true,
-            in_session: true,
-            phase: "outgoing".into(),
-            ..Observed::default()
-        };
-        ws.refresh(&observed);
-        observed = Observed {
-            phase: "ready".into(),
-            declined: "Declined".into(),
-            ..Observed::default()
-        };
-        ws.refresh(&observed);
+        ws.refresh(&observe(vec![session("s-1", PEER, "outgoing", false)]));
+        ws.refresh(&Observed { declined: "Declined".into(), ..Observed::default() });
         assert_eq!(ws.attempt.as_ref().unwrap().failure, "Declined");
     }
 
@@ -616,11 +661,7 @@ mod tests {
         ws.connect(PEER, "x", "linux", false, 0.0, Some("Please wait"));
         assert_eq!(ws.attempt.as_ref().unwrap().failure, "Please wait");
         ws.connect(PEER, "x", "linux", false, 0.0, None);
-        assert_eq!(
-            ws.cancel_attempt(Some(PEER)),
-            Some(PEER),
-            "the running request must be ended"
-        );
+        assert_eq!(ws.cancel_attempt(Some(PEER)), Some(PEER), "the running request must be ended");
         ws.connect(PEER, "x", "linux", false, 0.0, None);
         assert_eq!(ws.cancel_attempt(Some(1)), None);
     }

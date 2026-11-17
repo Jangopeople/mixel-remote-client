@@ -64,7 +64,8 @@ impl RemotePage {
     pub fn render(&self, app: &Rc<App>, state: &State) {
         let remote = &state.remote;
         let key = format!(
-            "{:?}",
+            "{:?}|{:?}",
+            (state.can_connect(), remote.sessions.iter().map(|item| item.phase.as_str()).collect::<Vec<_>>()),
             ((state.connection_message(), state.signed_in(), state.staff(), &remote.phase, remote.host, remote.controller_only), (remote.sharing, remote.control, &remote.support_code, remote.code_required, &remote.pairing, &remote.pairing_message), (&remote.invitations, &remote.colleagues, &remote.join_request, remote.recording_permitted, remote.unattended_enabled, &remote.unattended_pending), (remote.input_access, &remote.meeting_offer, &remote.peer_features, remote.switched, (&state.error, &state.progress, state.busy), (&state.enrollment.needs_setup, &state.enrollment.error, state.enrollment.working, &state.enrollment.records, &state.enrollment.companies, state.setup_path())), ((&state.host.unattended_sources, &state.host.unattended_source, state.host.unattended_confirm, state.host.unattended_control, &state.host.error), (&state.devices.groups, state.company.data.add_blocked(), state.company.data.tenant().map(|tenant| tenant.name.clone())), (&state.session.dismissed_meeting_room, &state.linux)))
         );
         if *self.key.borrow() == key {
@@ -121,14 +122,15 @@ impl RemotePage {
         let a = app.clone();
         let (p, pw, u) = (self.partner.clone(), self.password.clone(), self.unattended.clone());
         let connect = primary(&t("Connect"), move || connect_to(&a, &p, &pw, &u));
-        connect.set_sensitive(!state.busy && state.signed_in() && matches!(remote.phase.as_str(), "ready" | "offline" | "error"));
+        connect.set_sensitive(state.can_connect());
         let row = buttons(&[connect.upcast_ref()]);
-        if remote.phase == "outgoing" {
+        let waiting = remote.sessions.iter().any(|item| item.phase == "outgoing");
+        if waiting {
             let a = app.clone();
-            row.append(&button(&t("Cancel"), move || a.end_session()));
+            row.append(&button(&t("Cancel"), move || a.cancel_outgoing()));
         }
         content.append(&row);
-        if !state.progress.is_empty() && (state.busy || remote.phase == "outgoing") {
+        if !state.progress.is_empty() && (state.busy || waiting) {
             content.append(&spinner_line(&state.progress));
         }
         frame.set_valign(gtk::Align::Start);

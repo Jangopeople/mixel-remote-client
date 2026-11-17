@@ -153,6 +153,13 @@ pub fn fill(template: &str, values: &[&dyn Display]) -> String {
 
 /// An engine text (status line, error message) in the shown language; unknown texts stay English.
 pub fn engine(text: &str) -> String {
+    // A refused request: the engine's typed error (JSON) becomes a sentence.
+    if let Some(error) = crate::models::RequestError::parse(text) {
+        return match error {
+            crate::models::RequestError::TooManySessions(max) => tf("You already have %d computers open. End one before connecting to another.", &[&max]),
+            crate::models::RequestError::AlreadyConnected => t("You are already connected to this computer."),
+        };
+    }
     translate_engine(text, language())
 }
 

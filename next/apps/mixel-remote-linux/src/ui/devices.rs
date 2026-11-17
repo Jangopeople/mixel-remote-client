@@ -115,7 +115,7 @@ impl DevicesPage {
             (
                 (state.signed_in(), &rows, devices.loading, &devices.message, &devices.error, &devices.groups, &devices.filters),
                 (devices.page, devices.has_next, devices.deploy_link.is_some(), company.tenant().map(|tenant| (&tenant.name, &tenant.tenant_id)), company.role()),
-                (company.add_blocked(), company.groups_on(), state.registered_here(), (state.remote.phase.as_str(), state.remote.host, state.remote.connected(), state.busy, state.enrollment.needs_setup)),
+                (company.add_blocked(), company.groups_on(), state.registered_here(), (state.remote.phase.as_str(), state.remote.host, state.remote.connected(), state.busy, state.enrollment.needs_setup, state.can_connect())),
                 (state.workspace.tabs.iter().map(|tab| (tab.peer, tab.state)).collect::<Vec<_>>(), state.workspace.attempt.as_ref().map(|attempt| (attempt.peer, attempt.step, attempt.failure.is_empty())), &devices.server_presence.len()),
             )
         );
@@ -297,7 +297,7 @@ impl DevicesPage {
         boxed.append(&more);
         let (a, id, pw) = (app.clone(), self.connect_id.clone(), self.connect_password.clone());
         let connect = primary(&t("Connect"), move || connect_by_id(&a, &id, &pw));
-        connect.set_sensitive(state.signed_in() && !state.busy && matches!(state.remote.phase.as_str(), "ready" | "offline" | "error"));
+        connect.set_sensitive(state.can_connect());
         boxed.append(&connect);
         boxed
     }

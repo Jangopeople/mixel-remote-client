@@ -84,7 +84,7 @@ impl SessionsPage {
             } else {
                 button(&t("Open in its own window"), move || b.pop_out(peer))
             };
-            let end = destructive(&t("End session"), move || c.end_session());
+            let end = destructive(&t("End session"), move || c.end_session_peer(peer));
             content.append(&buttons(&[
                 open.upcast_ref(),
                 move_button.upcast_ref(),

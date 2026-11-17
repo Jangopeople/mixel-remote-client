@@ -1684,6 +1684,12 @@ msgstr "Oui"
 msgid "You allowed the other person to save a video of this session."
 msgstr "Vous avez autorisé l’autre personne à enregistrer une vidéo de cette session."
 
+msgid "You already have %d computers open. End one before connecting to another."
+msgstr "Vous avez déjà %d ordinateurs ouverts. Terminez une session avant de vous connecter à un autre ordinateur."
+
+msgid "You are already connected to this computer."
+msgstr "Vous êtes déjà connecté à cet ordinateur."
+
 msgid "You are using this device."
 msgstr "Vous utilisez cet appareil."
 

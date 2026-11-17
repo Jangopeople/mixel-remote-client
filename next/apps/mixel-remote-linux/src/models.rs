@@ -104,7 +104,58 @@ pub struct RemoteStatus {
     pub joined_session: bool,
     pub switched: bool,
     pub peer_features: Vec<String>,
+    /// Every technician session this app holds, oldest first (engines with several sessions). Old
+    /// engines send none: `technician_sessions` then reads the single-session fields above.
+    pub sessions: Vec<SessionItem>,
+    pub max_sessions: Option<usize>,
 }
+
+/// Picture figures of one session.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct SessionQuality {
+    pub pictures: u64,
+    pub pictures_per_second: f32,
+    pub picture_age_ms: Option<u64>,
+}
+
+/// One technician session (`remote_status.sessions[]`). `id` is the stable id: it is chosen when the
+/// session is requested and never changes, so tabs, windows and every command are bound to it.
+/// `session` is the connection service's id of the current transport and changes at every renewal.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct SessionItem {
+    pub id: String,
+    pub session: Option<String>,
+    pub peer: Option<u32>,
+    pub device: Option<u32>,
+    /// `outgoing`, `negotiating`, `active`, `closing`.
+    pub phase: String,
+    pub message: String,
+    pub consent: Option<String>,
+    pub received: u64,
+    pub control: bool,
+    pub clipboard: bool,
+    pub files: bool,
+    pub recording_permitted: bool,
+    pub recording: Option<RecordingView>,
+    pub displays: u16,
+    pub display: u16,
+    pub display_all: bool,
+    pub print_jobs: Vec<String>,
+    pub host_actions: Vec<String>,
+    pub signin_id: Option<u32>,
+    pub host_macs: Vec<String>,
+    pub meeting_offer: Option<(String, String)>,
+    pub peer_features: Vec<String>,
+    pub joined_session: bool,
+    pub switched: bool,
+    pub quality: SessionQuality,
+    pub started_at: u64,
+}
+
+/// How many technician sessions an engine without `max_sessions` allows.
+pub const SINGLE_SESSION: usize = 1;
 
 /// The one-time password of this computer: the engine sends the code (or an object with it).
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -143,9 +194,120 @@ impl RemoteStatus {
     pub fn offers(&self, action: &str) -> bool {
         self.host_actions.iter().any(|offered| offered == action)
     }
-    /// The session window is shown: the picture, or the wait before it.
-    pub fn session_window(&self) -> bool {
-        self.viewing() || self.phase == "outgoing" || (self.phase == "negotiating" && !self.sharing && self.session.is_some())
+    /// The technician sessions: the engine's list, or, for an engine that sends none, the one session
+    /// the single-session fields describe (its id is then the connection service's session id).
+    pub fn technician_sessions(&self) -> Vec<SessionItem> {
+        if !self.sessions.is_empty() {
+            return self.sessions.clone();
+        }
+        let Some(peer) = self.peer else { return Vec::new() };
+        if self.sharing || !matches!(self.phase.as_str(), "outgoing" | "negotiating" | "active" | "closing") {
+            return Vec::new();
+        }
+        // The request is out but the connection service has not named the session yet (an old engine).
+        if self.session.is_none() && self.phase != "outgoing" {
+            return Vec::new();
+        }
+        let session = self.session.clone();
+        vec![SessionItem {
+            id: session.clone().unwrap_or_default(),
+            session,
+            peer: Some(peer),
+            device: Some(peer),
+            phase: self.phase.clone(),
+            message: self.message.clone(),
+            consent: self.consent.clone(),
+            received: self.received,
+            control: self.control,
+            clipboard: self.clipboard,
+            files: self.files,
+            recording_permitted: self.recording_permitted,
+            recording: self.recording.clone(),
+            displays: self.displays,
+            display: self.display,
+            display_all: self.display_all,
+            print_jobs: self.print_jobs.clone(),
+            host_actions: self.host_actions.clone(),
+            signin_id: self.signin_id,
+            host_macs: self.host_macs.clone(),
+            meeting_offer: self.meeting_offer.clone(),
+            peer_features: self.peer_features.clone(),
+            joined_session: self.joined_session,
+            switched: self.switched,
+            ..SessionItem::default()
+        }]
+    }
+
+    /// Up to this many technician sessions at once.
+    pub fn session_limit(&self) -> usize {
+        self.max_sessions.filter(|max| *max > 0).unwrap_or(SINGLE_SESSION)
+    }
+
+    /// Another computer may be requested: this computer is ready (or offline, it goes online first), or
+    /// it holds technician sessions and fewer than the limit. Not gated on `phase == "ready"`, which
+    /// stops being true while a session runs.
+    pub fn can_request(&self) -> bool {
+        if matches!(self.phase.as_str(), "ready" | "offline" | "error") {
+            return true;
+        }
+        let held = self.technician_sessions();
+        !held.is_empty() && held.len() < self.session_limit() && !self.sharing
+    }
+
+    /// The status as one session sees it: the single-session fields (`phase`, `session`, `peer`,
+    /// `control` …) describe `item`, the rest (this computer, `sessions`) stays. `session` is the
+    /// stable id, so every command that reads it carries the id that survives a transport renewal.
+    pub fn viewed_as(&self, item: &SessionItem) -> Self {
+        let mut view = self.clone();
+        view.sessions = self.technician_sessions();
+        view.max_sessions = Some(self.session_limit());
+        view.sharing = false;
+        view.phase = item.phase.clone();
+        view.message = item.message.clone();
+        view.session = Some(item.id.clone());
+        view.consent = item.consent.clone();
+        view.peer = item.peer;
+        view.received = item.received;
+        view.control = item.control;
+        view.clipboard = item.clipboard;
+        view.files = item.files;
+        view.recording_permitted = item.recording_permitted;
+        view.recording = item.recording.clone();
+        view.displays = item.displays;
+        view.display = item.display;
+        view.display_all = item.display_all;
+        view.print_jobs = item.print_jobs.clone();
+        view.host_actions = item.host_actions.clone();
+        view.signin_id = item.signin_id;
+        view.host_macs = item.host_macs.clone();
+        view.meeting_offer = item.meeting_offer.clone();
+        view.peer_features = item.peer_features.clone();
+        view.joined_session = item.joined_session;
+        view.switched = item.switched;
+        view
+    }
+}
+
+/// The engine's typed error of a refused request (`{"hint":"too_many_sessions","max":4,"message":…}`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RequestError {
+    TooManySessions(usize),
+    AlreadyConnected,
+}
+
+impl RequestError {
+    /// The engine's own error text for a refused request, as the app builds it when it knows in advance.
+    pub fn too_many(max: usize) -> String {
+        serde_json::json!({ "hint": "too_many_sessions", "max": max, "message": format!("You already have {max} sessions open. End one to start another.") }).to_string()
+    }
+
+    pub fn parse(error: &str) -> Option<Self> {
+        let value: serde_json::Value = serde_json::from_str(error.trim()).ok()?;
+        match value["hint"].as_str()? {
+            "too_many_sessions" => Some(Self::TooManySessions(value["max"].as_u64().map_or(4, |max| max as usize))),
+            "already_connected" => Some(Self::AlreadyConnected),
+            _ => None,
+        }
     }
 }
 

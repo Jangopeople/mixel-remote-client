@@ -11,14 +11,14 @@ use crate::{
     store::{Registration, Store, Unattended},
     video,
     view::{self, Filters},
-    workspace::{Effect, Observed, OpenIn, WhenReady, Workspace},
+    workspace::{Effect, Observed, ObservedSession, OpenIn, WhenReady, Workspace},
 };
 use gtk::{gdk, glib, prelude::*};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::{
     cell::{Cell, RefCell},
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     future::Future,
     rc::Rc,
     time::Duration,
@@ -167,17 +167,20 @@ pub struct SessionState {
     pub dismissed_meeting_room: String,
     pub tool: Option<Tool>,
     pub invite_link: Option<MeetingRoom>,
-    pub last_request_unattended: bool,
-    /// The running session was opened with a one-time password (the session view warns about it).
-    pub password_session: bool,
     pub assistant: AssistantState,
-    /// After a controlled session with a company device: offer a session note for this Remote ID.
-    pub note_for: Option<u32>,
+    /// The stable id whose picture is being fetched (`None`: not fetching).
     viewing_session: Option<String>,
+    /// The transport the toggles above belong to (they start again with a new transport).
     toggle_session: Option<String>,
     stopped_consent: Option<String>,
-    reconnect: Option<Reconnect>,
     tools_running: bool,
+}
+
+impl SessionState {
+    /// The state of a session that was just opened.
+    pub fn fresh() -> Self {
+        Self { sound: true, draw_width: 2, ..Self::default() }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -200,7 +203,22 @@ pub struct State {
     pub settings: SettingsState,
     pub enrollment: EnrollmentState,
     pub host: HostState,
+    /// The state of the session in front (`focus`); a default state while no session is in front.
     pub session: SessionState,
+    /// The stable id of the session in front: the only one that gets input, clipboard and toolbar
+    /// actions. `None` while Devices is in front (or nothing is).
+    pub focus: Option<String>,
+    /// The states of the other sessions, by stable id.
+    parked: HashMap<String, SessionState>,
+    /// The engine's status as it came (this computer's fields and the oldest session's).
+    pub raw: RemoteStatus,
+    /// After a controlled session with a company device: offer a session note for this Remote ID.
+    pub note_for: Option<u32>,
+    /// Devices connected with a one-time password (their session views warn about it) or as unattended.
+    pub password_peers: BTreeSet<u32>,
+    pub unattended_peers: BTreeSet<u32>,
+    /// Restarted computers the app reconnects to, by Remote ID.
+    reconnects: BTreeMap<u32, Reconnect>,
     went_offline: bool,
     auto_tries: usize,
     next_auto_try: f64,
@@ -232,7 +250,102 @@ impl State {
     }
     /// The picture is shown and keyboard and mouse go to the other computer.
     pub fn controllable(&self) -> bool {
-        !self.session.stopping && self.remote.viewing() && self.remote.control && self.session.has_frame && !self.locally_stopped()
+        self.focus.is_some() && !self.session.stopping && self.remote.viewing() && self.remote.control && self.session.has_frame && !self.locally_stopped()
+    }
+
+    pub fn session_item(&self, id: &str) -> Option<&SessionItem> {
+        self.remote.sessions.iter().find(|item| item.id == id)
+    }
+    pub fn session_of_peer(&self, peer: u32) -> Option<&SessionItem> {
+        self.remote.sessions.iter().find(|item| item.peer == Some(peer))
+    }
+    /// The state of one session (the focused one is `session`).
+    pub fn session_state(&self, id: &str) -> Option<&SessionState> {
+        if self.focus.as_deref() == Some(id) { Some(&self.session) } else { self.parked.get(id) }
+    }
+    pub fn session_state_mut(&mut self, id: &str) -> &mut SessionState {
+        if self.focus.as_deref() == Some(id) {
+            return &mut self.session;
+        }
+        self.parked.entry(id.to_owned()).or_insert_with(SessionState::fresh)
+    }
+    /// More computers may be requested: fewer than the engine's limit are open.
+    pub fn can_connect(&self) -> bool {
+        self.signed_in() && !self.busy && self.remote.can_request()
+    }
+    /// A state in which `id` is the session in front, to draw its view (a tab or window that is not
+    /// the focused one).
+    pub fn viewed_as(&self, id: &str) -> Option<State> {
+        let item = self.session_item(id)?;
+        if self.focus.as_deref() == Some(id) {
+            return Some(self.clone());
+        }
+        let mut view = self.clone();
+        view.remote = self.raw.viewed_as(item);
+        view.session = self.parked.get(id).cloned().unwrap_or_else(SessionState::fresh);
+        view.focus = Some(id.to_owned());
+        Some(view)
+    }
+    /// The session is on screen: its tab is in front, or it has its own window.
+    pub fn session_visible(&self, id: &str) -> bool {
+        let Some(peer) = self.session_item(id).and_then(|item| item.peer) else { return false };
+        self.workspace.is_in_window(peer) || self.workspace.selected == crate::workspace::Tab::Session(peer)
+    }
+
+    /// Is this session ready to get input: its picture is shown and control was granted.
+    pub fn controllable_session(&self, id: &str) -> bool {
+        let (Some(item), Some(state)) = (self.session_item(id), self.session_state(id)) else { return false };
+        item.phase == "active" && item.control && state.has_frame && !state.stopping && !(item.consent.is_some() && item.consent == state.stopped_consent)
+    }
+
+    /// Puts a session in front (`None`: none is), moving the states in and out. The status the screens
+    /// read (`remote`) then describes it.
+    pub fn set_focus(&mut self, id: Option<String>) {
+        let id = id.filter(|id| self.raw.sessions.iter().any(|item| &item.id == id));
+        if id != self.focus {
+            let assistant = std::mem::take(&mut self.session.assistant);
+            let mut incoming = match &id {
+                Some(id) => self.parked.remove(id).unwrap_or_else(SessionState::fresh),
+                None => SessionState::fresh(),
+            };
+            if let Some(old) = self.focus.take() {
+                let outgoing = std::mem::replace(&mut self.session, SessionState::fresh());
+                // A session that ended is not kept.
+                if self.raw.sessions.iter().any(|item| item.id == old) {
+                    self.parked.insert(old, outgoing);
+                }
+            }
+            incoming.assistant = assistant;
+            self.session = incoming;
+            self.focus = id;
+            // The assistant's conversation belongs to one session.
+            if let Some(id) = self.focus.clone()
+                && self.session.assistant.session.as_deref() != Some(id.as_str())
+            {
+                let assistant = &mut self.session.assistant;
+                assistant.session = Some(id);
+                assistant.started = clock();
+                assistant.log.clear();
+                assistant.answer.clear();
+                assistant.ticket_status.clear();
+            }
+        }
+        self.remote = match self.focus.as_deref().and_then(|id| self.raw.sessions.iter().find(|item| item.id == id)) {
+            Some(item) => self.raw.viewed_as(item),
+            None => self.raw.clone(),
+        };
+    }
+
+    /// Takes the engine's status in: the sessions list is complete (an old engine's single session
+    /// included), sessions that ended lose their state, and the focus stays on a session that exists.
+    pub fn take_status(&mut self, mut status: RemoteStatus) {
+        status.sessions = status.technician_sessions();
+        status.max_sessions = Some(status.session_limit());
+        self.raw = status;
+        let live: HashSet<&str> = self.raw.sessions.iter().map(|item| item.id.as_str()).collect();
+        self.parked.retain(|id, _| live.contains(id.as_str()));
+        let focus = self.focus.clone();
+        self.set_focus(focus);
     }
     fn locally_stopped(&self) -> bool {
         self.remote.consent.is_some() && self.remote.consent == self.session.stopped_consent
@@ -269,17 +382,20 @@ pub struct App {
     pub info: Info,
     pub state: RefCell<State>,
     pub store: RefCell<Store>,
-    /// The current picture of the session.
-    pub texture: RefCell<Option<gdk::Texture>>,
+    /// The current picture of each session, by stable id.
+    pub textures: RefCell<HashMap<String, gdk::Texture>>,
     pub ui: RefCell<Option<Rc<crate::ui::Ui>>>,
     pub shell: RefCell<Option<Rc<dyn Shell>>>,
     /// True while the screens set widget values (their signal handlers then do nothing).
     pub rendering: Cell<bool>,
     render_pending: Cell<bool>,
-    queue: RefCell<logic::InputQueue>,
-    sending: Cell<bool>,
-    video_generation: Cell<u64>,
-    shown: RefCell<Vec<f64>>,
+    /// Unsent input, and whether a sender runs, by stable id: each session has its own.
+    queues: RefCell<HashMap<String, logic::InputQueue>>,
+    sending: RefCell<HashSet<String>>,
+    /// The picture loop of a session runs while its entry here is its generation number.
+    video_generation: RefCell<HashMap<String, u64>>,
+    video_counter: Cell<u64>,
+    shown: RefCell<HashMap<String, Vec<f64>>>,
     started: Cell<bool>,
 }
 
@@ -291,23 +407,24 @@ impl App {
         i18n::set_choice(&store.settings.language);
         let mut state = State { account: AccountStatus::signed_out(), remote: RemoteStatus::offline(), ..State::default() };
         state.enrollment.current = store.settings.this_computer.clone();
-        state.session.sound = true;
-        state.session.draw_width = 2;
+        state.session = SessionState::fresh();
+        state.raw = RemoteStatus::offline();
         state.workspace = Workspace::new(WhenReady::from_id(&store.settings.when_ready), OpenIn::from_id(&store.settings.open_in));
         Rc::new(Self {
             engine,
             info,
             state: RefCell::new(state),
             store: RefCell::new(store),
-            texture: RefCell::new(None),
+            textures: RefCell::new(HashMap::new()),
             ui: RefCell::new(None),
             shell: RefCell::new(None),
             rendering: Cell::new(false),
             render_pending: Cell::new(false),
-            queue: RefCell::new(logic::InputQueue::default()),
-            sending: Cell::new(false),
-            video_generation: Cell::new(0),
-            shown: RefCell::new(Vec::new()),
+            queues: RefCell::new(HashMap::new()),
+            sending: RefCell::new(HashSet::new()),
+            video_generation: RefCell::new(HashMap::new()),
+            video_counter: Cell::new(0),
+            shown: RefCell::new(HashMap::new()),
             started: Cell::new(false),
         })
     }
@@ -452,33 +569,43 @@ impl App {
 
     pub async fn refresh_remote(self: &Rc<Self>) {
         let Ok(next) = self.run::<RemoteStatus>("remote_status", json!({})).await else { return };
-        let previous = {
+        self.take_status(next);
+        self.go_online_if_needed().await;
+    }
+
+    /// Takes the engine's status in (also used by tests): the sessions, the one in front, the tabs.
+    pub fn take_status(self: &Rc<Self>, status: RemoteStatus) {
+        let (before, after) = {
             let mut state = self.state.borrow_mut();
-            let previous = std::mem::replace(&mut state.remote, next.clone());
-            if next.phase == "ready" {
+            let before = state.raw.clone();
+            state.take_status(status);
+            if state.raw.phase == "ready" {
                 state.auto_tries = 0;
                 state.next_auto_try = 0.0;
             }
-            previous
+            (before, state.raw.clone())
         };
-        if previous != next {
+        if before != after {
             self.changed();
         }
-        self.session_status_changed(&previous, &next);
+        self.sessions_changed(&before.technician_sessions(), &after.technician_sessions());
         self.sync_workspace();
-        self.host_status_changed(&previous, &next);
-        self.devices_status_changed(&previous, &next);
-        if !next.host_macs.is_empty()
-            && let Some(peer) = next.peer
-            && next.viewing()
-        {
-            let mut store = self.store.borrow_mut();
-            if store.remember_macs(peer, &next.host_macs) {
-                store.save();
+        self.sync_focus();
+        self.host_status_changed(&before, &after);
+        self.devices_status_changed(&before, &after);
+        for item in &after.sessions {
+            if item.phase == "active"
+                && !item.host_macs.is_empty()
+                && let Some(peer) = item.peer
+            {
+                let mut store = self.store.borrow_mut();
+                if store.remember_macs(peer, &item.host_macs) {
+                    store.save();
+                }
             }
         }
-        self.go_online_if_needed().await;
     }
+
 
     /// A set-up computer goes online by itself once someone is signed in, so the person who needs
     /// help never has to look for a button. Not again after "Go offline", with a growing pause.
@@ -647,7 +774,6 @@ impl App {
             state.busy = true;
             state.error.clear();
             state.section = Section::Devices;
-            state.session.password_session = password.is_some();
         });
         let app = self.clone();
         self.spawn(async move {
@@ -674,30 +800,31 @@ impl App {
     }
 
     fn observed(&self) -> Observed {
-        let peer = self.state.borrow().remote.peer;
-        let (name, os) = peer.map(|peer| self.peer_label(peer)).unwrap_or_default();
+        let sessions: Vec<(String, u32, String, bool)> = {
+            let state = self.state.borrow();
+            state
+                .raw
+                .sessions
+                .iter()
+                .filter_map(|item| Some((item.id.clone(), item.peer?, item.phase.clone(), state.session_state(&item.id).is_some_and(|session| session.has_frame))))
+                .collect()
+        };
+        let sessions = sessions
+            .into_iter()
+            .map(|(id, peer, phase, frame_shown)| {
+                let (name, os) = self.peer_label(peer);
+                ObservedSession { id, peer, phase, frame_shown, name, os }
+            })
+            .collect();
         let state = self.state.borrow();
-        let remote = &state.remote;
-        Observed {
-            peer,
-            sharing: remote.sharing,
-            has_session: remote.session.is_some(),
-            phase: remote.phase.clone(),
-            frame_shown: state.session.has_frame,
-            in_session: remote.in_session(),
-            busy: state.busy,
-            error: state.error.clone(),
-            declined: self.declined_text(&state),
-            name,
-            os,
-        }
+        Observed { sessions, busy: state.busy, error: state.error.clone(), declined: self.declined_text(&state) }
     }
 
     fn declined_text(&self, state: &State) -> String {
-        if state.remote.message.is_empty() || state.remote.phase == "ready" {
+        if state.raw.message.is_empty() || state.raw.phase == "ready" {
             t("The connection was not established. The other side declined, did not answer, or unattended access is not allowed.")
         } else {
-            i18n::engine(&state.remote.message)
+            i18n::engine(&state.raw.message)
         }
     }
 
@@ -730,10 +857,13 @@ impl App {
 
     /// Cancel while connecting (ends the request for both sides), or close a failed attempt.
     pub fn cancel_attempt(self: &Rc<Self>) {
-        let in_session = self.state.borrow().remote.peer.filter(|_| self.state.borrow().remote.in_session());
+        let in_session = {
+            let state = self.state.borrow();
+            state.workspace.attempt.as_ref().map(|attempt| attempt.peer).filter(|peer| state.session_of_peer(*peer).is_some())
+        };
         let end = self.state.borrow_mut().workspace.cancel_attempt(in_session);
-        if end.is_some() {
-            self.end_session();
+        if let Some(peer) = end {
+            self.end_session_peer(peer);
         }
         self.changed();
     }
@@ -746,12 +876,14 @@ impl App {
         let effects = self.state.borrow_mut().workspace.show(peer, None);
         self.changed();
         self.apply_effects(effects);
+        self.sync_focus();
     }
 
     pub fn pop_out(self: &Rc<Self>, peer: u32) {
         let effects = self.state.borrow_mut().workspace.pop_out(peer);
         self.changed();
         self.apply_effects(effects);
+        self.sync_focus();
     }
 
     /// Back into a tab; `close_window`: false when the window is being closed by the person already.
@@ -759,11 +891,13 @@ impl App {
         let effects = self.state.borrow_mut().workspace.dock(peer, true, close_window);
         self.changed();
         self.apply_effects(effects);
+        self.sync_focus();
     }
 
     /// The person closed a session window: the session goes back into its tab.
     pub fn window_closed(self: &Rc<Self>, peer: u32) {
         self.edit(|state| state.workspace.window_closed(peer));
+        self.sync_focus();
     }
 
     pub fn dismiss_notice(self: &Rc<Self>, peer: u32) {
@@ -772,6 +906,34 @@ impl App {
 
     pub fn select_tab(self: &Rc<Self>, tab: crate::workspace::Tab) {
         self.edit(|state| state.workspace.selected = tab);
+        self.sync_focus();
+    }
+
+    /// Puts the session whose view the person works in in front: input, clipboard and the toolbar act
+    /// on it alone. `None`: no session is in front (Devices, or nothing is shown).
+    pub fn focus_session(self: &Rc<Self>, id: Option<String>) {
+        if self.state.borrow().focus == id {
+            return;
+        }
+        self.edit(|state| state.set_focus(id));
+    }
+
+    /// The session the person works in follows the window in front and its tab: a session window that
+    /// is active, else the tab shown in the main window. While none of our windows is active (the
+    /// person is in another program) the session stays as it was, if it still has its tab.
+    pub fn sync_focus(self: &Rc<Self>) {
+        let Some(ui) = self.ui.borrow().clone() else { return };
+        let wanted = {
+            let state = self.state.borrow();
+            let workspace = &state.workspace;
+            // `Some(None)`: one of our windows is in front and shows no session (Devices).
+            let wanted_peer = match ui.front_peer(workspace) {
+                Some(front) => front,
+                None => state.focus.as_ref().and_then(|id| state.session_item(id)).and_then(|item| item.peer),
+            };
+            wanted_peer.and_then(|peer| workspace.id_of(peer).map(str::to_owned))
+        };
+        self.focus_session(wanted);
     }
 
     pub fn set_when_ready(self: &Rc<Self>, value: WhenReady) {
@@ -887,18 +1049,32 @@ impl App {
             self.edit(|state| state.progress = t("Connecting… The person allows the session on their phone."));
         }
         if let Some(status) = self.status().await
-            && status.phase != "ready"
+            && !status.can_request()
         {
-            return Err(if matches!(status.phase.as_str(), "active" | "incoming" | "outgoing") {
+            let limit = status.session_limit();
+            return Err(if status.technician_sessions().len() >= limit {
+                RequestError::too_many(limit)
+            } else if matches!(status.phase.as_str(), "active" | "incoming" | "outgoing") {
                 "End the current session first, then connect again.".into()
             } else {
                 "This computer is not ready to connect yet. Please try again in a moment.".into()
             });
         }
         let unattended = unattended && !phone;
-        self.perform("remote_request", logic::request_args(id, password.as_deref(), unattended)).await?;
+        // The answer is the new session's stable id; it is in the status at once.
+        let _stable_id: String = self.run("remote_request", logic::request_args(id, password.as_deref(), unattended)).await?;
+        let with_password = password.is_some();
         self.edit(|state| {
-            state.session.last_request_unattended = unattended;
+            if with_password {
+                state.password_peers.insert(id);
+            } else {
+                state.password_peers.remove(&id);
+            }
+            if unattended {
+                state.unattended_peers.insert(id);
+            } else {
+                state.unattended_peers.remove(&id);
+            }
             state.progress = t("Waiting for the other person to accept your request.");
         });
         Ok(())
@@ -1884,22 +2060,56 @@ impl App {
 
     // ---- The session (technician side) ----
 
-    fn session_status_changed(self: &Rc<Self>, previous: &RemoteStatus, next: &RemoteStatus) {
-        if previous.viewing() && previous.control && !next.viewing() && !next.session_window()
-            && let Some(peer) = previous.peer
-        {
-            let state = self.state.borrow();
-            let company_device = state.company.data.tenant().is_some() && state.devices.devices.iter().any(|device| device.connection_id == peer);
-            drop(state);
-            if company_device {
-                self.edit(|state| state.session.note_for = Some(peer));
+    /// Reads what changed between two looks at the engine, session by session (by stable id): ended
+    /// sessions are cleaned up, the others get their picture loop and their tool polling.
+    fn sessions_changed(self: &Rc<Self>, previous: &[SessionItem], next: &[SessionItem]) {
+        for old in previous {
+            if next.iter().any(|item| item.id == old.id) {
+                continue;
             }
+            self.session_ended(old, next);
         }
-        {
+        for item in next {
+            self.session_seen(item);
+        }
+        self.continue_reconnects();
+        if next.iter().any(|item| item.phase == "active") && !self.state.borrow().progress.is_empty() {
+            self.edit(|state| state.progress.clear());
+        }
+    }
+
+    fn session_ended(self: &Rc<Self>, old: &SessionItem, next: &[SessionItem]) {
+        self.stop_video(&old.id);
+        self.queues.borrow_mut().remove(&old.id);
+        self.sending.borrow_mut().remove(&old.id);
+        let Some(peer) = old.peer else { return };
+        // The same device again with another id (an engine without stable ids renewed its session).
+        if next.iter().any(|item| item.peer == Some(peer)) {
+            return;
+        }
+        let (company_device, followed) = {
+            let state = self.state.borrow();
+            (state.company.data.tenant().is_some() && state.devices.devices.iter().any(|device| device.connection_id == peer), state.reconnects.contains_key(&peer))
+        };
+        if old.control && old.phase == "active" && company_device {
+            self.edit(|state| state.note_for = Some(peer));
+        }
+        if !followed {
+            self.edit(|state| {
+                state.password_peers.remove(&peer);
+                state.unattended_peers.remove(&peer);
+            });
+        }
+    }
+
+    fn session_seen(self: &Rc<Self>, item: &SessionItem) {
+        let (start_video, stop_video, tools) = {
             let mut state = self.state.borrow_mut();
-            if next.session != state.session.toggle_session {
-                let session = &mut state.session;
-                session.toggle_session = next.session.clone();
+            let locally_stopped = item.consent.is_some() && state.session_state(&item.id).is_some_and(|session| item.consent == session.stopped_consent);
+            let session = state.session_state_mut(&item.id);
+            // A new transport starts the host's toggles again.
+            if item.session != session.toggle_session {
+                session.toggle_session = item.session.clone();
                 session.privacy = false;
                 session.block_input = false;
                 session.lock_when_done = false;
@@ -1911,75 +2121,88 @@ impl App {
                 session.invite_link = None;
                 session.drawing = false;
             }
-            if next.viewing() && state.session.assistant.session != next.session {
-                let assistant = &mut state.session.assistant;
-                assistant.session = next.session.clone();
-                assistant.started = clock();
-                assistant.log.clear();
-                assistant.answer.clear();
-                assistant.ticket_status.clear();
+            let viewing = item.phase == "active" && !session.stopping && !locally_stopped;
+            let start = viewing && session.viewing_session.as_deref() != Some(item.id.as_str());
+            let stop = !viewing && session.viewing_session.is_some();
+            let tools = matches!(item.phase.as_str(), "active" | "outgoing");
+            let start_tools = tools && !session.tools_running;
+            if !tools {
+                session.tools_running = false;
             }
-            if !next.in_session() {
-                state.session.stopped_consent = None;
-            }
-        }
-        let (start_video, stop_video) = {
-            let state = self.state.borrow();
-            let viewing = next.viewing() && !state.session.stopping && !state.locally_stopped();
-            let start = viewing && next.session != state.session.viewing_session;
-            let stop = !viewing && state.session.viewing_session.is_some();
-            (start.then(|| next.session.clone()).flatten(), stop)
+            (start, stop, start_tools)
         };
-        if let Some(session) = start_video {
-            self.start_video(session);
+        if start_video {
+            self.start_video(item.id.clone());
         } else if stop_video {
-            self.clear_video();
+            self.stop_video(&item.id);
         }
-        let tools = next.phase == "active" || matches!(next.phase.as_str(), "incoming" | "outgoing");
-        if tools && !self.state.borrow().session.tools_running {
-            self.start_tools();
-        } else if !tools {
-            self.state.borrow_mut().session.tools_running = false;
-        }
-        self.continue_reconnect(next);
-        if next.phase == "active" {
-            let progress_empty = self.state.borrow().progress.is_empty();
-            if !progress_empty {
-                self.edit(|state| state.progress.clear());
-            }
+        if tools {
+            self.start_tools(item.id.clone());
         }
     }
 
-    /// Stops the picture and forgets it.
+    /// Stops every picture and forgets them.
     pub fn clear_video(self: &Rc<Self>) {
-        self.video_generation.set(self.video_generation.get() + 1);
-        self.texture.replace(None);
-        self.queue.borrow_mut().clear();
-        self.shown.borrow_mut().clear();
+        let ids: Vec<String> = self.video_generation.borrow().keys().cloned().chain(self.textures.borrow().keys().cloned()).collect();
+        for id in ids {
+            self.stop_video(&id);
+        }
+    }
+
+    /// Stops the picture of one session and forgets it.
+    pub fn stop_video(self: &Rc<Self>, id: &str) {
+        self.video_generation.borrow_mut().remove(id);
+        self.textures.borrow_mut().remove(id);
+        self.shown.borrow_mut().remove(id);
+        if let Some(queue) = self.queues.borrow_mut().get_mut(id) {
+            queue.clear();
+        }
         self.edit(|state| {
-            state.session.viewing_session = None;
-            state.session.has_frame = false;
-            state.session.size = (0, 0);
-            state.session.fps = 0;
+            if state.session_item(id).is_some() || state.focus.as_deref() == Some(id) {
+                let session = state.session_state_mut(id);
+                session.viewing_session = None;
+                session.has_frame = false;
+                session.size = (0, 0);
+                session.fps = 0;
+            }
         });
         if let Some(ui) = self.ui.borrow().clone() {
-            ui.set_frame(None);
+            ui.set_frame(id, None);
         }
     }
 
-    fn start_video(self: &Rc<Self>, session: String) {
-        self.clear_video();
-        self.edit(|state| state.session.viewing_session = Some(session.clone()));
-        let generation = self.video_generation.get();
+    /// The picture of the session in front (the assistant looks at it).
+    pub fn focused_texture(&self) -> Option<gdk::Texture> {
+        let id = self.state.borrow().focus.clone()?;
+        self.textures.borrow().get(&id).cloned()
+    }
+
+    fn start_video(self: &Rc<Self>, id: String) {
+        self.stop_video(&id);
+        self.edit(|state| state.session_state_mut(&id).viewing_session = Some(id.clone()));
+        let generation = self.video_counter.get() + 1;
+        self.video_counter.set(generation);
+        self.video_generation.borrow_mut().insert(id.clone(), generation);
         let app = self.clone();
         self.spawn(async move {
             let mut sequence = 0;
+            let current = |app: &App| app.video_generation.borrow().get(&id) == Some(&generation);
             loop {
-                if app.video_generation.get() != generation {
+                if !current(&app) {
                     return;
                 }
-                let data = app.engine.next_video(&session).await;
-                if app.video_generation.get() != generation {
+                // A session nobody looks at keeps its last picture and is not fetched; the engine keeps
+                // only the newest one. Its first picture is always fetched (the tab is "ready" with it).
+                let hidden = {
+                    let state = app.state.borrow();
+                    state.session_state(&id).is_some_and(|session| session.has_frame) && !state.session_visible(&id)
+                };
+                if hidden {
+                    glib::timeout_future(Duration::from_millis(250)).await;
+                    continue;
+                }
+                let data = app.engine.next_video(&id).await;
+                if !current(&app) {
                     return;
                 }
                 match data {
@@ -1987,20 +2210,20 @@ impl App {
                     Ok(data) => match video::decode(data, sequence) {
                         Ok(frame) => {
                             sequence = frame.sequence;
-                            app.show_frame(frame);
+                            app.show_frame(&id, frame);
                         }
                         Err(video::Problem::Compressed) => {}
                         Err(video::Problem::Invalid) => {
-                            app.edit(|state| state.session.error = t("Invalid native video frame"));
-                            let _ = app.perform("remote_close", json!({ "session": session })).await;
-                            app.clear_video();
+                            app.edit(|state| state.session_state_mut(&id).error = t("Invalid native video frame"));
+                            let _ = app.perform("remote_close", json!({ "session": id })).await;
+                            app.stop_video(&id);
                             return;
                         }
                     },
                     Err(error) => {
-                        app.edit(|state| state.session.error = i18n::engine(&error));
-                        let _ = app.perform("remote_close", json!({ "session": session })).await;
-                        app.clear_video();
+                        app.edit(|state| state.session_state_mut(&id).error = i18n::engine(&error));
+                        let _ = app.perform("remote_close", json!({ "session": id })).await;
+                        app.stop_video(&id);
                         return;
                     }
                 }
@@ -2008,79 +2231,94 @@ impl App {
         });
     }
 
-    pub fn show_frame(self: &Rc<Self>, frame: video::Frame) {
+    pub fn show_frame(self: &Rc<Self>, id: &str, frame: video::Frame) {
         let format = match frame.layout {
             video::Layout::Rgba => gdk::MemoryFormat::R8g8b8a8,
             video::Layout::Bgra => gdk::MemoryFormat::B8g8r8a8,
         };
         let bytes = glib::Bytes::from_owned(frame.pixels);
         let texture: gdk::Texture = gdk::MemoryTexture::new(frame.width as i32, frame.height as i32, format, &bytes, frame.stride).upcast();
-        self.texture.replace(Some(texture.clone()));
+        self.textures.borrow_mut().insert(id.to_owned(), texture.clone());
         if let Some(ui) = self.ui.borrow().clone() {
-            ui.set_frame(Some(&texture));
+            ui.set_frame(id, Some(&texture));
         }
         let now = clock();
         let fps = {
             let mut shown = self.shown.borrow_mut();
-            shown.push(now);
-            shown.retain(|time| now - time <= 1.0);
-            shown.len()
+            let times = shown.entry(id.to_owned()).or_default();
+            times.push(now);
+            times.retain(|time| now - time <= 1.0);
+            times.len()
         };
         let changed = {
             let state = self.state.borrow();
-            state.session.fps != fps || state.session.size != (frame.width, frame.height) || !state.session.has_frame
+            state.session_state(id).is_some_and(|session| session.fps != fps || session.size != (frame.width, frame.height) || !session.has_frame)
         };
         if changed {
             self.edit(|state| {
-                state.session.fps = fps;
-                state.session.size = (frame.width, frame.height);
-                state.session.has_frame = true;
+                let session = state.session_state_mut(id);
+                session.fps = fps;
+                session.size = (frame.width, frame.height);
+                session.has_frame = true;
             });
             self.sync_workspace();
         }
     }
 
-    /// Queues an input event and sends it; pointer moves replace the previous unsent move.
+    /// Queues an input event for the session in front and sends it; pointer moves replace the
+    /// previous unsent move. Nothing is sent while no session is in front.
     pub fn send_input(self: &Rc<Self>, event: Value) {
-        let (session, controllable) = {
+        let Some(id) = self.state.borrow().focus.clone() else { return };
+        self.send_input_to(&id, event);
+    }
+
+    /// The same for the session `id`; it must be the one in front, unless the event lets go of keys.
+    pub fn send_input_to(self: &Rc<Self>, id: &str, event: Value) {
+        let release = event["kind"] == "release_all";
+        {
             let state = self.state.borrow();
-            (state.remote.session.clone(), state.controllable())
-        };
-        let Some(session) = session else { return };
-        if event["kind"] != "release_all" && !controllable {
-            return;
+            let in_front = state.focus.as_deref() == Some(id);
+            if !release && !(in_front && state.controllable_session(id)) {
+                return;
+            }
+            if state.session_item(id).is_none() {
+                return;
+            }
         }
-        if self.queue.borrow_mut().push(event) == logic::Queued::Stalled {
-            self.edit(|state| state.session.error = t("Input delivery stalled; the session has been stopped"));
-            let app = self.clone();
+        let stalled = self.queues.borrow_mut().entry(id.to_owned()).or_default().push(event) == logic::Queued::Stalled;
+        if stalled {
+            self.edit(|state| state.session_state_mut(id).error = t("Input delivery stalled; the session has been stopped"));
+            let (app, id) = (self.clone(), id.to_owned());
             self.spawn(async move {
-                let _ = app.perform("remote_close", json!({ "session": session })).await;
+                let _ = app.perform("remote_close", json!({ "session": id })).await;
             });
             return;
         }
-        if self.sending.replace(true) {
+        if !self.sending.borrow_mut().insert(id.to_owned()) {
             return;
         }
-        let app = self.clone();
+        let (app, id) = (self.clone(), id.to_owned());
         self.spawn(async move {
             loop {
-                let Some(event) = app.queue.borrow_mut().pop() else { break };
-                if app.state.borrow().remote.session.as_deref() != Some(session.as_str()) {
-                    app.queue.borrow_mut().clear();
+                let Some(event) = app.queues.borrow_mut().get_mut(&id).and_then(logic::InputQueue::pop) else { break };
+                if app.state.borrow().session_item(&id).is_none() {
+                    app.queues.borrow_mut().remove(&id);
                     break;
                 }
                 let text = event["kind"] == "text";
-                match app.engine.input(&session, event).await {
-                    Ok(false) if text => app.edit(|state| state.session.error = t("The remote computer could not type this text.")),
+                match app.engine.input(&id, event).await {
+                    Ok(false) if text => app.edit(|state| state.session_state_mut(&id).error = t("The remote computer could not type this text.")),
                     Ok(_) => {}
                     Err(error) => {
-                        app.queue.borrow_mut().clear();
-                        app.edit(|state| state.session.error = i18n::engine(&error));
+                        if let Some(queue) = app.queues.borrow_mut().get_mut(&id) {
+                            queue.clear();
+                        }
+                        app.edit(|state| state.session_state_mut(&id).error = i18n::engine(&error));
                         break;
                     }
                 }
             }
-            app.sending.set(false);
+            app.sending.borrow_mut().remove(&id);
         });
     }
 
@@ -2112,15 +2350,16 @@ impl App {
         }
     }
 
+    /// A toolbar action of the session in front (privacy screen, block input, lock, restart …).
     pub fn session_action(self: &Rc<Self>, name: &str, quiet: bool) {
-        let Some(session) = self.state.borrow().remote.session.clone() else { return };
+        let Some(session) = self.state.borrow().focus.clone() else { return };
         let app = self.clone();
         let name = name.to_owned();
         self.spawn(async move {
             if let Err(error) = app.engine.input(&session, input::action(&name)).await
                 && !quiet
             {
-                app.edit(|state| state.session.error = i18n::engine(&error));
+                app.edit(|state| state.session_state_mut(&session).error = i18n::engine(&error));
             }
         });
     }
@@ -2159,7 +2398,7 @@ impl App {
         self.session_action("sas", false);
     }
     pub fn select_display(self: &Rc<Self>, index: u16) {
-        let Some(session) = self.state.borrow().remote.session.clone() else { return };
+        let Some(session) = self.state.borrow().focus.clone() else { return };
         let app = self.clone();
         self.spawn(async move {
             let _ = app.engine.input(&session, input::select_display(index)).await;
@@ -2169,59 +2408,94 @@ impl App {
     /// The first click arms, the second (within 5 s) restarts the remote computer; the app reconnects
     /// when it is back (up to 10 minutes).
     pub fn restart_computer(self: &Rc<Self>) {
-        let (session, peer, signin, unattended, armed) = {
+        let (id, peer, signin, unattended, armed) = {
             let state = self.state.borrow();
-            (state.remote.session.clone(), state.remote.peer, state.remote.signin_id, state.session.last_request_unattended || state.remote.unattended_session, state.session.restart_armed)
+            let Some(id) = state.focus.clone() else { return };
+            let Some(item) = state.session_item(&id) else { return };
+            let Some(peer) = item.peer else { return };
+            (id, peer, item.signin_id, state.unattended_peers.contains(&peer), state.session.restart_armed)
         };
-        let (Some(session), Some(peer)) = (session, peer) else { return };
         if !armed {
             self.edit(|state| state.session.restart_armed = true);
-            let app = self.clone();
+            let (app, id) = (self.clone(), id.clone());
             self.spawn(async move {
                 glib::timeout_future(Duration::from_secs(5)).await;
-                app.edit(|state| state.session.restart_armed = false);
+                app.edit(|state| {
+                    if state.session_item(&id).is_some() {
+                        state.session_state_mut(&id).restart_armed = false;
+                    }
+                });
             });
             return;
         }
         self.edit(|state| {
             state.session.restart_armed = false;
-            state.session.reconnect = Some(Reconnect::new(peer, signin, unattended, session, clock()));
+            state.reconnects.insert(peer, Reconnect::new(peer, signin, unattended, id.clone(), clock()));
         });
         self.session_action("restart", false);
     }
 
-    fn continue_reconnect(self: &Rc<Self>, status: &RemoteStatus) {
+    /// The status one restarted computer's reconnect plan looks at: its session if there is one, else
+    /// this computer's own (ready when it may request, whatever other sessions run).
+    fn reconnect_status(state: &State, peer: u32) -> RemoteStatus {
+        if let Some(item) = state.session_of_peer(peer) {
+            return state.raw.viewed_as(item);
+        }
+        let mut status = state.raw.clone();
+        if status.can_request() {
+            status.phase = "ready".into();
+        }
+        status
+    }
+
+    fn continue_reconnects(self: &Rc<Self>) {
+        let peers: Vec<u32> = self.state.borrow().reconnects.keys().copied().collect();
+        for peer in peers {
+            self.continue_reconnect(peer);
+        }
+    }
+
+    fn continue_reconnect(self: &Rc<Self>, peer: u32) {
         let busy = self.state.borrow().busy;
-        let steps = {
+        let (steps, status) = {
             let mut state = self.state.borrow_mut();
-            let Some(plan) = state.session.reconnect.as_mut() else { return };
-            plan.step(status, busy, clock())
+            let status = Self::reconnect_status(&state, peer);
+            let Some(plan) = state.reconnects.get_mut(&peer) else { return };
+            (plan.step(&status, busy, clock()), status)
+        };
+        let notice = |app: &Rc<Self>, text: String| {
+            app.edit(|state| {
+                if let Some(id) = state.session_of_peer(peer).map(|item| item.id.clone()) {
+                    state.session_state_mut(&id).notice = text;
+                }
+            });
         };
         for step in steps {
             match step {
                 ReconnectStep::Wait => {
                     if status.phase != "active" {
-                        let notice = t("The remote computer is restarting. Mixel Remote reconnects when it is back…");
-                        if self.state.borrow().session.notice != notice {
-                            self.edit(|state| state.session.notice = notice);
-                        }
+                        notice(self, t("The remote computer is restarting. Mixel Remote reconnects when it is back…"));
                     }
                 }
-                ReconnectStep::Done => self.edit(|state| {
-                    state.session.reconnect = None;
-                    state.session.notice.clear();
-                }),
-                ReconnectStep::GaveUp => self.edit(|state| {
-                    state.session.reconnect = None;
-                    state.session.notice.clear();
-                    state.error = t("The remote computer did not come back within 10 minutes.");
-                }),
+                ReconnectStep::Done => {
+                    self.edit(|state| {
+                        state.reconnects.remove(&peer);
+                    });
+                    notice(self, String::new());
+                }
+                ReconnectStep::GaveUp => {
+                    self.edit(|state| {
+                        state.reconnects.remove(&peer);
+                        state.error = t("The remote computer did not come back within 10 minutes.");
+                    });
+                    notice(self, String::new());
+                }
                 ReconnectStep::Presence(hosts) => {
                     let app = self.clone();
                     self.spawn(async move {
                         let _ = app.perform("remote_presence", json!({ "hosts": hosts })).await;
                     });
-                    self.edit(|state| state.session.notice = t("The remote computer is restarting. Mixel Remote reconnects when it is back…"));
+                    notice(self, t("The remote computer is restarting. Mixel Remote reconnects when it is back…"));
                 }
                 ReconnectStep::Request { host, unattended } => {
                     self.act(move |app| Box::pin(async move { app.perform("remote_request", logic::request_args(host, None, unattended)).await }));
@@ -2232,15 +2506,40 @@ impl App {
 
     /// Renew the connection (new keys, same session).
     pub fn renew(self: &Rc<Self>) {
-        let Some(session) = self.state.borrow().remote.session.clone() else { return };
+        let Some(session) = self.state.borrow().focus.clone() else { return };
         self.act(move |app| Box::pin(async move { app.perform("remote_restart", json!({ "session": session })).await }));
     }
 
-    /// Ends the session for both sides.
+    /// Ends the session in front for both sides; with none in front, the session someone else holds
+    /// on this computer, or the only session this app views.
     pub fn end_session(self: &Rc<Self>) {
+        let (focus, hosted, only) = {
+            let state = self.state.borrow();
+            let only = if state.raw.sessions.len() == 1 { state.raw.sessions.first().map(|item| item.id.clone()) } else { None };
+            (state.focus.clone(), state.raw.sharing || state.raw.phase == "incoming", only)
+        };
+        if let Some(id) = focus {
+            self.end_session_id(&id);
+        } else if hosted {
+            self.end_hosted_session();
+        } else if let Some(id) = only {
+            self.end_session_id(&id);
+        }
+    }
+
+    /// Cancels the requests that wait for the other person (every `outgoing` session).
+    pub fn cancel_outgoing(self: &Rc<Self>) {
+        let ids: Vec<String> = self.state.borrow().raw.sessions.iter().filter(|item| item.phase == "outgoing").map(|item| item.id.clone()).collect();
+        for id in ids {
+            self.end_session_id(&id);
+        }
+    }
+
+    /// Ends the session a technician holds on this computer.
+    fn end_hosted_session(self: &Rc<Self>) {
         let (consent, stopping) = {
             let state = self.state.borrow();
-            (state.remote.consent.clone(), state.session.stopping)
+            (state.raw.consent.clone(), state.session.stopping)
         };
         let Some(consent) = consent else { return };
         if stopping {
@@ -2251,7 +2550,6 @@ impl App {
             state.session.stopping = true;
             state.session.error.clear();
         });
-        self.clear_video();
         let app = self.clone();
         self.spawn(async move {
             let result = app.perform("remote_stop_session", json!({ "consent": consent })).await;
@@ -2265,14 +2563,59 @@ impl App {
         });
     }
 
+    /// Ends the session with this device (a tab's close button, "Cancel" while connecting).
+    pub fn end_session_peer(self: &Rc<Self>, peer: u32) {
+        let id = self.state.borrow().session_of_peer(peer).map(|item| item.id.clone());
+        if let Some(id) = id {
+            self.end_session_id(&id);
+        }
+    }
+
+    /// Ends one session, by its stable id, and only that one: the others go on.
+    pub fn end_session_id(self: &Rc<Self>, id: &str) {
+        let consent = {
+            let state = self.state.borrow();
+            let Some(item) = state.session_item(id) else { return };
+            if state.session_state(id).is_some_and(|session| session.stopping) {
+                return;
+            }
+            item.consent.clone()
+        };
+        self.edit(|state| {
+            let session = state.session_state_mut(id);
+            session.stopped_consent = consent;
+            session.stopping = true;
+            session.error.clear();
+        });
+        self.stop_video(id);
+        let (app, id) = (self.clone(), id.to_owned());
+        self.spawn(async move {
+            let result = app.perform("remote_close", json!({ "session": id })).await;
+            app.edit(|state| {
+                if state.session_item(&id).is_none() {
+                    return;
+                }
+                let session = state.session_state_mut(&id);
+                session.stopping = false;
+                if let Err(error) = result {
+                    session.error = format!("{} {}", t("Could not confirm that the session ended. Try End session again."), i18n::engine(&error));
+                }
+            });
+            app.refresh_remote().await;
+        });
+    }
+
     pub fn clipboard(self: &Rc<Self>, push: bool) {
-        let Some(session) = self.state.borrow().remote.session.clone() else { return };
+        let Some(session) = self.state.borrow().focus.clone() else { return };
         self.edit(|state| state.session.clipboard_result = t("Transferring…"));
         let app = self.clone();
         self.spawn(async move {
             let result = app.perform("remote_clipboard", json!({ "session": session, "push": push })).await;
             app.edit(|state| {
-                state.session.clipboard_result = match result {
+                if state.session_item(&session).is_none() {
+                    return;
+                }
+                state.session_state_mut(&session).clipboard_result = match result {
                     Ok(()) if push => t("Remote clipboard updated."),
                     Ok(()) => t("Your clipboard was updated."),
                     Err(error) => i18n::engine(&error),
@@ -2281,99 +2624,107 @@ impl App {
         });
     }
 
-    fn start_tools(self: &Rc<Self>) {
-        self.state.borrow_mut().session.tools_running = true;
+    /// Reads chat and file transfers of one session while it runs (every 700 ms).
+    fn start_tools(self: &Rc<Self>, id: String) {
+        self.edit(|state| state.session_state_mut(&id).tools_running = true);
         let app = self.clone();
         self.spawn(async move {
-            while app.state.borrow().session.tools_running {
-                app.read_tools().await;
+            while app.state.borrow().session_state(&id).is_some_and(|session| session.tools_running) {
+                app.read_tools(&id).await;
                 glib::timeout_future(Duration::from_millis(700)).await;
             }
         });
     }
 
-    async fn read_tools(self: &Rc<Self>) {
-        let status = self.state.borrow().remote.clone();
-        if let Some(session) = status.session.clone()
-            && status.phase == "active"
-            && let Ok(Some(messages)) = self.run::<Option<Vec<ChatMessage>>>("remote_chat_messages", json!({ "session": session })).await
-            && messages != self.state.borrow().session.chat
+    async fn read_tools(self: &Rc<Self>, id: &str) {
+        let Some(item) = self.state.borrow().session_item(id).cloned() else { return };
+        if item.phase == "active"
+            && let Ok(Some(messages)) = self.run::<Option<Vec<ChatMessage>>>("remote_chat_messages", json!({ "session": id })).await
+            && self.state.borrow().session_state(id).is_some_and(|session| messages != session.chat)
         {
-            self.edit(|state| state.session.chat = messages);
+            self.edit(|state| state.session_state_mut(id).chat = messages);
         }
-        if let Some(consent) = status.consent.clone()
-            && status.files
-            && status.phase == "active"
+        if let Some(consent) = item.consent.clone()
+            && item.files
+            && item.phase == "active"
         {
             let view = self.run::<FileView>("remote_file_status", json!({ "consent": consent })).await.ok();
-            if view != self.state.borrow().session.files {
-                self.edit(|state| state.session.files = view);
+            if self.state.borrow().session_state(id).is_some_and(|session| view != session.files) {
+                self.edit(|state| state.session_state_mut(id).files = view);
             }
-        } else if self.state.borrow().session.files.is_some() {
-            self.edit(|state| state.session.files = None);
+        } else if self.state.borrow().session_state(id).is_some_and(|session| session.files.is_some()) {
+            self.edit(|state| state.session_state_mut(id).files = None);
         }
     }
 
     pub fn send_chat(self: &Rc<Self>, text: &str) {
         let text = text.trim().to_owned();
-        let Some(session) = self.state.borrow().remote.session.clone() else { return };
+        let Some(session) = self.state.borrow().focus.clone() else { return };
         if text.is_empty() {
             return;
         }
         let app = self.clone();
         self.spawn(async move {
             match app.perform("remote_chat_send", json!({ "session": session, "text": text })).await {
-                Ok(()) => app.read_tools().await,
-                Err(error) => app.edit(|state| state.session.error = i18n::engine(&error)),
+                Ok(()) => app.read_tools(&session).await,
+                Err(error) => app.edit(|state| state.session_state_mut(&session).error = i18n::engine(&error)),
             }
         });
     }
 
+    /// The session in front and its consent (the file commands take the consent).
+    fn focus_with_consent(&self) -> Option<(String, String)> {
+        let state = self.state.borrow();
+        let id = state.focus.clone()?;
+        let consent = state.session_item(&id)?.consent.clone()?;
+        Some((id, consent))
+    }
+
     pub fn send_file(self: &Rc<Self>) {
-        let Some(consent) = self.state.borrow().remote.consent.clone() else { return };
+        let Some((id, consent)) = self.focus_with_consent() else { return };
         let Some(shell) = self.shell() else { return };
         let app = self.clone();
         self.spawn(async move {
             let Some(path) = shell.choose_file().await else { return };
             match app.perform("remote_file_send", json!({ "consent": consent, "path": path })).await {
-                Ok(()) => app.read_tools().await,
-                Err(error) => app.edit(|state| state.session.error = i18n::engine(&error)),
+                Ok(()) => app.read_tools(&id).await,
+                Err(error) => app.edit(|state| state.session_state_mut(&id).error = i18n::engine(&error)),
             }
         });
     }
 
     pub fn accept_file(self: &Rc<Self>, transfer: Transfer) {
-        let Some(consent) = self.state.borrow().remote.consent.clone() else { return };
+        let Some((id, consent)) = self.focus_with_consent() else { return };
         let Some(shell) = self.shell() else { return };
         let app = self.clone();
         self.spawn(async move {
             let name: String = app.run("remote_file_pending", json!({ "consent": consent, "id": transfer.id })).await.unwrap_or(transfer.name.clone());
             let Some(path) = shell.choose_save(&name).await else { return };
             match app.perform("remote_file_accept", json!({ "consent": consent, "id": transfer.id, "path": path })).await {
-                Ok(()) => app.read_tools().await,
-                Err(error) => app.edit(|state| state.session.error = i18n::engine(&error)),
+                Ok(()) => app.read_tools(&id).await,
+                Err(error) => app.edit(|state| state.session_state_mut(&id).error = i18n::engine(&error)),
             }
         });
     }
 
     pub fn cancel_file(self: &Rc<Self>, id: String) {
-        let Some(consent) = self.state.borrow().remote.consent.clone() else { return };
+        let Some((session, consent)) = self.focus_with_consent() else { return };
         let app = self.clone();
         self.spawn(async move {
             let _ = app.perform("remote_file_cancel", json!({ "consent": consent, "id": id })).await;
-            app.read_tools().await;
+            app.read_tools(&session).await;
         });
     }
 
     pub fn toggle_recording(self: &Rc<Self>) {
         let (session, running) = {
             let state = self.state.borrow();
-            (state.remote.session.clone(), state.remote.recording.as_ref().is_some_and(RecordingView::running))
+            (state.focus.clone(), state.remote.recording.as_ref().is_some_and(RecordingView::running))
         };
         let Some(session) = session else { return };
         let app = self.clone();
         self.spawn(async move {
-            app.edit(|state| state.session.recording_pending = true);
+            app.edit(|state| state.session_state_mut(&session).recording_pending = true);
             let result = if running {
                 app.perform("remote_record_stop", json!({ "session": session })).await
             } else {
@@ -2389,9 +2740,13 @@ impl App {
                 }
             };
             app.edit(|state| {
-                state.session.recording_pending = false;
+                if state.session_item(&session).is_none() {
+                    return;
+                }
+                let own = state.session_state_mut(&session);
+                own.recording_pending = false;
                 if let Err(error) = result {
-                    state.session.error = i18n::engine(&error);
+                    own.error = i18n::engine(&error);
                 }
             });
             app.refresh_remote().await;
@@ -2399,7 +2754,7 @@ impl App {
     }
 
     pub fn invite_colleague(self: &Rc<Self>, device: u32, control: bool) {
-        let Some(session) = self.state.borrow().remote.session.clone() else { return };
+        let Some(session) = self.state.borrow().focus.clone() else { return };
         self.act(move |app| Box::pin(async move { app.perform("remote_invite", json!({ "session": session, "user": null, "device": device, "control": control })).await }));
     }
 
@@ -2412,14 +2767,14 @@ impl App {
     }
 
     pub fn switch_sides(self: &Rc<Self>) {
-        let Some(session) = self.state.borrow().remote.session.clone() else { return };
+        let Some(session) = self.state.borrow().focus.clone() else { return };
         self.act(move |app| Box::pin(async move { app.perform("remote_switch_sides", json!({ "session": session })).await }));
     }
 
     /// Show my screen (older computers without switching sides): a Mixel Meet room the other side is
     /// asked to watch.
     pub fn show_my_screen(self: &Rc<Self>) {
-        let Some(session) = self.state.borrow().remote.session.clone() else { return };
+        let Some(session) = self.state.borrow().focus.clone() else { return };
         self.act(move |app| {
             Box::pin(async move {
                 let room: MeetingRoom = app.run("meeting_create", json!({})).await?;
@@ -2506,7 +2861,7 @@ impl App {
             "it" => "Italian",
             _ => "English",
         };
-        let image = self.texture.borrow().as_ref().map(|texture| {
+        let image = self.focused_texture().map(|texture| {
             use base64_encode as encode;
             encode(&texture.save_to_png_bytes())
         });
@@ -2598,11 +2953,11 @@ impl App {
 
     /// One drawing message to the other computer (a part of a stroke, undo or clear).
     pub fn draw(self: &Rc<Self>, message: Value) {
-        let Some(session) = self.state.borrow().remote.session.clone() else { return };
+        let Some(session) = self.state.borrow().focus.clone() else { return };
         let app = self.clone();
         self.spawn(async move {
             if let Err(error) = app.perform("remote_draw", json!({ "session": session, "message": message })).await {
-                app.edit(|state| state.session.error = i18n::engine(&error));
+                app.edit(|state| state.session_state_mut(&session).error = i18n::engine(&error));
             }
         });
     }

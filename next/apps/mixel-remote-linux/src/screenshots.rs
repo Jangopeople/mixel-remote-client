@@ -41,6 +41,7 @@ const SCENES: &[&str] = &[
     "session-ready",
     "popout",
     "sessions",
+    "multi-session",
 ];
 
 fn engine_for(scene: &str) -> MockEngine {
@@ -70,6 +71,10 @@ fn engine_for(scene: &str) -> MockEngine {
         "session" | "session-chat" | "session-files" | "session-clipboard" | "session-draw" | "invite-colleague" | "session-ready" | "popout" | "sessions" => {
             mock::signed_in(&engine, false);
             mock::viewing(&engine);
+        }
+        "multi-session" => {
+            mock::signed_in(&engine, false);
+            mock::viewing_many(&engine, 3);
         }
         "wayland" => {
             mock::signed_in(&engine, false);
@@ -131,7 +136,7 @@ async fn scene(application: &adw::Application, folder: &std::path::Path, name: &
     adw::StyleManager::default().set_color_scheme(if dark { adw::ColorScheme::ForceDark } else { adw::ColorScheme::ForceLight });
     let engine = Rc::new(engine_for(name));
     // Sessions that are shown at once (the session scenes), the others stay in Devices with a notice.
-    let open_session = name.starts_with("session") && name != "session-ready" || matches!(name, "invite-colleague" | "sessions" | "popout");
+    let open_session = name.starts_with("session") && name != "session-ready" || matches!(name, "invite-colleague" | "sessions" | "popout" | "multi-session");
     let settings = Settings { language: language.into(), when_ready: if open_session { "open".into() } else { String::new() }, open_in: if name == "popout" { "window".into() } else { String::new() }, ..Settings::default() };
     let app = App::new(engine.clone(), Store::memory(settings));
     crate::ui::install(&app, application, false);
@@ -162,6 +167,29 @@ async fn scene(application: &adw::Application, folder: &std::path::Path, name: &
             }
         });
     }
+    // The shown session is the one in front (a headless window may not count as active): once its tab
+    // is ready and in front, before the scene changes anything of it.
+    if open_session {
+        for _ in 0..40 {
+            let ready = {
+                let state = app.state.borrow();
+                !state.workspace.tabs.is_empty() && state.workspace.tabs.iter().all(|tab| tab.state == crate::workspace::TabState::Ready)
+            };
+            if ready {
+                break;
+            }
+            settle(100).await;
+        }
+        let id = {
+            let state = app.state.borrow();
+            let peer = match state.workspace.selected {
+                crate::workspace::Tab::Session(peer) => Some(peer),
+                crate::workspace::Tab::Console => state.workspace.tabs.first().map(|tab| tab.peer),
+            };
+            peer.and_then(|peer| state.workspace.id_of(peer).map(str::to_owned))
+        };
+        app.focus_session(id);
+    }
     match name {
         "sign-in-browser" => app.edit(|state| state.sign_in_link = Some("https://auth.mixel.ch/application/o/authorize/?client_id=mixel-remote&code_challenge=…".into())),
         "set-up-this-computer" => app.edit(|state| state.enrollment.needs_setup = true),
@@ -177,6 +205,11 @@ async fn scene(application: &adw::Application, folder: &std::path::Path, name: &
             state.session.draw_tool = crate::logic::DrawTool::Arrow;
         }),
         "session-files" => app.set_tool(Some(Tool::Files)),
+        // Three sessions: the second one in its own window, the third one in front in the main window.
+        "multi-session" => {
+            app.pop_out(118_406_271);
+            app.select_tab(crate::workspace::Tab::Session(905_377_412));
+        }
         "session-clipboard" => {
             app.set_tool(Some(Tool::Clipboard));
             app.edit(|state| state.remote.print_jobs = vec!["/run/user/1000/mixel-remote/invoice-2026-117.pdf".into()]);
@@ -214,7 +247,7 @@ async fn scene(application: &adw::Application, folder: &std::path::Path, name: &
             top_dialog(application, &window)
         }
         // The session in its own window: save that window too.
-        "popout" => gtk::Window::list_toplevels().into_iter().filter_map(|widget| widget.downcast::<gtk::Window>().ok()).find(|other| other.is_visible() && other.is::<adw::Window>()),
+        "popout" | "multi-session" => gtk::Window::list_toplevels().into_iter().filter_map(|widget| widget.downcast::<gtk::Window>().ok()).find(|other| other.is_visible() && other.is::<adw::Window>()),
         "consent" => {
             let dialog = top_dialog(application, &window);
             // The person ticks and unticks an option: the dialog is built again each time, with a

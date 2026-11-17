@@ -10,13 +10,19 @@ use std::{
 pub struct MockEngine {
     answers: RefCell<HashMap<String, Result<Value, String>>>,
     pub calls: RefCell<Vec<(String, Value)>>,
-    sequence: Cell<u64>,
+    /// Every input event with the session it was sent to, and every session a picture was asked for.
+    pub inputs: RefCell<Vec<(String, Value)>>,
+    pub videos: RefCell<Vec<String>>,
+    /// Pictures made so far, by session.
+    sequence: RefCell<HashMap<String, u64>>,
+    /// Tests: no picture ever arrives (no texture is made, so no display is needed).
+    pub no_pictures: Cell<bool>,
     pub frame: (usize, usize),
 }
 
 impl MockEngine {
     pub fn new() -> Self {
-        let engine = Self { answers: RefCell::new(HashMap::new()), calls: RefCell::new(Vec::new()), sequence: Cell::new(0), frame: (1280, 800) };
+        let engine = Self { answers: RefCell::new(HashMap::new()), calls: RefCell::new(Vec::new()), inputs: RefCell::new(Vec::new()), videos: RefCell::new(Vec::new()), sequence: RefCell::new(HashMap::new()), no_pictures: Cell::new(false), frame: (1280, 800) };
         engine.set("account_status", json!({ "phase": "signed_out", "message": "Sign in with your Mixel account", "account": null, "factors": [] }));
         engine.set("remote_status", json!({ "phase": "offline", "message": "", "platform": "linux", "input_access": true }));
         engine.set("linux_session", json!({ "wayland": false, "x11": true }));
@@ -40,6 +46,18 @@ impl MockEngine {
         self.answers.borrow_mut().insert(command.into(), Err(error.into()));
     }
 
+    /// What a command answers (a test builds a status from the demo data).
+    #[cfg(test)]
+    pub fn answer(&self, command: &str) -> Value {
+        self.answers.borrow().get(command).cloned().and_then(Result::ok).unwrap_or(Value::Null)
+    }
+
+    /// The input events sent to one session.
+    #[cfg(test)]
+    pub fn inputs_of(&self, session: &str) -> Vec<Value> {
+        self.inputs.borrow().iter().filter(|(id, _)| id == session).map(|(_, event)| event.clone()).collect()
+    }
+
     pub fn called(&self, command: &str) -> Vec<Value> {
         self.calls.borrow().iter().filter(|(name, _)| name == command).map(|(_, args)| args.clone()).collect()
     }
@@ -56,9 +74,20 @@ impl Engine for MockEngine {
         Box::pin(async move { answer })
     }
 
-    fn next_video(&self, _session: &str) -> Reply<Vec<u8>> {
-        let sequence = self.sequence.get() + 1;
-        self.sequence.set(sequence);
+    fn next_video(&self, session: &str) -> Reply<Vec<u8>> {
+        self.videos.borrow_mut().push(session.to_owned());
+        let sequence = {
+            let mut counts = self.sequence.borrow_mut();
+            let count = counts.entry(session.to_owned()).or_insert(0);
+            *count += 1;
+            *count
+        };
+        if self.no_pictures.get() {
+            return Box::pin(async {
+                gtk::glib::timeout_future(std::time::Duration::from_millis(20)).await;
+                Ok(Vec::new())
+            });
+        }
         // A still remote screen sends no new pictures: after a few, none (the window settles).
         if sequence > 12 {
             return Box::pin(async {
@@ -74,7 +103,8 @@ impl Engine for MockEngine {
         })
     }
 
-    fn input(&self, _session: &str, event: Value) -> Reply<bool> {
+    fn input(&self, session: &str, event: Value) -> Reply<bool> {
+        self.inputs.borrow_mut().push((session.to_owned(), event.clone()));
         self.calls.borrow_mut().push(("input".into(), event));
         Box::pin(async { Ok(true) })
     }
@@ -157,6 +187,27 @@ pub fn viewing(engine: &MockEngine) {
     );
     engine.set("remote_chat_messages", json!([{ "id": 1, "mine": false, "text": "Hello, the printer in reception does not print." }, { "id": 2, "mine": true, "text": "I'll have a look at the driver now." }]));
     engine.set("remote_file_status", json!({ "connected": true, "message": "", "outgoing": { "id": "f1", "name": "printer-driver-x64.zip", "size": 48_000_000u64, "offset": 31_200_000u64, "phase": "transferring", "message": "" }, "incoming": { "id": "f2", "name": "error-log.txt", "size": 18_400u64, "offset": 0, "phase": "offered", "message": "" } }));
+}
+
+/// Several sessions this computer views at once (up to three here): Reception PC, MacBook Anna and
+/// Accounting laptop, each with its own stable id. The single-session fields describe the first.
+pub fn viewing_many(engine: &MockEngine, count: usize) {
+    let peers = [731_204_558u32, 118_406_271, 905_377_412];
+    let ids = ["1b7e7c0e-3f0a-4b8a-9d6e-6a0a2f1c9e21", "3c8e8d1f-4a1b-4c9b-8e7f-7b1b3a2d0f32", "5d9f9e2a-5b2c-4dac-9f80-8c2c4b3e1a43"];
+    let sessions: Vec<Value> = (0..count.min(3))
+        .map(|n| {
+            json!({ "id": ids[n], "session": ids[n], "peer": peers[n], "device": peers[n], "phase": "active", "message": "", "consent": CONSENT, "received": 120,
+                "control": true, "clipboard": true, "files": true, "recording_permitted": true, "recording": { "phase": "ready" },
+                "displays": 1, "display": 0, "display_all": false, "print_jobs": [], "host_actions": ["privacy", "block", "lock", "sas", "restart", "sound"],
+                "signin_id": null, "host_macs": [], "meeting_offer": null, "peer_features": ["draw"], "joined_session": false, "switched": false,
+                "quality": { "pictures": 120, "pictures_per_second": 10.0, "picture_age_ms": 40 }, "started_at": 1_800_000_000u64 + n as u64 })
+        })
+        .collect();
+    engine.set(
+        "remote_status",
+        json!({ "phase": "active", "message": "", "platform": "linux", "host": 482_615_903u32, "session": ids[0], "consent": CONSENT, "peer": peers[0], "received": 120,
+            "control": true, "clipboard": true, "files": true, "input_access": true, "max_sessions": 4, "sessions": sessions }),
+    );
 }
 
 /// A technician asks to connect to this computer.
