@@ -161,11 +161,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 MainActor.assumeIsolated { self?.runLabCommands(path) }
             }
         }
+        // Lab only: MIXEL_QA_STATUSLOG=<file> appends one line per second: the engine phase and, per session, its stable id, current
+        // transport id, phase, reconnecting/failed, pictures received and the quality line (for resume / swap timings).
+        if let path = ProcessInfo.processInfo.environment["MIXEL_QA_STATUSLOG"] {
+            Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.writeStatusLine(path) }
+            }
+        }
         #endif
         model?.start()
     }
 
     #if DEBUG
+    private func writeStatusLine(_ path: String) {
+        guard let model else { return }
+        let remote = model.remote
+        var line = "\(Int(Date().timeIntervalSince1970 * 1000)) phase=\(remote.phase) msg=\(remote.message.prefix(60))"
+        for item in remote.sessions ?? [] {
+            line += " | \(item.id.prefix(8)) t=\((item.session ?? "-").prefix(8)) \(item.phase) rc=\(item.reconnecting) fail=\(item.reconnectFailed) rx=\(item.received) fps=\(model.sessionModels[item.peer ?? 0]?.fps ?? 0)"
+        }
+        line += "\n"
+        if let data = line.data(using: .utf8) {
+            if let handle = FileHandle(forWritingAtPath: path) { handle.seekToEndOfFile(); handle.write(data); try? handle.close() }
+            else { FileManager.default.createFile(atPath: path, contents: data) }
+        }
+    }
+
     private func runLabCommands(_ path: String) {
         guard let model, let text = try? String(contentsOfFile: path, encoding: .utf8) else { return }
         try? FileManager.default.removeItem(atPath: path)
