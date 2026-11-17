@@ -63,17 +63,24 @@ pub fn picture_cursor(pointer_mode: bool) -> &'static str {
     if pointer_mode { "crosshair" } else { "default" }
 }
 
+/// What the session view says about how the session was opened: unattended (nobody was asked), or unattended asked for
+/// but this computer is not set up for it, so the person there was asked.
+pub fn session_mode_notes(remote: &RemoteStatus) -> Vec<String> {
+    if remote.unattended_session {
+        vec![t("Unattended session: nobody at that computer was asked.")]
+    } else if remote.unattended_refused {
+        vec![t("This computer is not set up for unattended access. The person there was asked to accept.")]
+    } else {
+        Vec::new()
+    }
+}
+
 /// Lines for the session view: the registration is being restored (the session stays open), and the
 /// 5-minute and 1-minute warnings of a session opened with a support password (D2).
 pub fn session_warnings(remote: &RemoteStatus) -> Vec<String> {
     let mut lines = Vec::new();
     if remote.reconnecting {
         lines.push(t("Reconnecting… the session stays open"));
-    }
-    if remote.unattended_session {
-        lines.push(t("Unattended session: nobody at that computer was asked."));
-    } else if remote.unattended_refused {
-        lines.push(t("This computer is not set up for unattended access. The person there was asked to accept."));
     }
     if let Some(left) = remote.password_session.as_ref().and_then(|session| session.seconds_left) {
         if left == 0 {
@@ -816,7 +823,7 @@ mod tests {
         assert!(at(Some(61))[0].contains("2 minutes"));
         assert!(at(Some(60))[0].contains("1 minute"));
         assert!(at(Some(0))[0].contains("time limit"));
-        assert!(session_warnings(&RemoteStatus::default()).is_empty());
+        assert!(session_mode_notes(&RemoteStatus::default()).is_empty());
     }
 
     #[test]
@@ -1145,9 +1152,9 @@ mod tests {
     #[test]
     fn the_session_view_says_when_unattended_access_fell_back_to_asking_the_person() {
         let refused = RemoteStatus { unattended_refused: true, ..RemoteStatus::default() };
-        assert!(session_warnings(&refused).iter().any(|line| line.contains("not set up for unattended access")));
+        assert!(session_mode_notes(&refused).iter().any(|line| line.contains("not set up for unattended access")));
         let unattended = RemoteStatus { unattended_session: true, ..RemoteStatus::default() };
-        assert!(session_warnings(&unattended).iter().any(|line| line.contains("nobody at that computer was asked")));
-        assert!(session_warnings(&RemoteStatus::default()).is_empty());
+        assert!(session_mode_notes(&unattended).iter().any(|line| line.contains("nobody at that computer was asked")));
+        assert!(session_mode_notes(&RemoteStatus::default()).is_empty());
     }
 }

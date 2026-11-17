@@ -538,7 +538,8 @@ impl SessionView {
     }
 
     fn render_warning(&self, state: &State) {
-        let extra = crate::logic::session_warnings(&state.remote);
+        let mut extra = crate::logic::session_mode_notes(&state.remote);
+        extra.extend(crate::logic::session_warnings(&state.remote));
         let one_time = state.remote.peer.is_some_and(|peer| state.password_peers.contains(&peer));
         let on = (one_time || !extra.is_empty()) && (state.remote.viewing() || state.remote.reconnecting);
         let key = format!("{on}|{one_time}|{}", extra.join("|"));
