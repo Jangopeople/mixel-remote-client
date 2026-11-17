@@ -67,6 +67,9 @@ impl Job {
 
 struct Grant {
     session: Uuid,
+    /// The scope that holds this grant. A session keeps its ID when its transport is renewed:
+    /// the scope of the transport before must not finish or feed the renewed one's grant.
+    scope: u64,
     live: Authorization,
     job: Option<Job>,
 }
@@ -80,12 +83,14 @@ pub struct RecordingHub {
 pub struct RecordingScope {
     pub hub: RecordingHub,
     pub session: Uuid,
+    scope: u64,
 }
+static NEXT_SCOPE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl Drop for RecordingScope {
     fn drop(&mut self) {
         if let Ok(mut entry) = self.hub.grant.lock()
-            && let Some(grant) = entry.as_mut().filter(|grant| grant.session == self.session)
+            && let Some(grant) = entry.as_mut().filter(|grant| grant.scope == self.scope)
             && let Some(job) = grant.job.as_mut()
         {
             job.finish();
@@ -99,14 +104,22 @@ impl RecordingHub {
         if !live() || entry.as_ref().is_some_and(|grant| (grant.live)()) {
             return Err("This recording permission is no longer available".into());
         }
+        // A recording of the grant before (a transport that was just replaced) is finished,
+        // never dropped unfinished.
+        if let Some(job) = entry.as_mut().and_then(|grant| grant.job.as_mut()) {
+            job.finish();
+        }
+        let scope = NEXT_SCOPE.fetch_add(1, Ordering::Relaxed);
         *entry = Some(Grant {
             session,
+            scope,
             live,
             job: None,
         });
         Ok(RecordingScope {
             hub: self.clone(),
             session,
+            scope,
         })
     }
 
@@ -229,13 +242,14 @@ impl RecordingHub {
 
 impl RecordingScope {
     pub fn needs_keyframe(&self) -> bool {
-        matches!(self.hub.view(self.session), Some(View::WaitingForVideo))
+        self.hub.grant.lock().is_ok_and(|entry| entry.as_ref().is_some_and(|grant| grant.scope == self.scope))
+            && matches!(self.hub.view(self.session), Some(View::WaitingForVideo))
     }
     pub fn submit(&self, annex_b: &[u8], ticks: u64, size: (u16, u16)) {
         let Ok(mut entry) = self.hub.grant.lock() else {
             return;
         };
-        let Some(grant) = entry.as_mut().filter(|grant| grant.session == self.session) else {
+        let Some(grant) = entry.as_mut().filter(|grant| grant.scope == self.scope) else {
             return;
         };
         let live = (grant.live)();
@@ -409,6 +423,40 @@ fn save(
 
 fn changed_parameters(access: &AvccAccessUnit<'_>, sps: &[u8], pps: &[u8]) -> bool {
     access.sps.is_some_and(|value| value != sps) || access.pps.is_some_and(|value| value != pps)
+}
+
+#[cfg(test)]
+mod renewal_tests {
+    use super::*;
+
+    /// A session keeps its ID when its transport is renewed. The scope of the transport before
+    /// may neither finish nor feed the renewed transport's grant, and its running recording is
+    /// finished (saved), not dropped, when the renewed transport takes over.
+    #[tokio::test]
+    async fn a_renewed_transport_gets_its_own_grant_and_the_old_recording_is_finished() {
+        let directory = tempfile::tempdir().unwrap();
+        let hub = RecordingHub::default();
+        let session = Uuid::new_v4();
+        let old_live = Arc::new(AtomicBool::new(true));
+        let allowed = old_live.clone();
+        let old = hub.attach(session, Arc::new(move || allowed.load(Ordering::Acquire))).unwrap();
+        assert!(hub.attach(session, Arc::new(|| true)).is_err(), "no second grant while the first is live");
+        hub.start(session, directory.path().join("before.mp4")).unwrap();
+        assert!(old.needs_keyframe());
+        // The old transport was replaced: its authorization ends, the renewed one attaches.
+        old_live.store(false, Ordering::Release);
+        let renewed = hub.attach(session, Arc::new(|| true)).unwrap();
+        assert!(matches!(hub.view(session), Some(View::Ready)), "the renewed grant starts without a recording");
+        assert!(!old.needs_keyframe(), "the old scope no longer asks for pictures");
+        old.submit(&[0, 0, 0, 1, 0x65], 3000, (2, 2));
+        drop(old);
+        assert!(matches!(hub.view(session), Some(View::Ready)), "the old scope's end leaves the renewed grant alone");
+        hub.finish().await.unwrap();
+        hub.start(session, directory.path().join("after.mp4")).unwrap();
+        assert!(renewed.needs_keyframe());
+        drop(renewed);
+        hub.finish().await.unwrap();
+    }
 }
 
 #[cfg(all(test, target_os = "macos"))]
