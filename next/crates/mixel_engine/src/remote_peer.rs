@@ -870,9 +870,18 @@ struct EncodeRequest {
     frame: Arc<native_os_capture::stream::CapturedFrame>,
     timestamp: u64,
     keyframe: bool,
-    reply: tokio::sync::oneshot::Sender<
-        Result<(Option<native_os_capture::h264::EncodedH264>, bool), String>,
-    >,
+    reply: tokio::sync::oneshot::Sender<Result<EncodeReply, String>>,
+}
+
+/// What the encoder made of one picture.
+struct EncodeReply {
+    /// The picture, if one came out.
+    picture: Option<native_os_capture::h264::EncodedH264>,
+    /// A complete picture has to be tried again.
+    retry: bool,
+    /// The encoder left this picture out of the stream: it is given again although the screen has
+    /// not changed (see `ScreenH264Encoder::left_out`).
+    left_out: bool,
 }
 
 fn start_encoder(size: (usize, usize)) -> Result<mpsc::Sender<EncodeRequest>, String> {
@@ -893,7 +902,7 @@ fn start_encoder(size: (usize, usize)) -> Result<mpsc::Sender<EncodeRequest>, St
                 let result = match &mut encoder {
                     Ok(encoder) => encoder
                         .encode(&request.frame, request.timestamp, request.keyframe)
-                        .map(|encoded| (encoded, encoder.needs_retry())),
+                        .map(|picture| EncodeReply { picture, retry: encoder.needs_retry(), left_out: encoder.left_out() }),
                     Err(error) => {
                         let _ = request.reply.send(Err(error.to_string()));
                         break;
@@ -972,6 +981,8 @@ async fn host_media(
     let result = async {
         let encoder = start_encoder(size)?;
         let mut retry_encode = false;
+        // The encoder left the last picture out: it is given again although the screen is unchanged.
+        let mut encode_again = false;
         let mut sequence = 0;
         let mut sent = 0u64;
         let started = Instant::now();
@@ -1075,8 +1086,8 @@ async fn host_media(
                 sequence,
                 Duration::from_millis(if control.receiving_clipboard() {
                     1
-                } else if control.allowed {
-                    3
+                } else if control.allowed || encode_again {
+                    8
                 } else {
                     100
                 }),
@@ -1092,9 +1103,13 @@ async fn host_media(
                     frame
                 }
                 Err(native_os_capture::stream::CaptureError::Timeout) => {
-                    if (force_keyframe || (sent < 5 && last.elapsed() >= Duration::from_millis(120)))
-                        && let Some(frame) = &recent
-                    {
+                    // The picture captured last goes to the encoder again although the screen has not
+                    // changed: a complete picture is wanted, or the encoder left that picture out
+                    // (its rate control drops pictures after large ones). Without the second case
+                    // the last change on a screen that then stays still was never sent: after a
+                    // moving picture the technician kept seeing an old one until something else
+                    // changed (lab, 14 Nov 2026).
+                    if (force_keyframe || encode_again) && let Some(frame) = &recent {
                         frame.clone()
                     } else {
                         if sent > 0 && last.elapsed() >= Duration::from_secs(2) {
@@ -1124,8 +1139,8 @@ async fn host_media(
                 })
                 .map_err(|_| "Screen video encoder stopped")?;
             let deadline = Instant::now() + Duration::from_secs(5);
-            let (encoded, retry) = loop {
-                match tokio::time::timeout(Duration::from_millis(1), &mut output).await {
+            let EncodeReply { picture: encoded, retry, left_out } = loop {
+                match tokio::time::timeout(Duration::from_millis(5), &mut output).await {
                     Ok(result) => break result.map_err(|_| "Screen video encoder stopped")??,
                     Err(_) if config.stopped() => return Ok(()),
                     Err(_) if Instant::now() >= deadline => {
@@ -1138,6 +1153,7 @@ async fn host_media(
                 }
             };
             retry_encode = retry;
+            encode_again = left_out;
             let Some(encoded) = encoded else {
                 if sent > 0 && last.elapsed() >= Duration::from_secs(2) {
                     control.video_idle(channel).await?;
