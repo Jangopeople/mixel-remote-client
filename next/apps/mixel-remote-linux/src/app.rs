@@ -849,6 +849,12 @@ impl App {
     }
 
     fn declined_text(&self, state: &State) -> String {
+        // The engine keeps the reason a request was refused apart from the message of the session in front.
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |now| now.as_secs());
+        let attempt = state.workspace.attempt.as_ref().map(|attempt| attempt.peer);
+        if let Some(refusal) = state.raw.last_refusal.as_ref().filter(|refusal| Some(refusal.peer) == attempt && now.saturating_sub(refusal.at) < 120) {
+            return i18n::engine(&refusal.message);
+        }
         if state.raw.message.is_empty() || state.raw.phase == "ready" {
             t("The connection was not established. The other side declined, did not answer, or unattended access is not allowed.")
         } else {
@@ -933,7 +939,13 @@ impl App {
     }
 
     pub fn select_tab(self: &Rc<Self>, tab: crate::workspace::Tab) {
-        self.edit(|state| state.workspace.selected = tab);
+        self.edit(|state| {
+            // Looking at a session answers its "ready" notice.
+            if let crate::workspace::Tab::Session(peer) = tab {
+                state.workspace.dismiss_notice(peer);
+            }
+            state.workspace.selected = tab;
+        });
         self.sync_focus();
     }
 
@@ -3147,6 +3159,8 @@ pub fn run(autostart: bool) -> i32 {
         let created = App::new(engine, Store::open());
         crate::ui::install(&created, application, autostart);
         created.start();
+        #[cfg(feature = "qa-session")]
+        crate::lab_hook::install(&created);
         holder.replace(Some(created));
     });
     let empty: [&str; 0] = [];

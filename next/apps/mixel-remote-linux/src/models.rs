@@ -59,7 +59,17 @@ pub struct Factor {
 /// The connection to Mixel and the session (`remote_status`).
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(default)]
+pub struct Refusal {
+    pub peer: u32,
+    pub message: String,
+    pub at: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default)]
 pub struct RemoteStatus {
+    /// Why the last request that never became a session was refused (the status message belongs to the session in front).
+    pub last_refusal: Option<Refusal>,
     pub controller_only: bool,
     pub platform: String,
     /// `offline`, `connecting`, `ready`, `outgoing`, `incoming`, `deciding`, `negotiating`, `active`,

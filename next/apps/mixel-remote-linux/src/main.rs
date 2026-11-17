@@ -14,6 +14,8 @@ mod i18n;
 #[cfg(target_os = "linux")]
 mod keymap;
 #[cfg(all(target_os = "linux", feature = "qa-session"))]
+mod lab_hook;
+#[cfg(all(target_os = "linux", feature = "qa-session"))]
 mod live_check;
 #[cfg(target_os = "linux")]
 mod logic;

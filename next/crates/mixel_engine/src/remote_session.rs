@@ -50,8 +50,20 @@ fn app_platform() -> String {
     if text.len() <= 32 && text.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') { text } else { "unknown".into() }
 }
 
+/// Why the last session request of this technician ended before it was a session (the request to `peer`):
+/// the top-level `message` belongs to whatever session is in front, so with another session open it would hide this.
+#[derive(Clone, Serialize)]
+pub struct Refusal {
+    pub peer: u32,
+    pub message: String,
+    /// Seconds since the Unix epoch.
+    pub at: u64,
+}
+
 #[derive(Clone, Serialize)]
 pub struct Status {
+    /// Technician: the reason the last request that ended without a session was refused (see `Refusal`).
+    pub last_refusal: Option<Refusal>,
     pub controller_only: bool,
     pub platform: &'static str,
     pub phase: String,
@@ -199,6 +211,7 @@ pub struct InvitationView {
 impl Default for Status {
     fn default() -> Self {
         Self {
+            last_refusal: None,
             controller_only: crate::service_config::controller_only(),
             platform: std::env::consts::OS,
             phase: "offline".into(),
@@ -2261,6 +2274,10 @@ impl RemoteSession {
             return;
         }
         if let Some(mut slot) = inner.slots.remove(key) {
+            if slot.view.phase != "active" {
+                let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |now| now.as_secs());
+                inner.status.last_refusal = Some(Refusal { peer: slot.view.peer, message: message.clone(), at });
+            }
             slot.revoke(&message);
         }
         if inner.status.phase == "ready" && inner.status.session.is_none() {
@@ -4925,6 +4942,18 @@ mod multi_session_tests {
         let status = remote.status().await;
         assert_eq!(status.sessions[1].quality.pictures, 40);
         assert_eq!(status.sessions[0].quality.pictures, 1);
+    }
+
+    #[tokio::test]
+    async fn a_refused_request_keeps_its_reason_while_another_session_is_in_front() {
+        let (remote, mut commands) = registered().await;
+        let _first = open(&remote, &mut commands, 200_000_001).await;
+        let slot = remote.slot_begin(0, 200_000_050).await.unwrap();
+        remote.slot_end(0, slot, "No new session could be started: that computer is busy".into()).await;
+        let status = remote.status().await;
+        let refusal = status.last_refusal.expect("the refusal is kept");
+        assert_eq!((refusal.peer, refusal.message.as_str()), (200_000_050, "No new session could be started: that computer is busy"));
+        assert_eq!(status.sessions.len(), 1, "the failed request leaves no session behind");
     }
 
     #[tokio::test]
