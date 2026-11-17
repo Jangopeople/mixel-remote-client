@@ -476,9 +476,10 @@ public struct SessionWindowView: View {
             .background(WindowReader { found in
                 window = found
                 guard let found, closeGuard == nil else { return }
-                let guardian = WindowCloseGuard(window: found) { [weak workspace] in
+                let guardian = WindowCloseGuard(window: found) {
                     // Closed by the person: no session left means close; else ask, and close only after "End".
-                    guard let workspace, workspace.tab(peer) != nil else { return true }
+                    // (The workspace does not hold the guard, so a strong reference makes no cycle.)
+                    guard workspace.tab(peer) != nil else { return true }
                     askToEnd(in: found)
                     return false
                 }
