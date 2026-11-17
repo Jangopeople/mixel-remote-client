@@ -83,6 +83,16 @@ pub struct SessionStatus {
     /// The minute of asking again passed ("Could not reconnect"); `remote_reconnect` asks again for another minute,
     /// `remote_close` removes the session.
     pub reconnect_failed: bool,
+    /// This session was opened with a one-time support password: it ends by itself, the warnings (5 minutes,
+    /// 1 minute) belong to this session only. `null` for a session without one.
+    pub password_session: Option<crate::remote_session::PasswordSessionView>,
+    /// This session was opened (and granted) as an unattended one.
+    pub unattended_session: bool,
+    /// Opened with a support password (the countdown starts when the connection service announces the end).
+    #[serde(skip)]
+    pub password_flag: bool,
+    #[serde(skip)]
+    pub password_ends: Option<Instant>,
 }
 
 /// One technician session. The fields the commands need are private to the engine.
@@ -221,6 +231,10 @@ impl Registry {
                 started_at: SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |now| now.as_secs()),
                 reconnecting: false,
                 reconnect_failed: false,
+                password_session: None,
+                unattended_session: false,
+                password_flag: false,
+                password_ends: None,
             },
             video: Arc::new(VideoMailbox::default()),
             session_cancel: None,

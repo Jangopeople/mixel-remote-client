@@ -61,7 +61,18 @@ app that does not know `sessions` keeps working with one session.
 - Closing a tab/window ends that session only (`remote_close`).
 - The Connect button stays usable while fewer than `max_sessions` sessions are open (do not gate on `phase == "ready"`).
 
-## Resume and reconnect (integration agent's features) with several sessions
-- A lost registration to the connection service keeps the session (resume, 30 s) when this app holds exactly **one** technician
-  session (or hosts one); with two or more technician sessions they all end with the registration (message "Connection lost; sharing stopped").
-- "The computer went away, asking again for a minute" (reconnect.rs) also works for the sole technician session only.
+## Resume and reconnect with several sessions (each session on its own)
+- **Registration lost** (the connection service restarts): every technician session whose media connection is up is kept and
+  asks the connection service to resume it on its own (`Resume` per session, 20 s each, `status.reconnecting`). One that
+  cannot be resumed ends alone; the others continue. Sessions that were not established (still `outgoing`/`negotiating`)
+  end with the registration ("Connection lost; sharing stopped"). Sessions that are asking their computer again (below)
+  are not carried over a lost registration.
+- **The computer went away** (unattended or valid-password access only, never an attended session): that session stays in
+  `sessions[]` with `phase: "outgoing"`, `reconnecting: true`, message "Reconnecting...", and asks the same device again
+  every 2 s for 60 s. Other sessions are not touched. Several sessions can do this at the same time.
+- After 60 s: `reconnecting: false`, `reconnect_failed: true`, `phase: "outgoing"`, message "Could not reconnect". The session
+  stays listed. `remote_reconnect {session}` asks again for another minute (error text if the session is not in that
+  state); `remote_close {session}` removes it. `remote_close` also works while it is retrying (stable id, never
+  `status.session`: that is empty while retrying).
+- New per-session fields: `reconnecting`, `reconnect_failed`, `password_session {ends_at, seconds_left} | null`
+  (the 5-minute and 1-minute warnings belong to this session only), `unattended_session`.

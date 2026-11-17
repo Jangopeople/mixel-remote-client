@@ -881,6 +881,13 @@ impl RemoteSession {
                 if view.phase == "active" {
                     view.recording = view.session.and_then(|session| self.recording_hub().view(session));
                 }
+                view.password_session = if view.password_flag || view.password_ends.is_some() {
+                    let left = view.password_ends.map(|end| end.saturating_duration_since(std::time::Instant::now()).as_secs());
+                    let unix = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |time| time.as_secs());
+                    Some(PasswordSessionView { ends_at: left.map(|left| iso_utc(unix + left)), seconds_left: left })
+                } else {
+                    None
+                };
                 if (account_stopped || slot.cancelled()) && matches!(view.phase.as_str(), "active" | "negotiating") {
                     view.phase = "closing".into();
                     view.message = "The session stopped; cleaning up the connection".into();
@@ -3273,6 +3280,7 @@ async fn run(
                         send(&mut socket,request).await?;outgoing.push_back(Out{slot,host,key,unattended,joined:false,cancelled:false});crate::qa_timeline::mark("request sent to the connection service");
                         state.slot_change(generation,slot,|view|{view.phase="outgoing".into();view.message="Waiting for the remote host to Accept".into();}).await;
                         state.change(generation,|status|{status.password_flag=with_password;status.password_ends=None;}).await;
+                        state.slot_change(generation,slot,|view|{view.password_flag=with_password;view.password_ends=None;view.password_session=None;view.unattended_session=unattended;}).await;
                     },
                     Command::ConfigureUnattended{enabled}=>{
                         send(&mut socket,ClientMessage::ConfigureUnattended{enabled}).await?;
@@ -3817,7 +3825,7 @@ async fn run(
                                     crate::qa_timeline::mark("unattended request refused (Unavailable): asking again as an attended request");
                                     send(&mut socket,ClientMessage::Request{host}).await?;
                                     outgoing.push_front(Out{slot,host,key,unattended:false,joined:false,cancelled:false});
-                                    state.slot_change(generation,slot,|view|{view.phase="outgoing".into();view.message="Waiting for the remote host to Accept".into();}).await;
+                                    state.slot_change(generation,slot,|view|{view.phase="outgoing".into();view.unattended_session=false;view.message="Waiting for the remote host to Accept".into();}).await;
                                 } else if retries.iter().any(|again|again.host==host) {
                                     // A retry of a lost session: the next ask follows, the window stays as it is.
                                 } else {
@@ -3850,10 +3858,18 @@ async fn run(
                                 return Err(Failure::network("Device authorization renewal was refused; reconnecting"));
                             }else{return Err(format!("Connection service rejected an operation: {code:?}").into());}
                         },
-                        ServerMessage::SessionEnding{seconds,..}=>{
-                            // D2: a session opened with a support password ends 2 hours after it connected.
+                        ServerMessage::SessionEnding{session,seconds,..}=>{
+                            // D2: a session opened with a support password ends 2 hours after it connected. The warning
+                            // belongs to that session: a technician's other sessions do not show it.
                             let ends=std::time::Instant::now()+Duration::from_secs(u64::from(seconds));
-                            state.change(generation,|status|{status.password_ends=Some(ends);status.message=ending_message(seconds);}).await;
+                            let technician=ctrl.iter().position(|active|active.id==session || active.ui==session);
+                            if let Some(index)=technician{
+                                state.slot_change(generation,ctrl[index].ui,|view|{view.password_ends=Some(ends);view.message=ending_message(seconds);}).await;
+                            }
+                            // The single-session fields follow the hosted session, or the oldest technician session.
+                            if technician.is_none_or(|index|index==0){
+                                state.change(generation,|status|{status.password_ends=Some(ends);status.message=ending_message(seconds);}).await;
+                            }
                         },
                         ServerMessage::DevicePolicy{unattended_allowed,..}=>{
                             state.change(generation,|status|status.unattended_allowed=Some(unattended_allowed)).await;
@@ -5116,6 +5132,31 @@ mod per_session_recovery_tests {
         // Naming a session by its stable id or its transport id finds the same waiting entry.
         assert_eq!(resuming_id(&resuming, &peer, &ctrl, transports[2]), Some(transports[2]));
         assert_eq!(resuming_id(&resuming, &peer, &ctrl, transports[1]), None);
+    }
+
+    #[tokio::test]
+    async fn the_password_countdown_and_the_unattended_flag_belong_to_one_session() {
+        let (remote, stable, _) = open(&[300_000_031, 300_000_032]).await;
+        {
+            let mut inner = remote.0.lock().await;
+            let first = inner.slots.find_mut(stable[0]).unwrap();
+            first.view.password_flag = true;
+            first.view.password_ends = Some(std::time::Instant::now() + Duration::from_secs(250));
+            inner.slots.find_mut(stable[1]).unwrap().view.unattended_session = true;
+        }
+        let status = remote.status().await;
+        let (first, second) = (view(&status, stable[0]), view(&status, stable[1]));
+        let left = first.password_session.as_ref().and_then(|session| session.seconds_left).expect("countdown on its own session");
+        assert!((248..=250).contains(&left), "{left}");
+        assert!(first.password_session.as_ref().unwrap().ends_at.is_some());
+        assert!(!first.unattended_session);
+        assert!(second.password_session.is_none(), "the other session shows no warning");
+        assert!(second.unattended_session);
+        let json = serde_json::to_value(&status).unwrap();
+        assert!(json["sessions"][0]["password_session"]["seconds_left"].is_u64());
+        assert!(json["sessions"][1]["password_session"].is_null());
+        assert_eq!(json["sessions"][1]["unattended_session"], true);
+        assert!(json["sessions"][0].get("password_flag").is_none(), "internal fields stay internal");
     }
 
     #[test]
