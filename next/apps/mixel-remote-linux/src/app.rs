@@ -194,6 +194,8 @@ pub struct State {
     pub error: String,
     pub progress: String,
     pub busy: bool,
+    /// The last connect failed because this computer is not set up: the message offers "Add this computer".
+    pub setup_offer: bool,
     pub sign_in_link: Option<String>,
     /// Outside sign-ins the sign-in service offers (`keycloak` = Mixel ID, `google`, `azure`, `apple`).
     pub providers: Vec<String>,
@@ -1051,12 +1053,30 @@ impl App {
     }
 
     async fn connect_steps(self: &Rc<Self>, id: u32, password: Option<String>, unattended: bool) -> Result<(), String> {
-        self.edit(|state| state.went_offline = false);
+        self.edit(|state| {
+            state.went_offline = false;
+            state.setup_offer = false;
+        });
         if self.status().await.is_some_and(|status| status.disconnected()) {
             self.edit(|state| state.progress = t("Getting this computer ready…"));
-            self.perform("remote_register", json!({})).await?;
-            if !self.wait_until(20, |status| status.phase == "ready", None).await {
+            if let Err(error) = self.perform("remote_register", json!({})).await {
+                if logic::needs_setup(&error) {
+                    self.edit(|state| state.setup_offer = true);
+                    return Err(logic::SETUP_MESSAGE.into());
+                }
+                return Err(error);
+            }
+            if !self.wait_until(20, |status| status.phase == "ready" || logic::needs_setup(&status.message), None).await {
                 return Err("This computer could not go online. Check the internet connection and try again.".into());
+            }
+            if let Some(status) = self.status().await
+                && status.phase != "ready"
+            {
+                if logic::needs_setup(&status.message) {
+                    self.edit(|state| state.setup_offer = true);
+                    return Err(logic::SETUP_MESSAGE.into());
+                }
+                return Err(if status.message.is_empty() { "This computer could not go online. Check the internet connection and try again.".into() } else { status.message });
             }
         }
         self.edit(|state| state.progress = t("Looking up this ID…"));

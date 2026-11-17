@@ -645,19 +645,156 @@ async fn host_run(check: &mut Check<'_>, suffix: &str, session_file: Option<Path
     if !screen.is_ok_and(|value| value == true) {
         return;
     }
-    let added = check.call("saas_add_this_device", json!({ "tenant": tenant, "name": format!("QA {platform} host {suffix}"), "group": null })).await;
-    let mine = added.as_ref().ok().and_then(|value| value["connection_id"].as_u64()).unwrap_or(0);
-    check.check("this computer added to the company (its own key)", mine > 0, format!("{added:?}"));
-    let added = added.unwrap_or(Value::Null);
+    // Persistent host (`MIXEL_QA_HOST_LOOP=1`): accepts sessions one after the other until <folder>/stop appears.
+    // `MIXEL_QA_HOST_KEEP=1` keeps the device registered when it stops, and a start with the same identity goes
+    // online again under the same ID (host restart checks).
+    let looped = std::env::var("MIXEL_QA_HOST_LOOP").is_ok_and(|value| value == "1");
+    let keep = std::env::var("MIXEL_QA_HOST_KEEP").is_ok_and(|value| value == "1");
+    let mut mine = 0;
+    let mut added = Value::Null;
+    if looped && keep {
+        let _ = check.call("remote_register", json!({})).await;
+        if let Some(status) = check.wait(20, |status| status["phase"] == "ready").await {
+            mine = status["host"].as_u64().unwrap_or(0);
+            check.print(&format!("this computer went online again with its saved identity ({mine})"));
+        }
+    }
+    if mine == 0 {
+        added = check.call("saas_add_this_device", json!({ "tenant": tenant, "name": format!("QA {platform} host {suffix}"), "group": null })).await.unwrap_or(Value::Null);
+        mine = added["connection_id"].as_u64().unwrap_or(0);
+        check.check("this computer added to the company (its own key)", mine > 0, format!("{added:?}"));
+    }
     if mine > 0 {
-        hosted(check, suffix, mine).await;
+        if looped {
+            hosted_loop(check, suffix, mine).await;
+        } else {
+            hosted(check, suffix, mine).await;
+        }
     }
     let _ = check.call("remote_disconnect", json!({})).await;
     let _ = check.wait(15, |status| matches!(status["phase"].as_str(), Some("offline" | "error"))).await;
-    if let Some(device) = added["device_id"].as_str() {
+    if keep {
+        check.print("device kept registered (MIXEL_QA_HOST_KEEP)");
+    } else if let Some(device) = added["device_id"].as_str() {
         let removal = check.call("device_self_remove", json!({ "confirmed": true, "registration": { "device": device, "connection_id": mine, "generation": added["generation"] } })).await;
         check.check("this computer removes itself (signed with its key)", removal.as_ref().is_ok_and(|value| value == "removed"), format!("{removal:?}"));
     }
+}
+
+/// Lines of the file `<folder>/cmd` (written by the person running the lab, read and deleted here):
+/// `unattended on`, `unattended off`, `copy <text>` (puts a text into this computer's clipboard),
+/// `control off|on` (what the next attended session may do).
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+async fn lab_commands(check: &mut Check<'_>, control: &mut bool) {
+    let path = check.folder.join("cmd");
+    let Ok(text) = std::fs::read_to_string(&path) else { return };
+    let _ = std::fs::remove_file(&path);
+    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        check.print(&format!("command: {line}"));
+        match line {
+            "unattended on" => {
+                let targets = check.call("capture_targets", json!({})).await.unwrap_or(Value::Null);
+                let source = targets.as_array().and_then(|list| list.iter().find(|target| target["full_display"] == true)).and_then(|target| target["id"].as_str()).map(str::to_owned);
+                let result = check.call("remote_unattended", json!({ "source": source, "control": true })).await;
+                check.print(&format!("unattended on: {result:?}"));
+            }
+            "unattended off" => {
+                let result = check.call("remote_unattended", json!({ "source": null, "control": false })).await;
+                check.print(&format!("unattended off: {result:?}"));
+            }
+            "control off" => *control = false,
+            "control on" => *control = true,
+            other => {
+                if let Some(text) = other.strip_prefix("copy ") {
+                    check.print(&format!("copy: {}", session_platform::write_text(text).is_ok()));
+                }
+            }
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+async fn hosted_loop(check: &mut Check<'_>, suffix: &str, mine: u64) {
+    let platform = crate::native_commands::PLATFORM;
+    let first = check.call("remote_register", json!({})).await;
+    let ready = check.wait(40, |status| status["phase"] == "ready").await;
+    check.check(&format!("this computer online ({mine})"), first.is_ok() && ready.is_some(), check.status().await["message"].clone());
+    let _ = std::fs::write(check.folder.join("host-id.txt"), mine.to_string());
+    check.print("WAITING (persistent host): sessions are accepted one after the other until the file stop appears");
+    let stop = check.folder.join("stop");
+    let mut control = true;
+    let mut sessions = 0u32;
+    while !stop.exists() {
+        lab_commands(check, &mut control).await;
+        let status = check.status().await;
+        if status["phase"] == "incoming" {
+            let targets = check.call("capture_targets", json!({})).await.unwrap_or(Value::Null);
+            let source = targets.as_array().and_then(|list| list.iter().find(|target| target["full_display"] == true)).and_then(|target| target["id"].as_str()).unwrap_or_default().to_owned();
+            let allow = control && status["input_access"] == true;
+            let decision = json!({ "session": status["session"], "accept": true, "source": source, "confirm": true, "control": allow, "clipboard": true, "files": true, "chat": true, "recording": false });
+            let decided = check.call("remote_decide", json!({ "decision": decision })).await;
+            check.print(&format!("attended request accepted (control {allow}): {decided:?}"));
+            continue;
+        }
+        if status["phase"] != "active" || status["sharing"] != true {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            continue;
+        }
+        sessions += 1;
+        let started = Instant::now();
+        check.print(&format!("session {sessions} running (unattended {}, control {})", status["unattended_session"], status["control"]));
+        let (mut seen_messages, mut files, mut last_clip) = (0usize, 0u32, clipboard_now());
+        while !stop.exists() {
+            lab_commands(check, &mut control).await;
+            let status = check.status().await;
+            if !matches!(status["phase"].as_str(), Some("active" | "negotiating")) {
+                break;
+            }
+            let (Some(session), Some(consent)) = (status["session"].as_str().map(str::to_owned), status["consent"].as_str().map(str::to_owned)) else {
+                tokio::time::sleep(Duration::from_millis(400)).await;
+                continue;
+            };
+            // Chat: every message of the technician is logged and answered ("Echo: <text>").
+            if let Ok(list) = check.call("remote_chat_messages", json!({ "session": session })).await
+                && let Some(list) = list.as_array()
+            {
+                for message in list.iter().skip(seen_messages) {
+                    if message["mine"] == false {
+                        let text = message["text"].as_str().unwrap_or_default().to_owned();
+                        check.print(&format!("chat from technician: {text}"));
+                        let answer = check.call("remote_chat_send", json!({ "session": session, "text": format!("Echo: {text}") })).await;
+                        check.print(&format!("chat answer sent: {}", answer.is_ok()));
+                    }
+                }
+                seen_messages = list.len();
+            }
+            // Clipboard: a text that arrives is logged (and kept in clip-received.txt).
+            let now = clipboard_now();
+            if now != last_clip {
+                check.print(&format!("clipboard changed: {} bytes", now.len()));
+                let _ = std::fs::write(check.folder.join("clip-received.txt"), &now);
+                last_clip = now;
+            }
+            // Files: an offered file is accepted at once and saved as received-<n>.bin.
+            if status["files"] == true {
+                let view = check.call("remote_file_status", json!({ "consent": consent })).await.unwrap_or(Value::Null);
+                if view["incoming"]["phase"] == "offered"
+                    && let Some(id) = view["incoming"]["id"].as_str()
+                {
+                    files += 1;
+                    let target = check.folder.join(format!("received-{files}.bin"));
+                    let accepted = check.call("remote_file_accept", json!({ "consent": consent, "id": id, "path": target.to_string_lossy() })).await;
+                    check.print(&format!("file offered ({} bytes) and accepted: {}", view["incoming"]["size"], accepted.is_ok()));
+                } else if view["incoming"]["phase"] == "complete" {
+                    check.print(&format!("file complete ({} bytes)", view["incoming"]["size"]));
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        check.print(&format!("session {sessions} ended after {} s: {}", started.elapsed().as_secs(), check.status().await["message"]));
+    }
+    check.print(&format!("stopping on request after {sessions} session(s) on {platform} {suffix}"));
+    check.checks += 1;
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]

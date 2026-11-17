@@ -42,6 +42,10 @@ public final class AppModel: ObservableObject {
     /// Progress of a connection being prepared ("Looking up this ID…").
     @Published public var progress = ""
     @Published public var busy = false
+    /// The last connect failed because this computer is not set up: the screen offers "Add this computer" next to the message.
+    @Published public var setupOffer = false
+    /// Set by the "Add this computer" button in the failed-connect panel; the devices page opens its sheet.
+    @Published public var addThisRequested = false
     /// The sign-in link to open in another browser.
     @Published public var signInLink: String?
     @Published public var verificationCode = ""
@@ -367,13 +371,29 @@ public final class AppModel: ObservableObject {
         return false
     }
 
+    /// The engine says this computer has no identity for the signed-in account (first use, or an identity
+    /// left by another account): the fix is "Add this computer", not the network.
+    nonisolated static func needsSetup(_ text: String) -> Bool {
+        ["No saved device identity", "not enrolled", "No saved controller identity", "not registered", "Register this computer"].contains { text.contains($0) }
+    }
+    /// What the person reads, and the button next to it ("Add this computer").
+    static let setupMessage = "This computer is not added to your account yet. Choose Add this computer, then connect again."
+
     func connectSteps(id: UInt32, password: String?, unattended: Bool, checkPhone: Bool = true) async throws {
         wentOffline = false
+        setupOffer = false
         if let state = await status(), state.disconnected {
             progress = L("Getting this computer ready…")
-            try await engine.perform("remote_register")
-            guard await wait(seconds: 20, until: { $0.phase == "ready" }) else {
+            do { try await engine.perform("remote_register") } catch {
+                if Self.needsSetup(Self.message(error)) { setupOffer = true; throw EngineFailure(Self.setupMessage) }
+                throw error
+            }
+            guard await wait(seconds: 20, until: { $0.phase == "ready" || Self.needsSetup($0.message) }) else {
                 throw EngineFailure("This computer could not go online. Check the internet connection and try again.")
+            }
+            if let state = await status(), state.phase != "ready" {
+                if Self.needsSetup(state.message) { setupOffer = true; throw EngineFailure(Self.setupMessage) }
+                throw EngineFailure(state.message.isEmpty ? "This computer could not go online. Check the internet connection and try again." : Translator.shared.translate(state.message))
             }
         }
         let phone: Bool
