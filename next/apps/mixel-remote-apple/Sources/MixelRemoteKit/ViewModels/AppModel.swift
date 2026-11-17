@@ -65,7 +65,8 @@ public final class AppModel: ObservableObject {
     public lazy var settings = SettingsModel(app: self)
     public lazy var enrollment = EnrollmentModel(app: self)
     public lazy var assistant = AssistantModel(app: self)
-    public lazy var drawing = DrawingModel(app: self)
+    /// The focused session's drawing board (every session has its own).
+    public var drawing: DrawingModel { session.drawing }
     public lazy var reports = ReportsModel(app: self)
     public lazy var workspace = WorkspaceModel(app: self)
 
@@ -154,7 +155,8 @@ public final class AppModel: ObservableObject {
         idleSession.statusChanged(from: previous, to: next)
         let focused = session
         assistant.sessionChanged(focused.item != nil ? focused.sessionId : next.session)
-        drawing.sessionChanged(focused.item?.phase == "active" ? focused.sessionId : nil)
+        for (_, model) in sessionModels { model.drawing.sessionChanged(model.item?.phase == "active" ? model.sessionId : nil) }
+        idleSession.drawing.sessionChanged(nil)
         reports.statusChanged(from: previous, to: next)
         host.statusChanged(from: previous, to: next)
         devices.statusChanged(from: previous, to: next)

@@ -20,7 +20,7 @@ public struct SessionPane: View {
 
     public var body: some View {
         if let session = workspace.session(for: peer), let tab = workspace.tab(peer) {
-            SessionStage(app: app, session: session, drawing: app.drawing, workspace: workspace, tab: tab, inWindow: inWindow)
+            SessionStage(app: app, session: session, drawing: session.drawing, workspace: workspace, tab: tab, inWindow: inWindow)
         } else {
             VStack(spacing: 10) {
                 Image(systemName: "macwindow.badge.plus").font(.system(size: 34)).foregroundStyle(.secondary)

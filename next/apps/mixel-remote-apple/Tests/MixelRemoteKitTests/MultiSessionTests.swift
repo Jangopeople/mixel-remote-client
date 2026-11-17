@@ -151,6 +151,28 @@ final class MultiSessionTests: XCTestCase {
         app.stop()
     }
 
+    func testDrawingBelongsToOneSession() async throws {
+        let (app, engine) = try await app(sessions: 2)
+        engine.reply("remote_draw", json: "true")
+        let ws = app.workspace
+        ws.selected = .session(peer(1))
+        let first = try XCTUnwrap(ws.session(for: peer(1))).drawing
+        let second = try XCTUnwrap(ws.session(for: peer(2))).drawing
+        XCTAssertFalse(first === second, "every session has its own board")
+        first.on = true
+        first.color = 3
+        first.begin(at: CGPoint(x: 0.2, y: 0.2)); first.end()
+        XCTAssertTrue(first.on)
+        XCTAssertFalse(second.on, "Draw was never switched on in the second session")
+        XCTAssertEqual(second.color, 0)
+        XCTAssertTrue(second.strokes.isEmpty)
+        ws.selected = .session(peer(2))
+        XCTAssertTrue(first.on, "switching the tab does not touch the other session's board")
+        XCTAssertFalse(app.drawing.on, "the focused session's palette is the second one's")
+        XCTAssertFalse(first.available, "an unfocused session shows no palette")
+        app.stop()
+    }
+
     func testAnUnfocusedSessionSendsNothing() async throws {
         let (app, engine) = try await app(sessions: 2)
         let ws = app.workspace
