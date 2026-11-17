@@ -224,6 +224,22 @@ final class ConsoleRedesignTests: XCTestCase {
         }
     }
 
+    func testTheEnginesTypedFailureTextKeepsItsHint() async throws {
+        let engine = MockEngine()
+        let service = EngineDeviceAdminService(engine: engine)
+        // The engine's failure text for a refused remote_admin_* call: {"hint", "message", "status"}.
+        let wrong = #"{"status":400,"hint":"confirm_mismatch","message":"The ID does not match"}"#
+        engine.fail("remote_admin_remove_device", wrong)
+        do { try await service.remove(device: "d", confirmConnectionId: 123_456_789); XCTFail("must throw") }
+        catch {
+            XCTAssertEqual(error as? DeviceAdminError, .refused(hint: "confirm_mismatch", message: wrong))
+            XCTAssertEqual(error.localizedDescription, "The ID does not match this device.")
+        }
+        engine.fail("remote_admin_devices", #"{"status":0,"hint":"offline","message":"Mixel Remote is unavailable. Please try again."}"#)
+        do { _ = try await service.devices(company: nil, search: nil); XCTFail("must throw") }
+        catch { XCTAssertEqual((error as? DeviceAdminError).map { if case .refused(let hint, _) = $0 { hint } else { "" } }, "offline") }
+    }
+
     func testVersionOrder() {
         XCTAssertTrue(AppVersion.isOlder("2.0.9", than: "2.0.19"))
         XCTAssertFalse(AppVersion.isOlder("2.0.19", than: "2.0.19"))

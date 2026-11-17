@@ -121,6 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         do {
             let engine = try CoreEngine(dataDirectory: CoreEngine.defaultDirectory())
             let app = AppModel(engine: engine)
+            app.devices.admin = EngineDeviceAdminService(engine: engine)
             app.section = .devices
             app.checksForUpdates = true
             app.quit = { [weak self] in
