@@ -49,7 +49,7 @@ public final class RemoteScreenView: NSView {
     public override var acceptsFirstResponder: Bool { true }
     public override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     public override func resetCursorRects() {
-        addCursorRect(bounds, cursor: pointerMode ? .crosshair : .arrow)
+        addCursorRect(bounds, cursor: PointerPolicy.cursor(pointerMode: pointerMode) == .crosshair ? .crosshair : .arrow)
     }
     public override func updateTrackingAreas() {
         super.updateTrackingAreas()

@@ -18,6 +18,10 @@ public struct SessionRow: Codable, Equatable, Sendable, Identifiable {
     public var kind: String
     public var colleague: Bool
     public var note: String?
+    /// The ISM ticket the session was filed under, and whether a recording was saved. Not part of the
+    /// report yet (the server sends them once it records them): nil is shown as "—", never guessed.
+    public var ticket: String?
+    public var recording: Bool?
     public var id: String { sessionId }
 }
 
@@ -29,6 +33,11 @@ public final class ReportsModel: ObservableObject {
     let app: AppModel
     @Published public var from: Date
     @Published public var to: Date
+    /// The period buttons of the Mac console; `custom` keeps the dates picked by hand.
+    public enum Period: String, CaseIterable, Sendable { case today, week, month, custom }
+    @Published public private(set) var period: Period = .week
+    /// "Device, ticket or note" typed into the search field (filters the loaded rows at once).
+    @Published public var search = ""
     @Published public var technician: String?
     @Published public var device: String?
     @Published public private(set) var rows: [SessionRow] = []
@@ -43,7 +52,63 @@ public final class ReportsModel: ObservableObject {
         self.app = app
         let now = Date()
         to = now
-        from = Calendar.current.date(byAdding: .day, value: -30, to: now) ?? now
+        from = Calendar.current.date(byAdding: .day, value: -6, to: now) ?? now
+    }
+
+    /// Today, the last 7 or the last 30 days (including today); `custom` leaves the dates as they are.
+    public func choose(_ next: Period, now: Date = Date()) async {
+        period = next
+        let calendar = Calendar.current
+        switch next {
+        case .today: from = now; to = now
+        case .week: from = calendar.date(byAdding: .day, value: -6, to: now) ?? now; to = now
+        case .month: from = calendar.date(byAdding: .day, value: -29, to: now) ?? now; to = now
+        case .custom: break
+        }
+        await load()
+    }
+
+    /// The dates were changed by hand.
+    public func dateChanged() async {
+        period = .custom
+        await load()
+    }
+
+    /// The loaded rows that match the search (device, technician, ticket, note).
+    public var visibleRows: [SessionRow] {
+        let text = search.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !text.isEmpty else { return rows }
+        return rows.filter { row in
+            [row.deviceName, row.technicianName, row.technicianEmail, row.ticket, row.note].contains { ($0 ?? "").lowercased().contains(text) }
+        }
+    }
+
+    /// The numbers above the table, from the rows shown. Nothing is estimated: a share is of the shown sessions.
+    public struct Summary: Equatable, Sendable {
+        public var sessions: Int
+        public var totalSeconds: Int
+        public var unattended: Int
+        public var withNote: Int
+        public var withTicket: Int
+        public var averageSeconds: Int { sessions == 0 ? 0 : totalSeconds / sessions }
+        public var unattendedPercent: Int { sessions == 0 ? 0 : Int((Double(unattended) / Double(sessions) * 100).rounded()) }
+        public var notedPercent: Int { sessions == 0 ? 0 : Int((Double(withNote) / Double(sessions) * 100).rounded()) }
+    }
+
+    public var summary: Summary {
+        let shown = visibleRows
+        return Summary(sessions: shown.count, totalSeconds: shown.reduce(0) { $0 + $1.durationSeconds },
+                       unattended: shown.filter { $0.kind == "unattended" }.count,
+                       withNote: shown.filter { !($0.note ?? "").isEmpty }.count,
+                       withTicket: shown.filter { !($0.ticket ?? "").isEmpty }.count)
+    }
+
+    /// "41 h 12 min", "19 min", "45 s".
+    public static func hoursMinutes(_ seconds: Int) -> String {
+        let hours = seconds / 3600, minutes = (seconds % 3600) / 60
+        if hours > 0 { return L("%d h %d min", hours, minutes) }
+        if minutes > 0 { return L("%d min", minutes) }
+        return L("%d s", seconds)
     }
 
     public var tenant: Tenant? { app.company.tenant }
@@ -131,6 +196,14 @@ public final class ReportsModel: ObservableObject {
         return hours > 0 ? String(format: "%d:%02d:%02d", hours, minutes, rest) : String(format: "%d:%02d", minutes, rest)
     }
 
+    /// A day as dd.MM.yyyy (the report's period).
+    public static func stamp(day date: Date) -> String {
+        let format = DateFormatter()
+        format.locale = Translator.shared.locale
+        format.dateFormat = "dd.MM.yyyy"
+        return format.string(from: date)
+    }
+
     public static func stamp(_ iso: String?) -> String {
         guard let iso, !iso.isEmpty else { return "" }
         let parser = ISO8601DateFormatter()
@@ -155,6 +228,7 @@ public final class ReportsModel: ObservableObject {
 
     /// CSV (UTF-8 with BOM for spreadsheet apps, CRLF lines); cells that could start a formula are quoted with '.
     public func csv() -> String {
+        let rows = visibleRows
         func cell(_ value: String) -> String {
             var text = value
             if let first = text.first, "=+-@".contains(first) { text = "'" + text }
@@ -171,6 +245,7 @@ public final class ReportsModel: ObservableObject {
 
     /// A landscape A4 PDF of the report (title, period, totals, the table; paginated).
     public func pdf() -> Data {
+        let rows = visibleRows
         let data = NSMutableData()
         var box = CGRect(x: 0, y: 0, width: 842, height: 595)
         guard let consumer = CGDataConsumer(data: data as CFMutableData),

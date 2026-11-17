@@ -16,6 +16,8 @@ public final class DevicesModel: ObservableObject {
     @Published public private(set) var hasNext = false
     @Published public private(set) var message = ""
     @Published public var error = ""
+    /// A short confirmation (the wake signal was sent).
+    @Published public var notice = ""
     @Published public private(set) var serverPresence: [UInt32: SaasPresence] = [:]
     /// The deploy link just created (shown once).
     @Published public var deployLink: DeployLinkCreated?
@@ -30,6 +32,65 @@ public final class DevicesModel: ObservableObject {
     static let pageSize = 50
 
     init(app: AppModel) { self.app = app }
+
+    // MARK: Device administration (docs/mixel-remote-device-admin-api.md)
+
+    /// The administration commands. The engine has none yet, so this answers "not available" until the
+    /// engine's `remote_admin_*` commands are wired (`EngineDeviceAdminService`).
+    public var admin: DeviceAdminService = UnavailableDeviceAdminService()
+    /// What the administration API reports per device (note, unattended access, version, last seen), by Remote ID.
+    @Published public private(set) var adminRows: [UInt32: AdminDevice] = [:]
+    /// Only the devices with an older version than the newest one in the company ("Update" filter).
+    @Published public var updateOnly = false
+
+    public var adminAvailable: Bool { admin.available }
+    public func adminRow(_ device: Device) -> AdminDevice? { adminRows[device.connectionId] }
+    public func note(of device: Device) -> String { adminRow(device)?.note?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" }
+    /// Versions are known: show the Version column and the "Update" filter.
+    public var versionsKnown: Bool { adminRows.values.contains { $0.appVersion != nil } }
+    /// The newest app version any of the company's devices reports.
+    public var newestVersion: String? { AppVersion.newest(adminRows.values.map(\.appVersion)) }
+    public func isOutdated(_ device: Device) -> Bool { AppVersion.isOlder(adminRow(device)?.appVersion, than: newestVersion) }
+    public var outdatedCount: Int { allDevices.filter(isOutdated).count }
+    /// Whether this person may change the device (the server decides; `nil` answers fall back to the role).
+    public func canAdmin(_ device: Device) -> Bool { adminRow(device)?.canAdmin ?? manages }
+
+    func loadAdmin() async {
+        guard admin.available, app.signedIn else { adminRows = [:]; return }
+        do {
+            // `company` of the API is the ISM client id, not the tenant id; every row is matched by its 9-digit ID anyway.
+            let rows = try await admin.devices(company: nil, search: nil)
+            adminRows = Dictionary(rows.map { ($0.connectionId, $0) }, uniquingKeysWith: { first, _ in first })
+        } catch DeviceAdminError.unavailable {
+            adminRows = [:]
+        } catch {
+            adminRows = [:]
+            self.error = AppModel.message(error)
+        }
+    }
+
+    public func setNote(_ device: Device, to note: String) async -> Bool {
+        let text = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.count <= 500 else { error = L("A note has at most 500 characters."); return false }
+        return await adminChange { _ = try await self.admin.setNote(device: device.device, note: text.isEmpty ? nil : text) }
+    }
+
+    /// Switches unattended access for the device: `on`, or `default` (the company policy decides).
+    public func setUnattended(_ device: Device, on: Bool) async -> Bool {
+        await adminChange { _ = try await self.admin.setUnattended(device: device.device, setting: on ? "on" : "off") }
+    }
+
+    private func adminChange(_ work: @escaping () async throws -> Void) async -> Bool {
+        error = ""
+        do {
+            try await work()
+            await load(page: 0)
+            return true
+        } catch {
+            self.error = AppModel.message(error)
+            return false
+        }
+    }
 
     public var tenant: Tenant? { app.company.tenant }
     public var role: String { app.company.overview?.role ?? tenant?.role ?? "" }
@@ -69,6 +130,8 @@ public final class DevicesModel: ObservableObject {
         message = ""
         error = ""
         deployLink = nil
+        adminRows = [:]
+        updateOnly = false
     }
 
     public func load(page wanted: Int = 0) async {
@@ -100,10 +163,103 @@ public final class DevicesModel: ObservableObject {
                 hasNext = result.next != nil
                 if cursors.count <= wanted + 1 { cursors.append(result.next) } else { cursors[wanted + 1] = result.next }
             }
+            await loadAdmin()
             message = devices.isEmpty ? "" : L("Page %d · %d devices.", page + 1, devices.count)
             await checkPresence(force: true)
         } catch {
             self.error = AppModel.message(error)
+        }
+    }
+
+    // MARK: The console's views, filters and groups
+
+    /// The view chosen in the sidebar.
+    public enum ListView: Hashable, Sendable {
+        case all, online, favorites, recent
+        case group(String)
+    }
+
+    @Published public var listView: ListView = .all
+    /// Quick filters above the table.
+    @Published public var onlineOnly = false
+    @Published public var systems: Set<String> = []
+    /// Typed into the console's search field: name, ID or group (filters at once, no round trip).
+    @Published public var filterText = ""
+
+    /// A group of rows in the table.
+    public struct RowGroup: Identifiable, Equatable {
+        public var id: String
+        public var name: String
+        public var devices: [Device]
+        public var online: Int
+    }
+
+    /// Online, or this computer.
+    public func isOnline(_ device: Device) -> Bool {
+        let presence = presence(of: device)
+        return presence == .online || presence == .this
+    }
+
+    public func devices(in view: ListView) -> [Device] {
+        let all = allDevices
+        switch view {
+        case .all: return all
+        case .online: return all.filter { isOnline($0) || app.workspace.state(of: $0.connectionId) != nil }
+        case .favorites: return all.filter { favorites.contains($0.device) }
+        case .recent: return recent.compactMap { id in all.first { $0.device == id } }
+        case .group(let name): return all.filter { ($0.groupName ?? "") == name }
+        }
+    }
+
+    /// The groups of the listed devices, by name ("" = no group), with their counts.
+    public var groupNames: [String] {
+        Array(Set(allDevices.compactMap(\.groupName))).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    public var filtered: [Device] {
+        let text = filterText.trimmingCharacters(in: .whitespaces).lowercased()
+        let digits = text.filter(\.isASCIIDigit)
+        return devices(in: listView).filter { device in
+            if onlineOnly, !isOnline(device), app.workspace.state(of: device.connectionId) == nil { return false }
+            if !systems.isEmpty, !systems.contains(device.os.lowercased()) { return false }
+            if updateOnly, !isOutdated(device) { return false }
+            if text.isEmpty { return true }
+            if note(of: device).lowercased().contains(text) { return true }
+            if device.name.lowercased().contains(text) { return true }
+            if let group = device.groupName, group.lowercased().contains(text) { return true }
+            if !digits.isEmpty, digits.count == text.filter({ !$0.isWhitespace }).count, String(device.connectionId).contains(digits) { return true }
+            return false
+        }
+    }
+
+    /// Rank for "sorted by status": in session, online, checking, unknown, offline.
+    func statusRank(_ device: Device) -> Int {
+        if app.workspace.state(of: device.connectionId) != nil { return 0 }
+        switch presence(of: device) {
+        case .online: return 1
+        case .this: return 2
+        case .checking: return 3
+        case .unknown: return 4
+        case .offline: return 5
+        }
+    }
+
+    /// The table: grouped by group (no group last), each sorted by status, then name.
+    public var rowGroups: [RowGroup] {
+        let rows = filtered
+        let byGroup = Dictionary(grouping: rows) { $0.groupName ?? "" }
+        let names = byGroup.keys.sorted { a, b in
+            if a.isEmpty != b.isEmpty { return !a.isEmpty }
+            return a.localizedStandardCompare(b) == .orderedAscending
+        }
+        return names.map { name in
+            let sorted = (byGroup[name] ?? []).sorted { a, b in
+                let ra = statusRank(a), rb = statusRank(b)
+                if ra != rb { return ra < rb }
+                return a.name.localizedStandardCompare(b.name) == .orderedAscending
+            }
+            let title = name.isEmpty ? (names.count == 1 ? L("All devices") : L("No group")) : name
+            return RowGroup(id: name.isEmpty ? "-" : name, name: title, devices: sorted, online: sorted.filter(isOnline).count)
         }
     }
 
@@ -148,6 +304,19 @@ public final class DevicesModel: ObservableObject {
         (companyAll + devices).first { $0.connectionId == connection }?.name ?? Format.remoteId(connection)
     }
 
+    /// The device's operating system ("" when it is not in the list).
+    public func os(of connection: UInt32) -> String {
+        (companyAll + devices).first { $0.connectionId == connection }?.os ?? ""
+    }
+
+    /// Every listed device: all of the company's devices, or this page of the directory.
+    public var allDevices: [Device] { tenant != nil ? companyAll : devices }
+
+    /// The time the connection service last saw the device ("" when unknown).
+    public func lastSeenDate(_ device: Device) -> Date? {
+        serverPresence[device.connectionId]?.lastSeen.flatMap(Format.parseDate)
+    }
+
     /// One of the company's devices (any page).
     func isCompanyHost(_ connection: UInt32) -> Bool { companyAll.contains { $0.connectionId == connection } }
 
@@ -162,11 +331,13 @@ public final class DevicesModel: ObservableObject {
 
     /// Asks the connection service which listed devices are online (every 15 s while connected).
     func checkPresence(force: Bool = false) async {
-        guard app.remote.connected, !devices.isEmpty, force || Date().timeIntervalSince(lastPresence) > 15 else { return }
+        guard app.remote.connected, !allDevices.isEmpty, force || Date().timeIntervalSince(lastPresence) > 15 else { return }
         lastPresence = Date()
-        let hosts = devices.map(\.connectionId).filter { $0 != app.remote.host }
+        let hosts = allDevices.map(\.connectionId).filter { $0 != app.remote.host }
         guard !hosts.isEmpty else { return }
-        try? await app.engine.perform("remote_presence", ["hosts": Array(hosts.prefix(100))])
+        for start in stride(from: 0, to: min(hosts.count, 2000), by: 100) {
+            try? await app.engine.perform("remote_presence", ["hosts": Array(hosts[start..<min(hosts.count, start + 100)])])
+        }
         // The answer arrives in remote_status.online; the next read shows it.
         try? await Task.sleep(nanoseconds: 600_000_000)
         checked.formUnion(hosts)
@@ -220,7 +391,10 @@ public final class DevicesModel: ObservableObject {
     /// Why Connect is not possible ("" when it is).
     public func connectBlocked(_ device: Device) -> String {
         if device.connectionId == app.remote.host { return L("This is the computer you are using.") }
-        if app.remote.inSession { return L("End the current session first.") }
+        if app.remote.inSession {
+            // Several sessions at once need the engine's multi-session support (one today).
+            return L("End the current session first.")
+        }
         if presence(of: device) == .offline { return L("This device is offline.") }
         if app.busy { return L("Please wait…") }
         if !app.signedIn { return L("Sign in first.") }
@@ -262,6 +436,10 @@ public final class DevicesModel: ObservableObject {
     }
 
     public func rename(_ device: Device, to name: String) async -> Bool {
+        if admin.available {
+            let expected = adminRow(device)?.updatedAt
+            return await adminChange { _ = try await self.admin.rename(device: device.device, name: name, expectedUpdate: expected) }
+        }
         guard let tenant else { return false }
         return await change { _ = try await self.app.engine.run("saas_rename_device", ["tenant": tenant.tenantId, "device": device.device, "name": name], as: String.self) }
     }
@@ -272,6 +450,9 @@ public final class DevicesModel: ObservableObject {
     }
 
     public func remove(_ device: Device) async -> Bool {
+        if admin.available {
+            return await adminChange { try await self.admin.remove(device: device.device, confirmConnectionId: device.connectionId) }
+        }
         guard let tenant else { return false }
         return await change { try await self.app.engine.perform("saas_remove_device", ["tenant": tenant.tenantId, "device": device.device]) }
     }
@@ -332,6 +513,7 @@ public final class DevicesModel: ObservableObject {
         app.act {
             try await self.app.engine.perform("wake_on_lan", ["macs": macs])
             self.message = L("Wake signal sent to %@. It shows Online when it has started.", device.name)
+            self.notice = self.message
         }
     }
 

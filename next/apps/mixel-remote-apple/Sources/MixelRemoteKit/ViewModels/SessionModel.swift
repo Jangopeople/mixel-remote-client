@@ -30,6 +30,8 @@ public final class SessionModel: ObservableObject {
     @Published public private(set) var recordingPending = false
     @Published public private(set) var meetingNotice = ""
     @Published public var dismissedMeetingRoom = ""
+    /// When the running recording started (for "REC 00:42" over the picture).
+    @Published public private(set) var recordingSince: Date?
 
     /// Where the session picture is decoded: on this device (VideoToolbox) or by the engine.
     public enum Decoding: String, Sendable { case none, device, engine }
@@ -38,6 +40,8 @@ public final class SessionModel: ObservableObject {
     public var useHardwareDecoding = true
 
     var lastRequestUnattended = false
+    /// The request this app sent carried a one-time password (the engine may not report it itself yet).
+    var lastRequestPassword = false
     private var video: Task<Void, Never>?
     private var tools: Task<Void, Never>?
     private var viewingSession: String?
@@ -82,6 +86,8 @@ public final class SessionModel: ObservableObject {
         } else if viewingSession != nil {
             clear()
         }
+        let recording = next.recording?.running == true
+        if recording, recordingSince == nil { recordingSince = Date() } else if !recording, recordingSince != nil { recordingSince = nil }
         if next.phase == "active" || ["incoming", "outgoing"].contains(next.phase) { startTools() }
         else { tools?.cancel(); tools = nil }
         if !next.inSession { stoppedConsent = nil }
@@ -93,11 +99,13 @@ public final class SessionModel: ObservableObject {
         video?.cancel()
         video = nil
         viewingSession = nil
+        let had = frame != nil
         frame = nil
         size = .zero
         fps = 0
         decoding = .none
         inputQueue.removeAll()
+        if had { app.workspace.refresh() }
     }
 
     private func startVideo(_ session: String) {
@@ -154,7 +162,9 @@ public final class SessionModel: ObservableObject {
     }
 
     private func show(_ decoded: VideoFrame) {
+        let first = frame == nil
         frame = decoded.image
+        if first { app.workspace.refresh() }
         let next = CGSize(width: decoded.width, height: decoded.height)
         if next != size { size = next }
         let now = Date()

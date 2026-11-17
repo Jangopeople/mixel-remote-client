@@ -39,6 +39,9 @@ final class ScreenshotTests: XCTestCase {
         let viewApp = await Fixtures.app(viewEngine)
         viewApp.session.showSample(VideoFrame.sample(width: 1280, height: 800))
         await viewApp.session.readTools()
+        let consoleEngine = MockEngine(); Fixtures.company(consoleEngine)
+        let consoleApp = await Fixtures.app(consoleEngine)
+        await consoleApp.devices.load()
         let hostedEngine = MockEngine(); Fixtures.hostedSession(hostedEngine)
         let hostedApp = await Fixtures.app(hostedEngine)
         // Mixel team: rollout, sign-in screen waiting for Apple, an update ready to install.
@@ -67,6 +70,11 @@ final class ScreenshotTests: XCTestCase {
         list.append(("mac-account-signed-out", wide, AnyView(AccountView(app: outApp))))
         list.append(("mac-account-second-step", wide, AnyView(AccountView(app: mfaApp))))
         list.append(("mac-remote-control", wide, AnyView(RootView(app: app))))
+        consoleApp.section = .devices
+        list.append(("mac-console-devices", wide, AnyView(RootView(app: consoleApp))))
+        viewApp.workspace.refresh()
+        viewApp.workspace.selected = .session(731_204_118)
+        list.append(("mac-console-session-tab", wide, AnyView(RootView(app: viewApp))))
         list.append(("mac-devices", wide, AnyView(DevicesView(app: app))))
         list.append(("mac-account-company", CGSize(width: 1080, height: 1100), AnyView(AccountView(app: app))))
         list.append(("mac-settings", CGSize(width: 760, height: 1100), AnyView(SettingsView(app: app))))
