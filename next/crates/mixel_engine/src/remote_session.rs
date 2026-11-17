@@ -730,6 +730,7 @@ impl RemoteSession {
         drop(inner);
         status.input_access = !crate::service_config::controller_only()
             && session_platform::input_access();
+        crate::update_gate::observe_phase(&status.phase);
         status
     }
     pub async fn connect(&self, auth: AccountAuth, identity: Arc<IdentityState>) -> Result<(), String> {

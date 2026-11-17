@@ -43,6 +43,7 @@ pub mod agent;
 pub mod ai_assistant;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod self_update;
+pub mod update_gate;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod autostart;
 #[cfg(target_os = "macos")]

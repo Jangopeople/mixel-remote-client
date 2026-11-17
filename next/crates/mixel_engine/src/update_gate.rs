@@ -189,6 +189,7 @@ pub mod marker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::SystemTime;
 
     fn secs(n: u64) -> Duration {
         Duration::from_secs(n)
