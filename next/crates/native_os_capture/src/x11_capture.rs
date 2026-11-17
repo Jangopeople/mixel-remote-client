@@ -9,7 +9,11 @@ use x11rb::{
 use zeroize::Zeroizing;
 
 const MAX_PIXELS: usize = 16_777_216;
-const FRAME_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 20);
+/// The shortest time between two screen copies: 30 pictures per second, the same as the Mac and
+/// Windows capture paths and the most the encoder accepts. The encoder's bit rate and the sender's
+/// pacing lower the real rate on a slow line or a busy CPU.
+const CAPTURE_FPS: u64 = 30;
+const FRAME_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / CAPTURE_FPS);
 
 pub struct Display {
     pub screen: usize,
@@ -236,4 +240,14 @@ impl X11Capture {
 
 fn native(_: impl std::error::Error) -> CaptureError {
     CaptureError::Native("The local X11 capture connection closed or rejected the request".into())
+}
+
+#[cfg(test)]
+mod rate_tests {
+    use super::*;
+    #[test]
+    fn the_capture_rate_is_thirty_pictures_per_second_like_mac_and_windows() {
+        assert_eq!(CAPTURE_FPS, 30);
+        assert!(FRAME_INTERVAL >= Duration::from_millis(33) && FRAME_INTERVAL <= Duration::from_micros(33_400));
+    }
 }
