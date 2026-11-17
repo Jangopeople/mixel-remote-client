@@ -16,8 +16,8 @@ HOSTS=${*:-ha hb hc hd}
 for H in $HOSTS; do
   read VM _ DN LBL <<< "$(spec $H)"
   case $ACT in
-    start) ( cd $L; LOG=/root/lab-host-$H.log WAIT=15 TAILN=2 VMENV="LOOP=1 KEEP=1 MOTION=${MOTION:-1} DNUM=$DN" ./vm.sh $VM host.sh $H $LBL mixel-remote-qa-$BIN ${MINUTES:-600} >/dev/null 2>&1 & ) ;;
-    restart) ( cd $L; LOG=/root/lab-host-$H.log WAIT=15 TAILN=2 VMENV="LOOP=1 KEEP=1 REUSE=1 MOTION=${MOTION:-1} DNUM=$DN" ./vm.sh $VM host.sh $H $LBL mixel-remote-qa-$BIN ${MINUTES:-600} >/dev/null 2>&1 & ) ;;
+    start) ( cd $L; LOG=/root/lab-host-$H.log WAIT=15 TAILN=2 VMENV="LOOP=1 KEEP=1 UNATT=${UNATT:-1} MOTION=${MOTION:-1} DNUM=$DN" ./vm.sh $VM host.sh $H $LBL mixel-remote-qa-$BIN ${MINUTES:-600} >/dev/null 2>&1 & ) ;;
+    restart) ( cd $L; LOG=/root/lab-host-$H.log WAIT=15 TAILN=2 VMENV="LOOP=1 KEEP=1 REUSE=1 UNATT=${UNATT:-1} MOTION=${MOTION:-1} DNUM=$DN" ./vm.sh $VM host.sh $H $LBL mixel-remote-qa-$BIN ${MINUTES:-600} >/dev/null 2>&1 & ) ;;
     status) echo "== $H (VM $VM)"; $L/vx.sh $VM "echo ID \$(cat /root/lab-host-$H/work/host-id.txt 2>/dev/null); tail -n ${N:-4} /root/lab-host-$H.log | cut -c1-220" ;;
     cmd) $L/vx.sh $VM "echo '$CMD' >> /root/lab-host-$H/work/cmd" ; shift ;;
     stop) $L/vx.sh $VM "touch /root/lab-host-$H/stop /root/lab-host-$H/work/stop" ;;

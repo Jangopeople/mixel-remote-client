@@ -193,6 +193,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         for line in text.split(separator: "\n") {
             let words = line.split(separator: " ").map(String.init)
             guard words.count >= 2, let id = UInt32(words[1].replacingOccurrences(of: "-", with: "")) else { continue }
+            // `chat <id> <text>` / `chats <id>`: the chat of that session through the engine (windows in the background are never "focused").
+            if words[0] == "chat" || words[0] == "chats", let stable = model.sessionModels[id]?.sessionId {
+                let text = words.dropFirst(2).joined(separator: " ")
+                Task { @MainActor in
+                    var out = ""
+                    if words[0] == "chat" {
+                        do { try await model.engine.perform("remote_chat_send", ["session": stable, "text": text]); out = "chat sent: ok" } catch { out = "chat send failed: \(AppModel.message(error))" }
+                    } else {
+                        let list: [ChatMessage]? = (try? await model.engine.run("remote_chat_messages", ["session": stable], as: [ChatMessage]?.self)) ?? nil
+                        out = "chats: \((list ?? []).map { ($0.mine ? "me: " : "them: ") + $0.text })"
+                    }
+                    let data = (String(Int(Date().timeIntervalSince1970 * 1000)) + " " + out + "\n").data(using: .utf8)!
+                    if let handle = FileHandle(forWritingAtPath: "/tmp/labmac/cmd.log") { handle.seekToEndOfFile(); handle.write(data); try? handle.close() } else { FileManager.default.createFile(atPath: "/tmp/labmac/cmd.log", contents: data) }
+                }
+                continue
+            }
             switch words[0] {
             case "connect": model.workspace.connect(peer: id, name: nil, os: "", unattended: !words.contains("attended"), checkPhone: false)
             case "end": model.workspace.end(id)

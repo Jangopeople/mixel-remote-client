@@ -765,6 +765,11 @@ async fn hosted_loop(check: &mut Check<'_>, suffix: &str, mine: u64, tenant: &st
     let _ = std::fs::write(check.folder.join("host-id.txt"), mine.to_string());
     check.print("WAITING (persistent host): sessions are accepted one after the other until the file stop appears");
     let stop = check.folder.join("stop");
+    // `MIXEL_QA_HOST_UNATTENDED=1`: unattended access is set up at every start (company setting, grant, this computer's switch),
+    // like a real host that keeps it across restarts.
+    if std::env::var("MIXEL_QA_HOST_UNATTENDED").is_ok_and(|value| value == "1") {
+        let _ = std::fs::write(check.folder.join("cmd"), "admin on\ngrant on\nunattended on\n");
+    }
     let mut control = true;
     let mut sessions = 0u32;
     while !stop.exists() {

@@ -8,6 +8,7 @@
 #            Commands: write lines to <dir>/cmd ("unattended on", "unattended off", "control off|on", "copy <text>").
 #   KEEP=1   the device stays registered when the host stops; REUSE=1 starts again in the same directory with the
 #            saved identity (a new QA session file is still needed to sign in): host restart checks.
+#   UNATT=1  unattended access is set up at every start (admin setting, grant, switch).
 #   DNUM=98  X display number (several hosts on one VM need different ones); MOTION=1 the picture moves a lot.
 exec > "${LOG:-/root/lab-host.log}" 2>&1
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -26,6 +27,6 @@ if [ "${MOTION:-0}" = 1 ]; then
 else
   (while [ ! -e $P/stop ]; do for c in "#2a6f97" "#97592a" "#2a9751"; do DISPLAY=:$D xsetroot -solid "$c" 2>/dev/null; sleep 1; done; done) &
 fi
-cd $P && DISPLAY=:$D HOME=$P/home XDG_RUNTIME_DIR=$P/home XDG_SESSION_TYPE=x11 MIXEL_QA_HOST_LOOP=${LOOP:-0} MIXEL_QA_HOST_KEEP=${KEEP:-0} dbus-run-session -- bash -c "printf throwaway | gnome-keyring-daemon --unlock --components=secrets >/dev/null 2>&1; sleep 1; timeout $((MIN*60)) $P/mixel-remote --qa-live $P/session.json $RUN $P/work host x" 2>&1 | grep --line-buffered -v "^$\|Gtk-WARNING"
+cd $P && DISPLAY=:$D HOME=$P/home XDG_RUNTIME_DIR=$P/home XDG_SESSION_TYPE=x11 MIXEL_QA_HOST_LOOP=${LOOP:-0} MIXEL_QA_HOST_KEEP=${KEEP:-0} MIXEL_QA_HOST_UNATTENDED=${UNATT:-0} dbus-run-session -- bash -c "printf throwaway | gnome-keyring-daemon --unlock --components=secrets >/dev/null 2>&1; sleep 1; timeout $((MIN*60)) $P/mixel-remote --qa-live $P/session.json $RUN $P/work host x" 2>&1 | grep --line-buffered -v "^$\|Gtk-WARNING"
 rm -f $P/session.json; kill $XV 2>/dev/null
 touch $P/stop; echo LN_DONE
