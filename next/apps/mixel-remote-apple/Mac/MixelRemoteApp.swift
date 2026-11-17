@@ -58,7 +58,6 @@ struct MainWindow: View {
     var body: some View {
         RootView(app: app)
             .ignoresSafeArea(.container, edges: .top)
-            .tint(Theme.brand)
             .onAppear {
                 app.workspace.openWindow = { peer in openWindow(id: "session", value: peer) }
                 app.workspace.focusWindow = { peer in NotificationCenter.default.post(name: .mixelFocusSessionWindow, object: peer) }
@@ -139,6 +138,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        // Lab only: MIXEL_QA_APPEARANCE=dark|light shows the app in that appearance without touching the system setting.
+        if let mode = ProcessInfo.processInfo.environment["MIXEL_QA_APPEARANCE"] {
+            NSApp.appearance = NSAppearance(named: mode == "dark" ? .darkAqua : .aqua)
+        }
+        #endif
         model?.start()
     }
 
