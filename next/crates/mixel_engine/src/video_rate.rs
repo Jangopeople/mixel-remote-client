@@ -11,9 +11,12 @@
 //! - the delivered rate, and
 //! - the bytes still on their way.
 //!
-//! Rules: when the queue delay passes [`QUEUE_HIGH`] the limit is cut to 80 % of what was
-//! delivered; when it is low the limit climbs (fast until the first cut, then 8 % a second) but never
-//! above 2.5 times what was delivered. [`RateControl::backlogged`] says when more than the line
+//! The limit is the pace in the units of `video_pacing` (the encoder aims at 60 % of it). Rules: when
+//! the queue delay stays above [`QUEUE_HIGH`] for two reports in a row (one late report is a
+//! retransmission on the lossy control channel, not a queue) the limit is cut to 1.4 times what was
+//! delivered (the encoder then sends 85 % of it) and never by more than 15 % at once; when the queue is
+//! low the limit climbs (fast until the first cut, then 8 % a second) but never above 2.5 times what
+//! was delivered. [`RateControl::backlogged`] says when more than the line
 //! can hold is on its way: the host then encodes nothing new (the screen is captured again when
 //! it goes on, so the newest picture wins and the delay cannot grow). Without reports (an older
 //! technician) nothing changes. When they stop for [`SILENCE`] the limit decays.
@@ -118,6 +121,9 @@ pub struct RateControl {
     last_report: Option<Instant>,
     last_change: Instant,
     last_cut: Option<Instant>,
+    /// The first report of the current run above [`QUEUE_HIGH`], and how many there were.
+    high: Option<(Instant, u32)>,
+    queue: Duration,
     base: Duration,
 }
 
@@ -134,12 +140,18 @@ impl RateControl {
             last_report: None,
             last_change: now,
             last_cut: None,
+            high: None,
+            queue: Duration::ZERO,
             base: Duration::ZERO,
         }
     }
     /// What the line carries at the moment, bytes a second.
     pub fn limit(&self) -> f64 {
         self.limit
+    }
+    /// The queue delay of the last report.
+    pub fn queue_delay(&self) -> Duration {
+        self.queue
     }
     /// The smallest round trip of the last 30 seconds.
     pub fn base_delay(&self) -> Duration {
@@ -163,7 +175,7 @@ impl RateControl {
         if now.saturating_duration_since(last) >= SILENCE {
             return false;
         }
-        let window = self.limit * (self.base + QUEUE_ALLOWED).as_secs_f64() + 20_000.0;
+        let window = self.limit * 0.6 * (self.base + QUEUE_ALLOWED).as_secs_f64() + 20_000.0;
         self.in_flight() as f64 > window
     }
     /// Call regularly: decays the limit when the reports stopped.
@@ -189,15 +201,24 @@ impl RateControl {
         }
         self.base = self.delays.iter().map(|(_, d)| *d).min().unwrap_or(delay);
         let queue = delay.saturating_sub(self.base);
+        self.queue = queue;
         if !report.interval.is_zero() && report.bytes > 0 {
             let rate = f64::from(report.bytes) / report.interval.as_secs_f64();
             self.delivered = if self.delivered == 0.0 { rate } else { self.delivered * 0.7 + rate * 0.3 };
         }
         let dt = now.saturating_duration_since(self.last_change).as_secs_f64().min(1.0);
-        if queue > QUEUE_HIGH {
+        self.high = if queue > QUEUE_HIGH {
+            Some(self.high.map_or((now, 1), |(since, count)| (since, count + 1)))
+        } else {
+            None
+        };
+        let persistent = self
+            .high
+            .is_some_and(|(since, count)| count >= 2 && now.saturating_duration_since(since) >= Duration::from_millis(300));
+        if persistent {
             if self.last_cut.is_none_or(|cut| now.saturating_duration_since(cut) >= Duration::from_millis(500)) {
-                let carried = if self.delivered > 0.0 { self.delivered.min(self.limit) } else { self.limit };
-                self.limit = (carried * 0.8).max(MIN_LIMIT);
+                let by_delivery = if self.delivered > 0.0 { self.delivered * 1.4 } else { self.limit };
+                self.limit = by_delivery.min(self.limit * 0.85).max(MIN_LIMIT);
                 self.slow_start = false;
                 self.last_cut = Some(now);
                 self.last_change = now;
@@ -285,6 +306,43 @@ mod tests {
     }
 
     #[test]
+    fn one_late_report_does_not_cut_the_limit_but_a_lasting_queue_does() {
+        let t0 = Instant::now();
+        let mut control = RateControl::new(t0);
+        let mut at = t0;
+        let mut seq = 0u16;
+        // A steady line: round trip 100 ms, 20 reports.
+        for _ in 0..20 {
+            seq += 1;
+            control.sent(at, seq, 12_000);
+            at += Duration::from_millis(200);
+            control.report(at, Report { seq, age: Duration::from_millis(100), interval: Duration::from_millis(200), bytes: 12_000 });
+        }
+        let steady = control.limit();
+        // One report held up by a retransmission (500 ms late), the next ones normal again.
+        seq += 1;
+        control.sent(at, seq, 12_000);
+        at += Duration::from_millis(700);
+        control.report(at, Report { seq, age: Duration::from_millis(100), interval: Duration::from_millis(200), bytes: 12_000 });
+        assert!(control.limit() >= steady, "one late report: {} vs {steady}", control.limit());
+        for _ in 0..3 {
+            seq += 1;
+            control.sent(at, seq, 12_000);
+            at += Duration::from_millis(200);
+            control.report(at, Report { seq, age: Duration::from_millis(100), interval: Duration::from_millis(200), bytes: 12_000 });
+        }
+        assert!(control.limit() >= steady);
+        // Now every report is 400 ms late and only 60 kB/s arrive: a queue.
+        for _ in 0..6 {
+            seq += 1;
+            control.sent(at, seq, 12_000);
+            at += Duration::from_millis(600);
+            control.report(at, Report { seq, age: Duration::from_millis(100), interval: Duration::from_millis(600), bytes: 36_000 });
+        }
+        assert!(control.limit() < steady * 0.9, "a lasting queue cuts: {} vs {steady}", control.limit());
+    }
+
+    #[test]
     fn report_round_trips_on_the_wire() {
         let report = Report { seq: 65_000, age: Duration::from_millis(40), interval: Duration::from_millis(200), bytes: 123_456 };
         assert_eq!(Report::decode(&report.encode()), Some(report));
@@ -299,7 +357,7 @@ mod tests {
         let mut control = RateControl::new(t0);
         let mut seq = 0u16;
         let (limit, worst, delivered) = simulate(&mut line, &mut control, t0, 0.0, 120.0, &mut seq);
-        assert!(limit < 900_000.0, "the limit {limit} follows the line (500 kB/s), not the ceiling");
+        assert!(limit * 0.6 < 625_000.0, "the encoder rate {} follows the line (500 kB/s), not the ceiling", limit * 0.6);
         assert!(worst < 1.2, "the queue never held more than {worst} s");
         assert!(delivered > 150_000.0, "pictures keep flowing: {delivered} B/s");
     }

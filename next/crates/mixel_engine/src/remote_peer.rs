@@ -1258,7 +1258,7 @@ async fn host_media(
             pacer.set_cap(rate.limit());
             #[cfg(feature = "qa-session")]
             if qa_rate_logged.elapsed() >= Duration::from_secs(5) {
-                eprintln!("QA line limit {:.0} kB/s, in flight {} kB, base delay {} ms, pace {:.0} kB/s", rate.limit() / 1000.0, rate.in_flight() / 1000, rate.base_delay().as_millis(), pacer.rate() / 1000.0);
+                eprintln!("QA line limit {:.0} kB/s, in flight {} kB, base delay {} ms, queue {} ms, pace {:.0} kB/s", rate.limit() / 1000.0, rate.in_flight() / 1000, rate.base_delay().as_millis(), rate.queue_delay().as_millis(), pacer.rate() / 1000.0);
                 qa_rate_logged = Instant::now();
             }
             if rate.backlogged(Instant::now()) {
