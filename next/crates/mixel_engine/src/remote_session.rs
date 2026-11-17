@@ -656,13 +656,16 @@ impl RemoteSession {
     async fn slot_id(&self, key: Uuid) -> Option<Uuid> {
         self.0.lock().await.slots.stable(key)
     }
-    pub async fn require_chat_session(&self, session: Uuid) -> Result<(), String> {
+    /// Checks that chat may be used and returns the id the chat hub knows: the broker's current id of
+    /// the session (a technician session is addressed by its stable id, the hub is keyed by the
+    /// id the transport was set up with).
+    pub async fn require_chat_session(&self, session: Uuid) -> Result<Uuid, String> {
         let inner = self.0.lock().await;
         if let Some(slot) = inner.slots.find(session) {
             if inner.cancel.load(Ordering::Acquire) || slot.view.phase != "active" || slot.session_cancel.as_ref().is_none_or(|flag| flag.load(Ordering::Acquire)) {
                 return Err("Chat requires a current, accepted session".into());
             }
-            return Ok(());
+            return Ok(slot.view.session.unwrap_or(session));
         }
         if inner.status.session != Some(session)
             || inner.status.phase != "active"
@@ -674,7 +677,7 @@ impl RemoteSession {
         {
             return Err("Chat requires a current, accepted session".into());
         }
-        Ok(())
+        Ok(session)
     }
 
     pub fn file_hub(&self) -> crate::remote_files::FileHub {
@@ -5204,6 +5207,34 @@ mod per_session_recovery_tests {
         assert!(json["sessions"][1]["password_session"].is_null());
         assert_eq!(json["sessions"][1]["unattended_session"], true);
         assert!(json["sessions"][0].get("password_flag").is_none(), "internal fields stay internal");
+    }
+
+    #[tokio::test]
+    async fn chat_is_looked_up_with_the_id_the_hub_was_set_up_with() {
+        let (remote, stable, transports) = open(&[300_000_041, 300_000_042]).await;
+        {
+            let mut inner = remote.0.lock().await;
+            for id in &stable {
+                inner.slots.find_mut(*id).unwrap().view.phase = "active".into();
+            }
+        }
+        // The apps name a session by its stable id; the hub is keyed by the transport's session id.
+        assert_eq!(remote.require_chat_session(stable[0]).await.unwrap(), transports[0]);
+        assert_eq!(remote.require_chat_session(transports[1]).await.unwrap(), transports[1]);
+        let hub = remote.chat_hub();
+        let (output, mut pending) = mpsc::channel(4);
+        let _attachment = hub.attach(transports[0], Arc::new(|| true), output).unwrap();
+        let key = remote.require_chat_session(stable[0]).await.unwrap();
+        let sending = tokio::spawn({
+            let hub = hub.clone();
+            async move { hub.send(key, "hello".into()).await }
+        });
+        let delivered = tokio::time::timeout(Duration::from_secs(2), pending.recv()).await.expect("the message reaches the session's chat");
+        assert!(delivered.is_some());
+        drop(delivered);
+        let _ = sending.await;
+        assert!(hub.send(stable[0], "wrong key".into()).await.is_err(), "the stable id is not a hub key");
+        assert!(remote.require_chat_session(Uuid::new_v4()).await.is_err());
     }
 
     #[test]

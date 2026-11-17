@@ -484,13 +484,13 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
         "remote_draw" => out(remote.draw(args.get("session")?, args.get("message")?).await?),
         "remote_chat_messages" => {
             let session: Uuid = args.get("session")?;
-            remote.require_chat_session(session).await?;
-            out(remote.chat_hub().messages(session))
+            let hub_session = remote.require_chat_session(session).await?;
+            out(remote.chat_hub().messages(hub_session))
         }
         "remote_chat_send" => {
             let session: Uuid = args.get("session")?;
-            remote.require_chat_session(session).await?;
-            out(remote.chat_hub().send(session, args.get("text")?).await?)
+            let hub_session = remote.require_chat_session(session).await?;
+            out(remote.chat_hub().send(hub_session, args.get("text")?).await?)
         }
         "remote_file_status" => out(remote.file_scope(args.get("consent")?).await?.view()?),
         // The app shows its own Open panel first (only while `remote_file_status` says connected).

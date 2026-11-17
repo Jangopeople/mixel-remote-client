@@ -30,7 +30,7 @@ pub struct ChatMessage {
     pub text: String,
 }
 
-struct Outgoing {
+pub(crate) struct Outgoing {
     text: String,
     expires: Instant,
     reply: oneshot::Sender<Result<(), String>>,
@@ -51,7 +51,7 @@ static NEXT_OWNER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::
 pub struct ChatHub(Arc<Mutex<Vec<Conversation>>>);
 
 impl ChatHub {
-    fn attach(
+    pub(crate) fn attach(
         &self,
         session: Uuid,
         live: Authorization,
@@ -123,7 +123,7 @@ impl ChatHub {
     }
 }
 
-struct Attachment {
+pub(crate) struct Attachment {
     hub: ChatHub,
     session: Uuid,
     owner: u64,
