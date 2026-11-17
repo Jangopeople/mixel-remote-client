@@ -5,6 +5,8 @@ use crate::{
     app::{App, State},
     format,
     i18n::{self, t, tf},
+    logic::Section,
+    workspace::{OpenIn, WhenReady},
 };
 use adw::prelude::*;
 use std::{cell::RefCell, rc::Rc};
@@ -19,9 +21,10 @@ pub struct SettingsPage {
 
 fn group(title: &str, description: &str) -> adw::PreferencesGroup {
     let group = adw::PreferencesGroup::new();
-    group.set_title(title);
+    // Titles and descriptions are Pango markup: "&" must be escaped.
+    group.set_title(&gtk::glib::markup_escape_text(title));
     if !description.is_empty() {
-        group.set_description(Some(description));
+        group.set_description(Some(&gtk::glib::markup_escape_text(description)));
     }
     group
 }
@@ -66,7 +69,7 @@ impl SettingsPage {
         let settings = &state.settings;
         let key = format!(
             "{:?}",
-            ((&settings.startup, &settings.printing, &settings.update, settings.update_checked, settings.removal_pending, settings.screen_access), (&settings.signin, &settings.error, &settings.notice, &settings.removal_result, i18n::choice(), state.signed_in()), (state.staff(), state.remote.host, state.remote.input_access, &state.enrollment.current, &state.enrollment.error, state.enrollment.working), (&state.enrollment.companies, &state.linux))
+            ((&settings.startup, &settings.printing, &settings.update, settings.update_checked, settings.removal_pending, settings.screen_access), (&settings.signin, &settings.error, &settings.notice, &settings.removal_result, i18n::choice(), state.signed_in()), (state.staff(), state.remote.host, state.remote.input_access, &state.enrollment.current, &state.enrollment.error, state.enrollment.working), (&state.enrollment.companies, &state.linux), (state.workspace.when_ready, state.workspace.open_in, app.store.borrow().settings.appearance.clone(), state.remote.unattended_enabled))
         );
         if *self.key.borrow() == key {
             return;
@@ -81,7 +84,56 @@ impl SettingsPage {
         let settings = &state.settings;
         let startup = settings.startup.clone().unwrap_or_default();
 
+        // Sessions: what happens when a session is ready, and where sessions open.
+        let sessions = group(&t("Sessions"), "");
+        let when_names = [t("Stay in Devices and show “Open”"), t("Switch to the session")];
+        let when_model = gtk::StringList::new(&when_names.iter().map(String::as_str).collect::<Vec<_>>());
+        let when = adw::ComboRow::builder().title(t("When a session is ready")).model(&when_model).build();
+        when.set_selected(if state.workspace.when_ready == WhenReady::Open { 1 } else { 0 });
+        let a = app.clone();
+        when.connect_selected_notify(move |row| {
+            if !a.rendering.get() {
+                a.set_when_ready(if row.selected() == 1 { WhenReady::Open } else { WhenReady::Stay });
+            }
+        });
+        sessions.add(&when);
+        let in_names = [t("A tab in this window"), t("Its own window")];
+        let in_model = gtk::StringList::new(&in_names.iter().map(String::as_str).collect::<Vec<_>>());
+        let open_in = adw::ComboRow::builder().title(t("Open sessions in")).model(&in_model).build();
+        open_in.set_selected(if state.workspace.open_in == OpenIn::Window { 1 } else { 0 });
+        let a = app.clone();
+        open_in.connect_selected_notify(move |row| {
+            if !a.rendering.get() {
+                a.set_open_in(if row.selected() == 1 { OpenIn::Window } else { OpenIn::Tab });
+            }
+        });
+        sessions.add(&open_in);
+        body.append(&sessions);
+
+        // Unattended access of this computer (the details are on its own page).
+        let unattended = group(&t("Unattended access"), &t("Lets technicians of your company connect to this computer without someone confirming each time."));
+        let row = adw::ActionRow::builder().title(t("This computer")).subtitle(if state.remote.unattended_enabled { t("On") } else { t("Off") }).build();
+        let a = app.clone();
+        let open = button(&t("Configure…"), move || a.edit(|state| state.section = Section::Computer));
+        open.set_valign(gtk::Align::Center);
+        row.add_suffix(&open);
+        unattended.add(&row);
+        body.append(&unattended);
+
         let general = group(&t("General"), "");
+        let appearance_names = [t("System"), t("Light"), t("Dark")];
+        let appearance_ids = ["system", "light", "dark"];
+        let appearance_model = gtk::StringList::new(&appearance_names.iter().map(String::as_str).collect::<Vec<_>>());
+        let appearance = adw::ComboRow::builder().title(t("Appearance")).model(&appearance_model).build();
+        let current = app.store.borrow().settings.appearance.clone();
+        appearance.set_selected(appearance_ids.iter().position(|id| *id == current).unwrap_or(0) as u32);
+        let a = app.clone();
+        appearance.connect_selected_notify(move |row| {
+            if !a.rendering.get() {
+                a.set_appearance(appearance_ids[row.selected() as usize % appearance_ids.len()]);
+            }
+        });
+        general.add(&appearance);
         let a = app.clone();
         general.add(&switch_row(app, &t("Stay signed in on this computer"), "", startup.remembered, state.signed_in(), move |on| a.set_stay_signed_in(on)));
         let a = app.clone();
@@ -102,7 +154,6 @@ impl SettingsPage {
             gtk::glib::idle_add_local_once(move || a.set_language(value));
         });
         general.add(&language);
-        body.append(&general);
 
         let this = group(&t("This computer"), "");
         this.add(&info_row(&t("Connection ID"), &format::remote_id(state.remote.host.or(state.enrollment.current.as_ref().map(|current| current.connection_id)))));
@@ -148,6 +199,7 @@ impl SettingsPage {
         }
 
         let updates = group(&t("Updates"), "");
+
         updates.add(&info_row(&t("Version"), &app.info.version));
         let row = adw::ActionRow::builder().title(t("Check for updates")).build();
         if let Some(update) = &settings.update {
@@ -165,6 +217,24 @@ impl SettingsPage {
         row.add_suffix(&check);
         updates.add(&row);
         body.append(&updates);
+        body.append(&general);
+
+        // Account and security.
+        let security = group(&t("Account & security"), "");
+        let account_row = adw::ActionRow::builder().title(t("Account")).subtitle(t("Profile, company, members and second step")).build();
+        let a = app.clone();
+        let open_account = button(&t("Open account"), move || a.edit(|state| state.section = Section::Account));
+        open_account.set_valign(gtk::Align::Center);
+        account_row.add_suffix(&open_account);
+        security.add(&account_row);
+        let sign_out_row = adw::ActionRow::builder().title(t("Sign out")).subtitle(t("This computer goes offline and is no longer reachable until you sign in again.")).build();
+        let a = app.clone();
+        let sign_out = destructive(&t("Sign out"), move || a.sign_out());
+        sign_out.set_valign(gtk::Align::Center);
+        sign_out.set_sensitive(state.signed_in());
+        sign_out_row.add_suffix(&sign_out);
+        security.add(&sign_out_row);
+        body.append(&security);
 
         let about = group(&t("About and legal"), "");
         let block = vbox(10);

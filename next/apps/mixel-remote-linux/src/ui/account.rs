@@ -205,7 +205,7 @@ impl AccountPage {
     }
 }
 
-fn verify(app: &Rc<App>, code: &gtk::Entry) {
+pub(super) fn verify(app: &Rc<App>, code: &gtk::Entry) {
     let Some(factor) = app.state.borrow().account.factors.first().map(|factor| factor.id.clone()) else { return };
     let text = code.text().to_string();
     code.set_text("");
