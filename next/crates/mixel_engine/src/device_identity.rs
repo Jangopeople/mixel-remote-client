@@ -315,7 +315,7 @@ impl IdentityState {
     }
 }
 impl IdentityState {
-    #[cfg(all(test, any(target_os = "linux", target_os = "windows")))]
+    #[cfg(all(test, any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     pub fn test_identity(key: SigningKey) -> Self {
         Self(Mutex::new(Some(key)))
     }

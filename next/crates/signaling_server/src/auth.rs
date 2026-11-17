@@ -932,7 +932,21 @@ impl IsmAuth {
         if !(100_000_000..=999_999_999).contains(&connection) {
             return Err(AuthError);
         }
-        if self.authenticate(token).await?.is_personal()
+        let personal = self.authenticate(token).await?.is_personal();
+        self.peer_key_scoped(token, personal, connection).await
+    }
+    /// Fast path when the caller has already authenticated the bearer token's
+    /// workspace scope (`personal` vs company/staff).
+    pub async fn peer_key_scoped(
+        &self,
+        token: &str,
+        personal: bool,
+        connection: u32,
+    ) -> Result<ed25519_dalek::VerifyingKey, AuthError> {
+        if !(100_000_000..=999_999_999).contains(&connection) {
+            return Err(AuthError);
+        }
+        if personal
             && let Some(row) = self
                 .personal_devices(token)
                 .await?

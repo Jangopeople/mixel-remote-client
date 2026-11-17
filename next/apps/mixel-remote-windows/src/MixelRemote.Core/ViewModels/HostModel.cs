@@ -21,7 +21,6 @@ public sealed class HostModel : Observable
     private List<CaptureTarget> unattendedSources = [];
     private string unattendedSource = "";
     private bool unattendedConfirm, unattendedControl;
-    private bool restored;
 
     internal HostModel(AppModel app) => this.app = app;
 
@@ -136,6 +135,7 @@ public sealed class HostModel : Observable
         UnattendedSources = [.. targets.Where(target => target.FullDisplay)];
         UnattendedSource = UnattendedSources.FirstOrDefault()?.Id ?? "";
         UnattendedConfirm = false;
+        UnattendedControl = Remote.InputAccess;
         if (UnattendedSources.Count == 0) throw new EngineFailure("An available display is required before enabling unattended sharing.");
     });
 
@@ -154,35 +154,44 @@ public sealed class HostModel : Observable
 
     public Task DisableUnattended()
     {
-        app.Preferences.Set(UnattendedKey, null);
+        app.Preferences.Set(UnattendedKey, "off");
         return app.Act(() => app.Engine.PerformAsync("remote_unattended", ("source", null), ("control", false)));
     }
 
-    /// <summary>After a start with a remembered sign-in, unattended sharing comes back as the owner left it.</summary>
+    /// <summary>Whenever this computer is ready, unattended sharing comes back as the owner left it.</summary>
     internal async Task RestoreUnattended()
     {
-        if (restored || Remote.UnattendedEnabled || Remote.UnattendedPending is not null) return;
-        if (app.Preferences.Get(UnattendedKey) is not { } saved) return;
-        string? chosen;
-        bool control;
+        if (Remote.UnattendedEnabled || Remote.UnattendedPending is not null) return;
+        var saved = app.Preferences.Get(UnattendedKey);
+        if (saved == "off") return;
+        string? chosen = null;
+        var control = true;
+        if (saved is not null)
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(saved);
+                chosen = document.RootElement.GetProperty("source").GetString();
+                control = document.RootElement.GetProperty("control").GetBoolean();
+            }
+            catch (Exception failure) when (failure is JsonException or KeyNotFoundException or InvalidOperationException)
+            {
+                return;
+            }
+        }
         try
         {
-            using var document = JsonDocument.Parse(saved);
-            chosen = document.RootElement.GetProperty("source").GetString();
-            control = document.RootElement.GetProperty("control").GetBoolean();
-        }
-        catch (Exception failure) when (failure is JsonException or KeyNotFoundException or InvalidOperationException)
-        {
-            return;
-        }
-        try
-        {
-            var startup = await app.Engine.RunAsync<StartupSettings>("startup_settings");
-            if (!startup.Restored && !startup.LaunchedAtStartup) return;
             var targets = await app.Engine.RunAsync<List<CaptureTarget>>("capture_targets");
-            if (!targets.Any(target => target.Id == chosen && target.FullDisplay)) return;
-            restored = true;
-            await app.Engine.PerformAsync("remote_unattended", ("source", chosen), ("control", control));
+            if (Remote.UnattendedEnabled || Remote.UnattendedPending is not null) return;
+            var matched = targets.FirstOrDefault(target => target.Id == chosen && target.FullDisplay)
+                ?? targets.FirstOrDefault(target => target.FullDisplay);
+            if (matched is null) return;
+            var allowControl = (control || saved is null) && Remote.InputAccess;
+            if (saved is null)
+            {
+                app.Preferences.Set(UnattendedKey, JsonSerializer.Serialize(new Dictionary<string, object> { ["source"] = matched.Id, ["control"] = allowControl }));
+            }
+            await app.Engine.PerformAsync("remote_unattended", ("source", matched.Id), ("control", allowControl));
         }
         catch (EngineFailure) { }
     }

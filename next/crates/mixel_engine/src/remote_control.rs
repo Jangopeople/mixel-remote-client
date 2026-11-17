@@ -599,6 +599,7 @@ impl ControlPipe {
     /// the clipboard request in progress must handle; everything else is dealt with here: video
     /// idle, sound, print jobs, input acknowledgments (early or late) and late clipboard answers.
     fn take_host_record(&mut self, plain: &[u8]) -> Result<bool, String> {
+        self.last_video_idle = Instant::now();
         if let Some(rest) = plain.strip_prefix(crate::host_print::RECORD) {
             self.clipboard.accept_print(rest);
         } else if let Some(frame) = plain.strip_prefix(core_protocol::sound::RECORD) {
@@ -741,6 +742,9 @@ impl ControlPipe {
         self.clipboard.check_deadline()?;
         if self.host {
             self.pump_print(channel).await?;
+            if self.last_idle_sent.elapsed() >= Duration::from_secs(2) {
+                self.video_idle(channel).await?;
+            }
         } else {
             self.send_drawings(channel).await?;
         }
@@ -769,145 +773,147 @@ impl ControlPipe {
             }
             return self.receive_host_records(channel, Duration::from_millis(1)).await;
         }
-        let mut record =
-            match tokio::time::timeout(Duration::from_millis(1), received_record(channel)).await {
+        for turn in 0..32 {
+            let wait = if turn == 0 {
+                Duration::from_millis(1)
+            } else {
+                Duration::from_micros(100)
+            };
+            let mut record = match tokio::time::timeout(wait, received_record(channel)).await {
                 Ok(value) => value?,
                 Err(_) => return Ok(()),
             };
-        if config.stopped() {
-            return Err("The session stopped before control processing".into());
-        }
-        let mut plain = Zeroizing::new(
-            self.crypto
-                .open(&record)
-                .map_err(|error| error.to_string())?,
-        );
-        // Drawings: in view-only sessions too, and many at a time (they arrive while the
-        // technician draws, and a view-only host polls only between pictures).
-        let mut drawn = 0;
-        while let Some(rest) = plain.strip_prefix(core_protocol::annotation::RECORD) {
-            if let Some(owner) = &self.drawings_in {
-                owner.receive(rest);
+            if config.stopped() {
+                return Err("The session stopped before control processing".into());
             }
-            drawn += 1;
-            if drawn >= 64 {
-                return Ok(());
+            let mut plain = Zeroizing::new(
+                self.crypto
+                    .open(&record)
+                    .map_err(|error| error.to_string())?,
+            );
+            // Drawings: in view-only sessions too, and many at a time (they arrive while the
+            // technician draws, and a view-only host polls only between pictures).
+            let mut drawn = 0;
+            while let Some(rest) = plain.strip_prefix(core_protocol::annotation::RECORD) {
+                if let Some(owner) = &self.drawings_in {
+                    owner.receive(rest);
+                }
+                drawn += 1;
+                if drawn >= 64 {
+                    return Ok(());
+                }
+                record = match tokio::time::timeout(Duration::from_micros(200), received_record(channel)).await {
+                    Ok(value) => value?,
+                    Err(_) => return Ok(()),
+                };
+                plain = Zeroizing::new(self.crypto.open(&record).map_err(|error| error.to_string())?);
             }
-            record = match tokio::time::timeout(Duration::from_micros(200), received_record(channel)).await {
-                Ok(value) => value?,
-                Err(_) => return Ok(()),
-            };
-            plain = Zeroizing::new(self.crypto.open(&record).map_err(|error| error.to_string())?);
-        }
-        if plain.starts_with(core_protocol::clipboard::PREFIX) {
-            return self
-                .clipboard
-                .host(config, &mut self.crypto, channel, &plain)
-                .await;
-        }
-        if let Some(rest) = plain.strip_prefix(HOST_ACTION) {
-            let name = std::str::from_utf8(rest).map_err(|_| "Invalid host action")?.to_owned();
-            let offered = name.split(':').next().unwrap_or(&name).to_owned();
-            let switch = [crate::host_actions::WOL, crate::host_actions::SOUND, crate::session_guard::MEET, crate::session_guard::POINTER, crate::session_guard::PRIVACY, crate::session_guard::BLOCK, crate::session_guard::LOCK_AT_END];
-            if !self.allowed || name.len() > 40 || !self.actions.contains(&offered) || (name.contains(':') && !switch.contains(&offered.as_str())) {
-                return Err("Invalid host action".into());
+            if plain.starts_with(core_protocol::clipboard::PREFIX) {
+                return self
+                    .clipboard
+                    .host(config, &mut self.crypto, channel, &plain)
+                    .await;
             }
-            if offered == crate::session_guard::MEET {
-                let room = name.strip_prefix("meet:").unwrap_or_default();
-                if !crate::session_guard::meeting_room(room) {
+            if let Some(rest) = plain.strip_prefix(HOST_ACTION) {
+                let name = std::str::from_utf8(rest).map_err(|_| "Invalid host action")?.to_owned();
+                let offered = name.split(':').next().unwrap_or(&name).to_owned();
+                let switch = [crate::host_actions::WOL, crate::host_actions::SOUND, crate::session_guard::MEET, crate::session_guard::POINTER, crate::session_guard::PRIVACY, crate::session_guard::BLOCK, crate::session_guard::LOCK_AT_END];
+                if !self.allowed || name.len() > 40 || !self.actions.contains(&offered) || (name.contains(':') && !switch.contains(&offered.as_str())) {
                     return Err("Invalid host action".into());
                 }
-                config.state.set_meeting_offer(config.generation, config.session, room.to_owned()).await;
-                return Ok(());
-            }
-            if offered == crate::session_guard::POINTER {
-                // `pointer:x,y` (0..65535 on the shared picture) or `pointer:off`.
-                let point = name.strip_prefix("pointer:").and_then(|rest| rest.split_once(',')).and_then(|(x, y)| Some((x.parse::<u16>().ok()?, y.parse::<u16>().ok()?)));
-                crate::session_guard::pointer(point, self.shown_display, self.displays.len());
-                return Ok(());
-            }
-            if offered == crate::host_actions::SOUND {
-                self.sound_on = name != "sound:off";
-                return Ok(());
-            }
-            // Run off the media loop; a restart takes the session down on its own.
-            tokio::task::spawn_blocking(move || {
-                if let Err(error) = crate::host_actions::run(&name) {
-                    eprintln!("host action {name}: {error}");
+                if offered == crate::session_guard::MEET {
+                    let room = name.strip_prefix("meet:").unwrap_or_default();
+                    if !crate::session_guard::meeting_room(room) {
+                        return Err("Invalid host action".into());
+                    }
+                    config.state.set_meeting_offer(config.generation, config.session, room.to_owned()).await;
+                    continue;
                 }
-            });
-            return Ok(());
-        }
-        if let Some(rest) = plain.strip_prefix(DISPLAY_SELECT) {
-            return match rest {
-                [index] if self.allowed && usize::from(*index) < self.displays.len() => {
-                    self.pending_display = Some(usize::from(*index));
-                    self.shown_display = usize::from(*index);
+                if offered == crate::session_guard::POINTER {
+                    // `pointer:x,y` (0..65535 on the shared picture) or `pointer:off`.
+                    let point = name.strip_prefix("pointer:").and_then(|rest| rest.split_once(',')).and_then(|(x, y)| Some((x.parse::<u16>().ok()?, y.parse::<u16>().ok()?)));
+                    crate::session_guard::pointer(point, self.shown_display, self.displays.len());
+                    continue;
+                }
+                if offered == crate::host_actions::SOUND {
+                    self.sound_on = name != "sound:off";
+                    continue;
+                }
+                // Run off the media loop; a restart takes the session down on its own.
+                tokio::task::spawn_blocking(move || {
+                    if let Err(error) = crate::host_actions::run(&name) {
+                        eprintln!("host action {name}: {error}");
+                    }
+                });
+                continue;
+            }
+            if let Some(rest) = plain.strip_prefix(DISPLAY_SELECT) {
+                match rest {
+                    [index] if self.allowed && usize::from(*index) < self.displays.len() => {
+                        self.pending_display = Some(usize::from(*index));
+                        self.shown_display = usize::from(*index);
+                        self.force_keyframe = true;
+                        continue;
+                    }
+                    _ => return Err("Invalid display selection".into()),
+                }
+            }
+            if plain.as_slice() == b"mixel-video-keyframe-v1" {
+                if self
+                    .last_keyframe_request
+                    .is_none_or(|last| last.elapsed() >= KEYFRAME_REQUEST_SPACING)
+                {
                     self.force_keyframe = true;
-                    Ok(())
+                    self.last_keyframe_request = Some(Instant::now());
                 }
-                _ => Err("Invalid display selection".into()),
-            };
-        }
-        if plain.as_slice() == b"mixel-video-keyframe-v1" {
-            // The technician's side asks at most once a second. Waiting a full second here as
-            // well dropped every request that came a few milliseconds early, so a technician
-            // without a picture got one only every other second; half a second still bounds a
-            // flood of requests.
-            if self
-                .last_keyframe_request
-                .is_none_or(|last| last.elapsed() >= KEYFRAME_REQUEST_SPACING)
-            {
-                self.force_keyframe = true;
-                self.last_keyframe_request = Some(Instant::now());
+                continue;
             }
-            return Ok(());
-        }
-        if !self.allowed {
-            return Err("Remote input is not authorized".into());
-        }
-        let (router, token) = self
-            .router
-            .as_mut()
-            .ok_or("The input grant is unavailable")?;
-        use native_os_capture::input::{InjectionError, InputError};
-        let result = router.dispatch_verified(
-            token,
-            &self.crypto.verified_session(),
-            &core_protocol::input::decode(&plain).map_err(|error| error.to_string())?,
-        );
-        // Lab builds only: an input this computer did not apply, and why.
-        #[cfg(feature = "qa-session")]
-        if let Err(error) = &result {
-            eprintln!("QA input not applied: {error}");
-        }
-        let response = match result {
-            Ok(()) => b"mixel-input-posted-v1".as_slice(),
-            Err(InputError::Injection(InjectionError::Unsupported)) if self.report_unsupported_input => {
-                b"mixel-input-unsupported-v1".as_slice()
+            if !self.allowed {
+                return Err("Remote input is not authorized".into());
             }
-            // A screen this host cannot drive (for example a Windows security prompt for a
-            // normal app) drops the event but keeps the session.
-            Err(InputError::Injection(InjectionError::Native(_))) => {
-                if self.report_unsupported_input {
+            let (router, token) = self
+                .router
+                .as_mut()
+                .ok_or("The input grant is unavailable")?;
+            use native_os_capture::input::{InjectionError, InputError};
+            let result = router.dispatch_verified(
+                token,
+                &self.crypto.verified_session(),
+                &core_protocol::input::decode(&plain).map_err(|error| error.to_string())?,
+            );
+            // Lab builds only: an input this computer did not apply, and why.
+            #[cfg(feature = "qa-session")]
+            if let Err(error) = &result {
+                eprintln!("QA input not applied: {error}");
+            }
+            let response = match result {
+                Ok(()) => b"mixel-input-posted-v1".as_slice(),
+                Err(InputError::Injection(InjectionError::Unsupported)) if self.report_unsupported_input => {
                     b"mixel-input-unsupported-v1".as_slice()
-                } else {
-                    b"mixel-input-posted-v1".as_slice()
                 }
-            }
-            Err(error) => return Err(error.to_string()),
-        };
-        let ack = self.crypto.seal(response).map_err(|error| error.to_string())?;
-        #[cfg(feature = "qa-session")]
-        let handed_over = Instant::now();
-        let sent = tokio::time::timeout(Duration::from_secs(2), channel.send(ack.as_slice().into()))
-            .await
-            .map_err(|_| "Input acknowledgment timed out")?
-            .map_err(|_| "Input acknowledgment failed".to_owned());
-        // Lab builds only: when each input was answered, and an answer the channel took long to accept.
-        #[cfg(feature = "qa-session")]
-        eprintln!("QA input answered at {} ms (clock {}){}", crate::remote_control::qa_clock(), qa_wall_clock(), if handed_over.elapsed() > Duration::from_millis(200) { format!(" (the channel took {} ms to accept the answer)", handed_over.elapsed().as_millis()) } else { String::new() });
-        sent
+                // A screen this host cannot drive (for example a Windows security prompt for a
+                // normal app) drops the event but keeps the session.
+                Err(InputError::Injection(InjectionError::Native(_))) => {
+                    if self.report_unsupported_input {
+                        b"mixel-input-unsupported-v1".as_slice()
+                    } else {
+                        b"mixel-input-posted-v1".as_slice()
+                    }
+                }
+                Err(error) => return Err(error.to_string()),
+            };
+            let ack = self.crypto.seal(response).map_err(|error| error.to_string())?;
+            #[cfg(feature = "qa-session")]
+            let handed_over = Instant::now();
+            tokio::time::timeout(Duration::from_secs(2), channel.send(ack.as_slice().into()))
+                .await
+                .map_err(|_| "Input acknowledgment timed out")?
+                .map_err(|_| "Input acknowledgment failed".to_owned())?;
+            // Lab builds only: when each input was answered, and an answer the channel took long to accept.
+            #[cfg(feature = "qa-session")]
+            eprintln!("QA input answered at {} ms (clock {}){}", crate::remote_control::qa_clock(), qa_wall_clock(), if handed_over.elapsed() > Duration::from_millis(200) { format!(" (the channel took {} ms to accept the answer)", handed_over.elapsed().as_millis()) } else { String::new() });
+        }
+        Ok(())
     }
 }
 pub async fn received_record(

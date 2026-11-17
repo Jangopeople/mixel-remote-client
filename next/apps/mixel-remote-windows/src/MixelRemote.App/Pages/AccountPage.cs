@@ -64,8 +64,8 @@ internal sealed class AccountPage : PageView
                 if (factor?.FriendlyName is { } name) items.Add(Ui.Text(L("Enter the code from the authenticator entry “%@”.", name)));
                 var code = Keep("code", () =>
                 {
-                    var box = new TextBox { PlaceholderText = "123456", MaxWidth = 200, HorizontalAlignment = HorizontalAlignment.Left, FontSize = 20, InputScope = new Microsoft.UI.Xaml.Input.InputScope { Names = { new Microsoft.UI.Xaml.Input.InputScopeName(Microsoft.UI.Xaml.Input.InputScopeNameValue.Number) } } };
-                    box.TextChanged += (_, _) => App.VerificationCode = box.Text;
+                    // Typing must not write the view model: that rebuilds the page and drops the caret after every digit.
+                    var box = new TextBox { PlaceholderText = "123456", MaxWidth = 200, HorizontalAlignment = HorizontalAlignment.Left, FontSize = 20, IsSpellCheckEnabled = false, IsTextPredictionEnabled = false };
                     box.KeyDown += (sender, key) =>
                     {
                         if (key.Key == Windows.System.VirtualKey.Enter && App.Account.Factors.FirstOrDefault() is { } first) _ = Verify(box, first.Id);
@@ -123,11 +123,12 @@ internal sealed class AccountPage : PageView
         Rebuild();
     }
 
-    private async Task Verify(TextBox box, string factor)
+    private Task Verify(TextBox box, string factor)
     {
-        App.VerificationCode = box.Text;
-        box.Text = "";
-        await App.Verify(factor);
+        var typed = box.Text;
+        var digits = typed.Count(char.IsAsciiDigit);
+        if (digits is 6 or 8) box.Text = "";
+        return App.Verify(factor, typed);
     }
 
     private string Kind(Account profile)

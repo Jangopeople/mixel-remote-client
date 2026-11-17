@@ -114,7 +114,7 @@ public final class SessionModel: ObservableObject {
                     let data = try await self.app.engine.nextVideo(session: session, compressed: decoder != nil)
                     if Task.isCancelled || self.viewingSession != session { return }
                     if data.isEmpty {
-                        try? await Task.sleep(nanoseconds: 16_000_000)
+                        try? await Task.sleep(nanoseconds: 4_000_000)
                         continue
                     }
                     if VideoFrame.isCompressed(data) {
@@ -170,17 +170,29 @@ public final class SessionModel: ObservableObject {
 
     // MARK: Input
 
-    /// Queues an input event; pointer moves replace the previous unsent move.
+    /// Queues an input event; pointer moves and wheel scrolls coalesce with the previous unsent one.
     public func send(_ event: InputEvent) {
         guard let session else { return }
         if case .releaseAll = event {} else if !controllable { return }
-        if case .pointer = event, case .pointer = inputQueue.last { inputQueue[inputQueue.count - 1] = event }
-        else if inputQueue.count >= 64 {
-            inputQueue.removeAll()
-            error = L("Input delivery stalled; the session has been stopped")
-            Task { try? await app.engine.perform("remote_close", ["session": session]) }
-            return
-        } else { inputQueue.append(event) }
+        if case .pointer = event, case .pointer = inputQueue.last {
+            inputQueue[inputQueue.count - 1] = event
+        } else if case let .wheel(h1, v1) = event, case let .wheel(h0, v0) = inputQueue.last {
+            let h = Int16(clamping: Int(h0) + Int(h1))
+            let v = Int16(clamping: Int(v0) + Int(v1))
+            inputQueue[inputQueue.count - 1] = .wheel(horizontal: max(-120, min(120, h)), vertical: max(-120, min(120, v)))
+        } else if inputQueue.count >= 64 {
+            if let idx = inputQueue.firstIndex(where: { if case .pointer = $0 { return true }; if case .wheel = $0 { return true }; return false }) {
+                inputQueue.remove(at: idx)
+                inputQueue.append(event)
+            } else {
+                inputQueue.removeAll()
+                error = L("Input delivery stalled; the session has been stopped")
+                Task { try? await app.engine.perform("remote_close", ["session": session]) }
+                return
+            }
+        } else {
+            inputQueue.append(event)
+        }
         flush(session)
     }
 
@@ -196,6 +208,8 @@ public final class SessionModel: ObservableObject {
                     let posted = try await app.engine.send(input: event, session: session)
                     if !posted, case .text = event { error = L("The remote computer could not type this text.") }
                 } catch {
+                    if case .pointer = event { continue }
+                    if case .wheel = event { continue }
                     inputQueue.removeAll()
                     self.error = AppModel.message(error)
                     return

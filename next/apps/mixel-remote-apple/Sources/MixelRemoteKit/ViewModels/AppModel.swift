@@ -87,8 +87,8 @@ public final class AppModel: ObservableObject {
             while !Task.isCancelled {
                 guard let self else { return }
                 await self.tick()
-                let fast = self.remote.inSession || ["connecting", "outgoing"].contains(self.remote.phase) || self.account.signingIn
-                try? await Task.sleep(nanoseconds: fast ? 250_000_000 : 1_000_000_000)
+                let fast = self.remote.inSession || ["connecting", "outgoing", "negotiating", "deciding"].contains(self.remote.phase) || self.account.signingIn
+                try? await Task.sleep(nanoseconds: fast ? 80_000_000 : 1_000_000_000)
             }
         }
     }
@@ -251,14 +251,14 @@ public final class AppModel: ObservableObject {
 
     /// Connects to a Remote ID: brings this computer online first if needed; for a phone with Mixel
     /// Quick Support it claims the phone and waits until it is online, so one click is enough.
-    public func connect(to id: UInt32, password: String? = nil, unattended: Bool = false) {
+    public func connect(to id: UInt32, password: String? = nil, unattended: Bool = false, checkPhone: Bool = true) {
         guard !busy else { progress = L("Please wait a moment, the previous step is still running."); return }
         busy = true
         error = ""
         Task {
             defer { busy = false }
             do {
-                try await connectSteps(id: id, password: password, unattended: unattended)
+                try await connectSteps(id: id, password: password, unattended: unattended, checkPhone: checkPhone)
             } catch {
                 self.error = Self.message(error)
                 progress = ""
@@ -270,15 +270,16 @@ public final class AppModel: ObservableObject {
     private func status() async -> RemoteStatus? { try? await engine.run("remote_status") }
 
     private func wait(seconds: Int, until: (RemoteStatus) -> Bool, ask: (() async -> Void)? = nil) async -> Bool {
-        for round in 0..<seconds {
+        let steps = max(1, seconds * 10)
+        for round in 0..<steps {
             if let state = await status(), until(state) { return true }
-            if let ask, round % 2 == 0 { await ask() }
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            if let ask, round % 20 == 0 { await ask() }
+            try? await Task.sleep(nanoseconds: 100_000_000)
         }
         return false
     }
 
-    func connectSteps(id: UInt32, password: String?, unattended: Bool) async throws {
+    func connectSteps(id: UInt32, password: String?, unattended: Bool, checkPhone: Bool = true) async throws {
         wentOffline = false
         if let state = await status(), state.disconnected {
             progress = L("Getting this computer ready…")
@@ -287,15 +288,19 @@ public final class AppModel: ObservableObject {
                 throw EngineFailure("This computer could not go online. Check the internet connection and try again.")
             }
         }
-        progress = L("Looking up this ID…")
         let phone: Bool
-        do {
-            phone = try await engine.run("quick_phone_claim", ["host": id])
-        } catch let failure as EngineFailure {
-            if failure.message.range(of: "MFA|staff|42501", options: .regularExpression) != nil {
-                throw EngineFailure("Connecting to phones needs your Mixel team account with the second confirmation step. Sign in again under Account, then choose Connect.")
+        if checkPhone {
+            progress = L("Looking up this ID…")
+            do {
+                phone = try await engine.run("quick_phone_claim", ["host": id])
+            } catch let failure as EngineFailure {
+                if failure.message.range(of: "MFA|staff|42501", options: .regularExpression) != nil {
+                    throw EngineFailure("Connecting to phones needs your Mixel team account with the second confirmation step. Sign in again under Account, then choose Connect.")
+                }
+                throw EngineFailure("This phone could not be prepared for the session: \(failure.message)")
             }
-            throw EngineFailure("This phone could not be prepared for the session: \(failure.message)")
+        } else {
+            phone = false
         }
         if phone {
             progress = L("Phone found. Waiting for it to come online… On an iPhone the person taps “Start sharing my screen”.")

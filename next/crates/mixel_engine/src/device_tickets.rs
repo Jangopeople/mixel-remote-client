@@ -98,13 +98,13 @@ async fn issue_scoped(
         startup
     };
     let response = request.send().await.map_err(|error| {
-        if credential.is_none() && crate::remote_recovery::retryable_request(&error) {
+        if crate::remote_recovery::retryable_request(&error) {
             Failure::network("The device identity authority is temporarily unavailable")
         } else {
             "The device identity authority is unavailable".into()
         }
     })?;
-    if credential.is_none() && matches!(response.status().as_u16(), 502..=504) {
+    if matches!(response.status().as_u16(), 502..=504) {
         return Err(Failure::network(
             "The device identity authority is temporarily unavailable",
         ));

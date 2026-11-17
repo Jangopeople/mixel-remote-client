@@ -45,13 +45,7 @@ impl RemotePage {
         let password = password("");
         password.update_property(&[gtk::accessible::Property::Label(&t("One-time password, if provided"))]);
         let unattended = gtk::CheckButton::with_label(&t("Connect without confirmation (unattended access)"));
-        let pw = password.clone();
-        unattended.connect_toggled(move |check| {
-            if check.is_active() {
-                pw.set_text("");
-            }
-            pw.set_sensitive(!check.is_active());
-        });
+        unattended.set_active(true);
         let phone = id_entry(&t("ID from the phone"));
         let page = Self { widget, body, key: RefCell::new(String::new()), partner, password, unattended, phone, setup: SetupInputs::new(app) };
         let a = app.clone();
@@ -163,7 +157,7 @@ impl RemotePage {
             let code_label = monospace(code.code());
             code_label.add_css_class("title-2");
             content.append(&field(&t("One-time password"), &code_label));
-            content.append(&caption(&t("Share this password with your technician. It lasts five minutes and allows one request.")));
+            content.append(&caption(&t("Share this password with your technician. It stays on until you turn it off, and it works every time you connect.")));
         }
         let actions = hbox(8);
         if remote.disconnected() {
@@ -465,7 +459,7 @@ fn unattended_card(app: &Rc<App>, state: &State) -> gtk::Box {
         content.append(&check(&t("I confirm that approved users may see this display without asking."), host.unattended_confirm, move |on| a.host_edit(|host| host.unattended_confirm = on)));
         let a = app.clone();
         let enable = primary(&t("Enable unattended sharing"), move || a.enable_unattended());
-        enable.set_sensitive(!state.busy && host.unattended_confirm && !remote.code_required);
+        enable.set_sensitive(!state.busy && host.unattended_confirm);
         enable.set_halign(gtk::Align::Start);
         content.append(&enable);
         if state.linux.wayland {

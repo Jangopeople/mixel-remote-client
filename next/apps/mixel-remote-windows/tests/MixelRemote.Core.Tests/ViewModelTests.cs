@@ -214,6 +214,20 @@ public sealed class ViewModelTests
     }
 
     [TestMethod]
+    public async Task Connect_from_devices_stays_in_devices_and_skips_phone_claim()
+    {
+        var (engine, app) = await Company();
+        app.Section = AppSection.Devices;
+        var device = app.Devices.Devices.First(item => item.ConnectionId != DemoFixtures.ThisComputer && app.Devices.PresenceOf(item) == Presence.Online);
+        await app.Devices.Connect(device);
+        Assert.AreEqual(AppSection.Devices, app.Section);
+        Assert.AreEqual(0, engine.CallsOf("quick_phone_claim").Count);
+        var request = engine.CallsOf("remote_request").Single().Object;
+        Assert.AreEqual(device.ConnectionId, request["host"]!.GetValue<uint>());
+        Assert.IsTrue(request["unattended"]!.GetValue<bool>());
+    }
+
+    [TestMethod]
     public async Task Phone_claim_without_the_second_step_explains_what_to_do()
     {
         var (engine, app) = await Company();
@@ -389,6 +403,7 @@ public sealed class ViewModelTests
     public async Task Unattended_sharing_needs_a_confirmed_display_and_is_remembered()
     {
         var preferences = new MemoryPreferences();
+        preferences.Set("mixel.remote.unattended.v1", "off");
         var engine = new MockEngine();
         DemoFixtures.Company(engine);
         var app = await DemoFixtures.App(engine, preferences);
@@ -398,13 +413,13 @@ public sealed class ViewModelTests
         app.Host.UnattendedConfirm = true;
         app.Host.UnattendedControl = true;
         await app.Host.EnableUnattended();
-        var call = engine.CallsOf("remote_unattended").Single().Object;
+        var call = engine.CallsOf("remote_unattended")[^1].Object;
         StringAssert.StartsWith(call["source"]!.GetValue<string>(), "dxgi:");
         Assert.IsTrue(call["control"]!.GetValue<bool>());
         StringAssert.Contains(preferences.Get("mixel.remote.unattended.v1"), "dxgi:");
         await app.Host.DisableUnattended();
-        Assert.IsNull(preferences.Get("mixel.remote.unattended.v1"));
-        Assert.IsNull(engine.CallsOf("remote_unattended")[1].Object["source"]);
+        Assert.AreEqual("off", preferences.Get("mixel.remote.unattended.v1"));
+        Assert.IsNull(engine.CallsOf("remote_unattended")[^1].Object["source"]);
     }
 
     [TestMethod]
@@ -447,7 +462,7 @@ public sealed class ViewModelTests
         await app.LastAction;
         Assert.AreEqual("anna@muster.test", engine.CallsOf("saas_delete_my_account").Single().Object["email"]!.GetValue<string>());
         Assert.AreEqual(1, engine.CallsOf("account_cancel").Count);
-        Assert.IsFalse(engine.CallsOf("set_stay_signed_in").Single().Object["enabled"]!.GetValue<bool>());
+        Assert.IsFalse(engine.CallsOf("set_stay_signed_in")[^1].Object["enabled"]!.GetValue<bool>());
     }
 
     [TestMethod]
@@ -478,8 +493,8 @@ public sealed class ViewModelTests
         await app.Settings.SetPrinting(true);
         Assert.IsTrue(engine.CallsOf("remote_printing_set").Single().Object["enabled"]!.GetValue<bool>());
         await app.Settings.SetAutostart(true);
-        CollectionAssert.AreEqual(new[] { "set_stay_signed_in", "set_autostart" },
-            engine.Calls.Select(call => call.Command).Where(command => command is "set_stay_signed_in" or "set_autostart").ToList());
+        var startupCalls = engine.Calls.Select(call => call.Command).Where(command => command is "set_stay_signed_in" or "set_autostart").TakeLast(2).ToArray();
+        CollectionAssert.AreEqual(new[] { "set_stay_signed_in", "set_autostart" }, startupCalls);
         engine.Reply("update_check", """{"version":"2.1.0","installable":true,"silent":false,"needs_password":false}""");
         await app.Settings.CheckForUpdate();
         Assert.AreEqual("2.1.0", app.Settings.Update?.Version);

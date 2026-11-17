@@ -146,7 +146,7 @@ pub fn is_display(source: &str) -> bool {
 }
 
 /// Full displays a technician with keyboard and mouse control may switch between during a
-/// session, in the order the input layer numbers them. Windows only; empty when it does not apply.
+/// session, in the order the input layer numbers them.
 pub fn switchable_displays(source: &str, all: bool) -> Vec<String> {
     #[cfg(target_os = "windows")]
     {
@@ -154,9 +154,21 @@ pub fn switchable_displays(source: &str, all: bool) -> Vec<String> {
             return Vec::new();
         }
         let ids: Vec<String> = switch_list(all).iter().map(display_id).collect();
-        if ids.len() > 1 && ids.iter().any(|id| id == source) { ids } else { Vec::new() }
+        if ids.len() > 1 { ids } else { Vec::new() }
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        let _ = all;
+        if !is_display(source) {
+            return Vec::new();
+        }
+        let Ok(list) = native_os_capture::macos::displays() else {
+            return Vec::new();
+        };
+        let ids: Vec<String> = list.into_iter().map(|display| format!("display:{}", display.id)).collect();
+        if ids.len() > 1 { ids } else { Vec::new() }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = (source, all);
         Vec::new()
@@ -174,6 +186,9 @@ pub fn main_display_source() -> Option<String> {
     }
     #[cfg(target_os = "windows")]
     {
+        if crate::windows_signin_host::is_signin_host() {
+            native_os_capture::windows_capture::attach_input_desktop();
+        }
         native_os_capture::windows_capture::displays()
             .ok()?
             .first()
@@ -206,6 +221,9 @@ fn display_id(display: &crate::PlatformDisplay) -> String {
 /// The displays offered for switching, in order; with `all`, the whole desktop comes last.
 #[cfg(target_os = "windows")]
 fn switch_list(all: bool) -> Vec<crate::PlatformDisplay> {
+    if crate::windows_signin_host::is_signin_host() {
+        native_os_capture::windows_capture::attach_input_desktop();
+    }
     let Ok(mut list) = native_os_capture::windows_capture::displays() else {
         return Vec::new();
     };
@@ -229,30 +247,40 @@ fn selected(source: &str) -> Result<native_os_capture::macos::Display, String> {
         .strip_prefix("display:")
         .and_then(|value| value.parse().ok())
         .ok_or("The selected display is invalid")?;
-    native_os_capture::macos::displays()
-        .map_err(|error| error.to_string())?
-        .into_iter()
+    let list = native_os_capture::macos::displays().map_err(|error| error.to_string())?;
+    list.iter()
         .find(|display| display.id == id)
+        .cloned()
+        .or_else(|| list.into_iter().next())
         .ok_or_else(|| "The selected display is unavailable".into())
 }
 
 #[cfg(target_os = "windows")]
 pub fn selected(source: &str) -> Result<crate::PlatformDisplay, String> {
+    if crate::windows_signin_host::is_signin_host() {
+        native_os_capture::windows_capture::attach_input_desktop();
+    }
     if source == ALL_DISPLAYS {
         return native_os_capture::windows_capture::displays()
             .ok()
             .and_then(|list| native_os_capture::windows_capture::all_of(&list))
             .ok_or_else(|| "The displays are unavailable".into());
     }
-    native_os_capture::windows_capture::displays()
-        .map_err(|error| error.to_string())?
-        .into_iter()
+    let list = native_os_capture::windows_capture::displays()
+        .map_err(|error| error.to_string())?;
+    list.iter()
         .find(|display| {
             format!(
                 "dxgi:{}:{}:{}",
                 display.adapter, display.output, display.name
             ) == source
         })
+        .cloned()
+        .or_else(|| {
+            let suffix = source.splitn(4, ':').nth(3)?;
+            list.iter().find(|display| display.name == suffix).cloned()
+        })
+        .or_else(|| list.into_iter().next())
         .ok_or_else(|| "The selected display is unavailable".into())
 }
 
@@ -350,7 +378,12 @@ impl SessionInjector {
         #[cfg(not(target_os = "linux"))]
         let display = selected(source)?;
         #[cfg(target_os = "macos")]
-        let platform = if _login_window {
+        let platform = if _all_displays {
+            let ids: Vec<u32> = native_os_capture::macos::displays()
+                .map(|list| list.into_iter().map(|d| d.id).collect())
+                .unwrap_or_else(|_| vec![display.id]);
+            PlatformInjector::with_displays(if ids.is_empty() { vec![display.id] } else { ids }, _login_window)
+        } else if _login_window {
             PlatformInjector::login_display(display.id)
         } else {
             PlatformInjector::display(display.id)

@@ -304,6 +304,10 @@ fn random() -> Result<Zeroizing<String>, String> {
         .map_err(|_| "OS secure randomness is unavailable")?;
     Ok(Zeroizing::new(URL_SAFE_NO_PAD.encode(bytes.as_ref())))
 }
+/// Keep the saved sign-in only after it has fully succeeded.
+fn keep_saved_sign_in(remember: bool, phase: &str) -> bool {
+    remember && phase == "authenticated"
+}
 fn revoke(inner: &mut Inner) {
     for weak in inner.protected.drain(..) {
         if let Some(flag) = weak.upgrade() {
@@ -492,6 +496,8 @@ impl AccountAuth {
                 factors: Vec::new(),
             };
             inner.client = Some(client.clone());
+            // Signing in once keeps this computer signed in until Sign out.
+            inner.remember = true;
             inner.generation
         };
         let authorization: Result<Url, String> = if let Some(domain) = domain {
@@ -701,7 +707,7 @@ impl AccountAuth {
         if remaining < 5 {
             return Err("Account authorization is too close to expiry".into());
         }
-        inner.refresh_at = inner.expires_at - (remaining / 5).clamp(1, 60);
+        inner.refresh_at = inner.expires_at - (remaining / 4).clamp(1, 300);
         inner.tokens = Some(tokens);
         inner.status = if let Some(principal) = &principal {
             Status {
@@ -744,7 +750,8 @@ impl AccountAuth {
         }
         Ok(())
     }
-    /// Turns "stay signed in on this computer" on or off.
+    /// Turns "stay signed in on this computer" on or off. Sign-in turns it on.
+    /// Sign out, or turning it off, removes the saved session.
     pub async fn set_remember(&self, enabled: bool) -> Result<(), String> {
         let token = {
             let mut inner = self.inner.lock().await;
@@ -854,6 +861,16 @@ impl AccountAuth {
                 inner.status.phase == "authenticated" && time >= inner.refresh_at
             };
             if due && let Err(error) = self.refresh(generation).await {
+                let keep_trying = {
+                    let inner = self.inner.lock().await;
+                    now().is_ok_and(|time| time.saturating_add(15) < inner.expires_at)
+                        && !error.contains("changed")
+                        && !error.contains("cancelled")
+                };
+                if keep_trying {
+                    tokio::time::sleep(Duration::from_secs(4)).await;
+                    continue;
+                }
                 self.fail(generation, &error).await;
                 return;
             }
@@ -1137,6 +1154,61 @@ impl AccountAuth {
             .await?;
         self.apply(generation, client, tokens, Some(subject)).await
     }
+    /// Quit. A finished sign-in stays in protected storage and is not revoked.
+    /// An unfinished or opted-out sign-in is cleared, the same as signing out.
+    pub async fn suspend(&self) -> Result<(), String> {
+        let (keep, revoke_remote, generation) = {
+            let mut inner = self.inner.lock().await;
+            let keep = keep_saved_sign_in(inner.remember, &inner.status.phase);
+            inner.generation = inner
+                .generation
+                .checked_add(1)
+                .ok_or("Sign-in generation exhausted")?;
+            if let Some(task) = inner.task.take() {
+                task.abort();
+            }
+            let revoke_remote = if keep {
+                None
+            } else {
+                inner.client.clone().zip(
+                    inner
+                        .tokens
+                        .as_ref()
+                        .map(|tokens| Zeroizing::new(tokens.access_token.0.clone())),
+                )
+            };
+            revoke(&mut inner);
+            inner.app_pending = None;
+            if !keep {
+                inner.remember = false;
+            }
+            inner.restored = false;
+            inner.client = None;
+            inner.status.phase = "signed_out".into();
+            inner.status.message = if keep {
+                "Signed in on this computer until you sign out".into()
+            } else {
+                "Signed out locally; no session credentials are retained".into()
+            };
+            (keep, revoke_remote, inner.generation)
+        };
+        if keep {
+            return Ok(());
+        }
+        let _ = tokio::task::spawn_blocking(crate::session_store::clear).await;
+        if let Some((client, access)) = revoke_remote {
+            let revoked = client.logout(&access).await;
+            let mut inner = self.inner.lock().await;
+            if inner.generation == generation {
+                inner.status.message = if revoked {
+                    "Signed out of this Mixel Remote session".into()
+                } else {
+                    "Signed out locally; the identity service could not confirm remote session revocation".into()
+                };
+            }
+        }
+        Ok(())
+    }
     pub async fn cancel(&self) -> Result<(), String> {
         let mut inner = self.inner.lock().await;
         inner.generation = inner
@@ -1342,5 +1414,14 @@ mod tests {
         assert_eq!(auth.begin_with(None, Some("https://evil.example/steal")).await.unwrap_err(), "This app address cannot receive the sign-in");
         assert_eq!(auth.complete_app("ch.mixel.remote://auth/callback?state=abc&code=xyz").await.unwrap_err(), "No sign-in is waiting for this app");
         assert_eq!(PROVIDERS.iter().find(|p| p.0 == "apple").unwrap().1, "name email");
+    }
+
+    #[test]
+    fn a_finished_sign_in_survives_quit_until_sign_out() {
+        assert!(keep_saved_sign_in(true, "authenticated"));
+        assert!(!keep_saved_sign_in(false, "authenticated"));
+        assert!(!keep_saved_sign_in(true, "mfa_required"));
+        assert!(!keep_saved_sign_in(true, "profile_setup"));
+        assert!(!keep_saved_sign_in(true, "signed_out"));
     }
 }

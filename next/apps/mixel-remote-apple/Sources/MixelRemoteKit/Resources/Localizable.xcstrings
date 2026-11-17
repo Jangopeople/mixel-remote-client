@@ -7943,24 +7943,24 @@
         }
       }
     },
-    "Share this password with your technician. It lasts five minutes and allows one request.": {
+    "Share this password with your technician. It stays on until you turn it off, and it works every time you connect.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Geben Sie dieses Passwort Ihrem Techniker. Es gilt fünf Minuten für eine Anfrage."
+            "value": "Geben Sie dieses Passwort Ihrem Techniker. Es bleibt aktiv, bis Sie es ausschalten, und es gilt bei jeder Verbindung."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Communiquez ce mot de passe à votre technicien. Il est valable cinq minutes pour une demande."
+            "value": "Communiquez ce mot de passe à votre technicien. Il reste actif jusqu’à ce que vous le désactiviez, et il fonctionne à chaque connexion."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Comunica questa password al tuo tecnico. Vale cinque minuti per una richiesta."
+            "value": "Comunichi questa password al tecnico. Resta attiva finché non la disattiva e funziona a ogni connessione."
           }
         }
       }

@@ -44,10 +44,13 @@ final class ViewModelTests: XCTestCase {
         let engine = MockEngine()
         Fixtures.company(engine)
         let app = await Fixtures.app(engine)
+        app.section = .devices
         await app.devices.load()
         let device = try XCTUnwrap(app.devices.devices.first { $0.connectionId != app.remote.host })
         app.devices.connect(device, unattended: true)
+        XCTAssertEqual(app.section, .devices, "connecting from Devices stays in Devices until the session opens")
         try await waitFor { !engine.calls("remote_request").isEmpty }
+        XCTAssertTrue(engine.calls("quick_phone_claim").isEmpty, "devices in the directory are not phones")
         let request = try XCTUnwrap(engine.calls("remote_request").last).object
         XCTAssertEqual(request["host"] as? Int, Int(device.connectionId))
         XCTAssertEqual(request["unattended"] as? Bool, true)

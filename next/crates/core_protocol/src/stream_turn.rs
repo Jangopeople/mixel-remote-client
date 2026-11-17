@@ -34,8 +34,8 @@ use webrtc::{
 };
 
 const MAX_ROUTES: usize = 8;
-const OUT_PACKETS: usize = 16;
-const IN_PACKETS: usize = 64;
+const OUT_PACKETS: usize = 256;
+const IN_PACKETS: usize = 256;
 type IoFuture<'a, T> = Pin<Box<dyn Future<Output = io::Result<T>> + Send + 'a>>;
 trait Stream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Stream for T {}

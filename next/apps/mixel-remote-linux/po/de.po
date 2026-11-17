@@ -1078,8 +1078,8 @@ msgstr "Diesen Computer einrichten"
 msgid "Settings"
 msgstr "Einstellungen"
 
-msgid "Share this password with your technician. It lasts five minutes and allows one request."
-msgstr "Geben Sie dieses Passwort Ihrem Techniker. Es gilt fünf Minuten für eine Anfrage."
+msgid "Share this password with your technician. It stays on until you turn it off, and it works every time you connect."
+msgstr "Geben Sie dieses Passwort Ihrem Techniker. Es bleibt aktiv, bis Sie es ausschalten, und es gilt bei jeder Verbindung."
 
 msgid "Sharing is off. Confirming with the connection service."
 msgstr "Freigabe ist aus. Wird mit dem Verbindungsdienst bestätigt."

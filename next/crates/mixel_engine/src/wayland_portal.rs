@@ -459,8 +459,15 @@ impl Injector for PortalInjector {
                 horizontal,
                 vertical,
             } => {
-                self.scroll[0] += i32::from(horizontal);
-                self.scroll[1] -= i32::from(vertical);
+                let scale = |delta: i16| -> i32 {
+                    if delta.abs() < 120 {
+                        i32::from(delta) * 120
+                    } else {
+                        i32::from(delta)
+                    }
+                };
+                self.scroll[0] += scale(horizontal);
+                self.scroll[1] -= scale(vertical);
                 let action = Action::Scroll(self.scroll[0] / 120, self.scroll[1] / 120);
                 self.scroll = [self.scroll[0] % 120, self.scroll[1] % 120];
                 action

@@ -61,6 +61,9 @@ internal sealed class DevicesPage : PageView
                 : L("This company is read-only. You can still remove devices; adding devices and other changes need an active plan."), error: false) : null,
             App.SignedIn && !App.Remote.Connected && App.Remote.Phase != "closing" && !App.Enrollment.NeedsSetup ? ConnectionBanner() : null,
             Ui.Message(model.Error),
+            Ui.Message(App.Error),
+            (App.Busy || App.Remote.Phase is "outgoing" or "negotiating") && (!string.IsNullOrEmpty(App.Progress) || !string.IsNullOrEmpty(App.ConnectionMessage))
+                ? Ui.Message(!string.IsNullOrEmpty(App.Progress) ? App.Progress : App.ConnectionMessage, error: false) : null,
             Ui.Message(model.Message == L("Page %d · %d devices.", model.Page + 1, model.Devices.Count) ? "" : model.Message, error: false));
         top.Padding = new Thickness(32, 24, 32, 12);
         var grid = new Grid();
@@ -89,7 +92,9 @@ internal sealed class DevicesPage : PageView
             Child = Ui.Split(
                 Ui.Row(10, Ui.Icon("\uE871", 16, Ui.Brush("MixelWarning")), Ui.Column(3,
                     Ui.Text(App.Remote.Phase == "error" ? L("This computer lost its connection") : L("This computer is not connected yet"), bold: true),
-                    Ui.Text(L("Mixel Remote reconnects by itself. Device status appears once it is connected; you can still choose Connect."), secondary: true))),
+                    Ui.Text(string.IsNullOrWhiteSpace(App.Remote.Message)
+                        ? L("Mixel Remote reconnects by itself. Device status appears once it is connected; you can still choose Connect.")
+                        : Translator.Shared.Translate(App.Remote.Message), secondary: true))),
                 Ui.Plain(L("Reconnect now"), () => _ = App.GoOnline())),
         };
         return banner;
@@ -168,11 +173,12 @@ internal sealed class DevicesPage : PageView
         var favorite = model.Tenant is null ? null : Ui.IconButton(model.IsFavorite(device) ? "\uE735" : "\uE734",
             model.IsFavorite(device) ? L("Remove %@ from favorites", device.Name) : L("Add %@ to favorites", device.Name), () => _ = model.ToggleFavorite(device), !App.Busy, false);
         if (favorite is not null && model.IsFavorite(device)) favorite.Foreground = Ui.BrandBrush;
+        var connectingHere = App.Remote.Peer == device.ConnectionId && (App.Remote.Phase == "outgoing" || (App.Remote.Phase == "negotiating" && !App.Remote.Sharing));
         var actions = Ui.Row(8,
             favorite,
             presence == Presence.Offline && macs.Length > 0 ? Ui.Plain(L("Wake up"), () => _ = model.Wake(device, macs), !App.Busy, "\uE7E8") : null,
             model.Manages ? ManageButton(device) : null,
-            Tip(Ui.Primary(L("Connect"), () => _ = model.Connect(device), blocked.Length == 0), blocked.Length == 0 ? L("Connect to %@", device.Name) : blocked));
+            Tip(Ui.Primary(connectingHere ? L("Connecting…") : L("Connect"), () => _ = model.Connect(device), blocked.Length == 0 && !connectingHere), blocked.Length == 0 ? L("Connect to %@", device.Name) : blocked));
         actions.VerticalAlignment = VerticalAlignment.Center;
         Grid.SetColumn(actions, 3);
         grid.Children.Add(actions);

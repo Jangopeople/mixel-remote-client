@@ -101,7 +101,6 @@ pub struct HostState {
     pub unattended_source: String,
     pub unattended_confirm: bool,
     pub unattended_control: bool,
-    restored: bool,
 }
 
 impl HostState {
@@ -835,7 +834,7 @@ impl App {
     pub fn connect_device(self: &Rc<Self>, device: &Device) {
         let name = device.name.clone();
         self.edit(|state| state.devices.message = tf("Connecting to %@…", &[&name]));
-        self.connect(device.connection_id, None, false);
+        self.connect(device.connection_id, None, true);
     }
 
     /// A company change, then the list again; `false` with the reason in `devices.error`.
@@ -1635,23 +1634,22 @@ impl App {
         self.act(|app| Box::pin(async move { app.perform("remote_unattended", json!({ "source": null, "control": false })).await }));
     }
 
-    /// After a start with a remembered sign-in, unattended sharing comes back as the owner left it.
+    /// Whenever this computer is ready, unattended sharing comes back as the owner left it.
     async fn restore_unattended(self: &Rc<Self>) {
         let saved = self.store.borrow().settings.unattended.clone();
         let skip = {
             let state = self.state.borrow();
-            state.host.restored || state.remote.unattended_enabled || state.remote.unattended_pending.is_some()
+            state.remote.unattended_enabled || state.remote.unattended_pending.is_some()
         };
         let Some(saved) = saved.filter(|_| !skip) else { return };
-        let Ok(startup) = self.run::<StartupSettings>("startup_settings", json!({})).await else { return };
-        if !(startup.restored || startup.launched_at_startup) {
-            return;
-        }
         let Ok(targets) = self.run::<Vec<CaptureTarget>>("capture_targets", json!({})).await else { return };
-        if !targets.iter().any(|target| target.id == saved.source && target.full_display) {
+        let still = {
+            let state = self.state.borrow();
+            !state.remote.unattended_enabled && state.remote.unattended_pending.is_none()
+        };
+        if !still || !targets.iter().any(|target| target.id == saved.source && target.full_display) {
             return;
         }
-        self.state.borrow_mut().host.restored = true;
         let _ = self.perform("remote_unattended", json!({ "source": saved.source, "control": saved.control })).await;
     }
 

@@ -10,7 +10,7 @@ public struct RootView: View {
 
     public var body: some View {
         Group {
-            if app.remote.viewing || app.remote.phase == "outgoing" || (app.remote.phase == "negotiating" && !app.remote.sharing && app.remote.session != nil) {
+            if app.remote.viewing || (app.section != .devices && (app.remote.phase == "outgoing" || (app.remote.phase == "negotiating" && !app.remote.sharing && app.remote.session != nil))) {
                 SessionWorkspaceView(app: app)
             } else {
                 // Mixel's own layout: a calm sidebar panel and the page beside it.

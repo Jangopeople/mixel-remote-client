@@ -56,6 +56,20 @@ public struct DevicesView: View {
                 if !model.addBlocked.isEmpty, model.manages { MessageLine(planNotice, error: false) }
                 if app.signedIn, !app.remote.connected, app.remote.phase != "closing", !app.enrollment.needsSetup { connectionBanner }
                 MessageLine(model.error)
+                MessageLine(app.error)
+                if app.busy || app.remote.phase == "outgoing" || (app.remote.phase == "negotiating" && !app.remote.sharing) {
+                    let statusText = !app.progress.isEmpty ? app.progress : app.connectionMessage
+                    if !statusText.isEmpty {
+                        HStack(spacing: 10) {
+                            ProgressView().controlSize(.small)
+                            Text(verbatim: statusText).font(.callout).foregroundStyle(.secondary)
+                            Spacer()
+                            if app.remote.phase == "outgoing" || app.remote.phase == "negotiating" {
+                                Button(L("Cancel")) { app.session.end() }
+                            }
+                        }
+                    }
+                }
             }
             .padding([.horizontal, .top], 24)
             .padding(.bottom, 12)
@@ -91,7 +105,9 @@ public struct DevicesView: View {
             Image(systemName: "wifi.exclamationmark").foregroundStyle(Theme.warning)
             VStack(alignment: .leading, spacing: 3) {
                 Text(verbatim: app.remote.phase == "error" ? L("This computer lost its connection") : L("This computer is not connected yet")).font(.callout.weight(.semibold))
-                Text(verbatim: L("Mixel Remote reconnects by itself. Device status appears once it is connected; you can still choose Connect.")).font(.callout).foregroundStyle(.secondary)
+                Text(verbatim: app.remote.message.isEmpty
+                     ? L("Mixel Remote reconnects by itself. Device status appears once it is connected; you can still choose Connect.")
+                     : app.remote.message).font(.callout).foregroundStyle(.secondary)
             }
             Spacer()
             Button(L("Reconnect now")) { app.goOnline() }
@@ -222,9 +238,10 @@ struct DeviceRow: View {
             } else if model.managesIsmDevices, ["macos", "windows", "linux"].contains(device.os) {
                 Button(L("Edit device")) { edit(device) }
             }
-            Button(L("Connect")) { model.connect(device) }
+            let connectingHere = (app.remote.phase == "outgoing" || (app.remote.phase == "negotiating" && !app.remote.sharing)) && app.remote.peer == device.connectionId
+            Button(connectingHere ? L("Connecting…") : L("Connect")) { model.connect(device, unattended: true) }
                 .buttonStyle(PrimaryButtonStyle())
-                .disabled(!blocked.isEmpty)
+                .disabled(!blocked.isEmpty || connectingHere)
                 .help(blocked.isEmpty ? L("Connect to %@", device.name) : blocked)
             Menu {
                 Button(L("Connect without confirmation (unattended access)")) { model.connect(device, unattended: true) }

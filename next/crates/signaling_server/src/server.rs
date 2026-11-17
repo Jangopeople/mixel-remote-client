@@ -286,7 +286,7 @@ async fn connection(mut socket: WebSocket, state: AppState) {
             _ = tick.tick() => {
                 let now = Instant::now();
                 let unix = unix_now();
-                if !authorization_live(expires_at, authorized_at, now, unix) || now.duration_since(last_activity) >= Duration::from_secs(75) { break; }
+                if !authorization_live(expires_at, authorized_at, now, unix) || now.duration_since(last_activity) >= Duration::from_secs(180) { break; }
                 match state.registry.lock() { Ok(mut r) => r.expire(now), Err(_) => break }
                 if now.duration_since(last_ping) >= Duration::from_secs(20) {
                     if !matches!(tokio::time::timeout(Duration::from_secs(2), socket.send(Message::Ping(Vec::new().into()))).await, Ok(Ok(()))) { break; }
@@ -330,7 +330,10 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                 if rate_count > 60 { break; }
                 match message {
                     Message::Close(_) => break,
-                    Message::Ping(_) | Message::Pong(_) => {},
+                    Message::Ping(payload) => {
+                        if !matches!(tokio::time::timeout(Duration::from_secs(2), socket.send(Message::Pong(payload))).await, Ok(Ok(()))) { break; }
+                    }
+                    Message::Pong(_) => {},
                     Message::Text(text) => {
                         let parsed = serde_json::from_str(&text);
                         drop(text);
@@ -442,9 +445,14 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                                         ClientMessage::Decide { session, accept: true } if check.unattended => Some(*session),
                                         _ => None,
                                     };
-                                    state.support_allowed(&check.pair, check.unattended, audit).await
+                                    let g = state.support_allowed(&check.pair, check.unattended, audit).await;
+                                    eprintln!("policy check from={id} msg={:?} unattended={} allowed={}", std::mem::discriminant(&message), check.unattended, g.is_some());
+                                    g
                                 },
-                                None => None,
+                                None => {
+                                    eprintln!("policy_for_message returned None for from={id} msg={:?}", std::mem::discriminant(&message));
+                                    None
+                                },
                             };
                             let now = Instant::now();
                             let unix = unix_now();
@@ -467,9 +475,14 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                                 }
                                 Err(_) => break,
                             };
-                            if let Err(code) = result
-                                && !send(&mut socket, &ServerMessage::Error { code }).await { break; }
+                            if let Err(code) = result {
+                                eprintln!("policy-gated message from={id} failed with {code:?}");
+                                if !send(&mut socket, &ServerMessage::Error { code }).await { break; }
+                            }
                             continue;
+                        }
+                        if let Ok(ClientMessage::ConfigureUnattended { enabled }) = &parsed {
+                            eprintln!("ConfigureUnattended from={id} enabled={enabled}");
                         }
                         let result = match parsed {
                             Ok(ClientMessage::Ice{session})=>{

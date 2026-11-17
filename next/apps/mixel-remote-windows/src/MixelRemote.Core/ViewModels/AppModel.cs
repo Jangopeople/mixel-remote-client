@@ -99,8 +99,8 @@ public sealed class AppModel : Observable
         while (!token.IsCancellationRequested)
         {
             await Tick();
-            var fast = Remote.InSession || Remote.Phase is "connecting" or "outgoing" || Account.SigningIn;
-            try { await Task.Delay(fast ? 250 : 1000, token); }
+            var fast = Remote.InSession || Remote.Phase is "connecting" or "outgoing" or "negotiating" or "deciding" || Account.SigningIn;
+            try { await Task.Delay(fast ? 80 : 1000, token); }
             catch (TaskCanceledException) { return; }
         }
     }
@@ -171,7 +171,7 @@ public sealed class AppModel : Observable
     internal async Task GoOnlineIfNeeded()
     {
         if (!SignedIn || WentOffline || !Remote.Disconnected || Busy || DateTimeOffset.UtcNow < nextAutoTry || Enrollment.NeedsSetup) return;
-        int[] pauses = [0, 5, 15, 30, 60];
+        int[] pauses = [0, 2, 5, 10, 20];
         autoTries++;
         nextAutoTry = DateTimeOffset.UtcNow.AddSeconds(pauses[Math.Min(autoTries, pauses.Length - 1)]);
         try { await Engine.PerformAsync("remote_register"); }
@@ -258,10 +258,10 @@ public sealed class AppModel : Observable
         await RefreshAccount();
     });
 
-    public Task Verify(string factor)
+    public Task Verify(string factor, string? typed = null)
     {
-        var code = new string([.. VerificationCode.Where(char.IsAsciiDigit)]);
-        if (code.Length != 6)
+        var code = new string([.. (typed ?? VerificationCode).Where(char.IsAsciiDigit)]);
+        if (code.Length is not (6 or 8))
         {
             Error = L("Enter the 6-digit code");
             return Task.CompletedTask;
@@ -269,7 +269,14 @@ public sealed class AppModel : Observable
         VerificationCode = "";
         return Act(async () =>
         {
-            await Engine.PerformAsync("account_verify", ("factor", factor), ("code", code));
+            try
+            {
+                await Engine.PerformAsync("account_verify", ("factor", factor), ("code", code));
+            }
+            catch (EngineFailure failure) when (failure.Message.Contains("HTTP 422", StringComparison.Ordinal))
+            {
+                throw new EngineFailure(L("That code was not accepted. Enter the current code from your authenticator."));
+            }
             await RefreshAccount();
         });
     }
@@ -333,7 +340,7 @@ public sealed class AppModel : Observable
     /// Connects to a Remote ID: brings this computer online first if needed; for a phone with Mixel Quick
     /// Support it claims the phone and waits until it is online, so one click is enough.
     /// </summary>
-    public Task Connect(uint id, string? password = null, bool unattended = false)
+    public Task Connect(uint id, string? password = null, bool unattended = false, bool checkPhone = true)
     {
         if (Busy)
         {
@@ -347,7 +354,7 @@ public sealed class AppModel : Observable
 
         async Task Run()
         {
-            try { await ConnectSteps(id, password, unattended); }
+            try { await ConnectSteps(id, password, unattended, checkPhone); }
             catch (Exception failure)
             {
                 Error = Message(failure);
@@ -378,7 +385,7 @@ public sealed class AppModel : Observable
         return false;
     }
 
-    private async Task ConnectSteps(uint id, string? password, bool unattended)
+    private async Task ConnectSteps(uint id, string? password, bool unattended, bool checkPhone = true)
     {
         WentOffline = false;
         if (await Status() is { Disconnected: true })
@@ -390,19 +397,22 @@ public sealed class AppModel : Observable
                 throw new EngineFailure("This computer could not go online. Check the internet connection and try again.");
             }
         }
-        Progress = L("Looking up this ID…");
-        bool phone;
-        try
+        var phone = false;
+        if (checkPhone)
         {
-            phone = await Engine.RunAsync<bool>("quick_phone_claim", ("host", id));
-        }
-        catch (EngineFailure failure)
-        {
-            if (System.Text.RegularExpressions.Regex.IsMatch(failure.Message, "MFA|staff|42501"))
+            Progress = L("Looking up this ID…");
+            try
             {
-                throw new EngineFailure("Connecting to phones needs your Mixel team account with the second confirmation step. Sign in again under Account, then choose Connect.");
+                phone = await Engine.RunAsync<bool>("quick_phone_claim", ("host", id));
             }
-            throw new EngineFailure($"This phone could not be prepared for the session: {failure.Message}");
+            catch (EngineFailure failure)
+            {
+                if (System.Text.RegularExpressions.Regex.IsMatch(failure.Message, "MFA|staff|42501"))
+                {
+                    throw new EngineFailure("Connecting to phones needs your Mixel team account with the second confirmation step. Sign in again under Account, then choose Connect.");
+                }
+                throw new EngineFailure($"This phone could not be prepared for the session: {failure.Message}");
+            }
         }
         if (phone)
         {

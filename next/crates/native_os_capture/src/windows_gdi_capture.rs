@@ -54,7 +54,7 @@ pub(super) fn default_input_desktop() -> bool {
         let current = desktop_name(thread);
         let active = desktop_name(input);
         let _ = CloseDesktop(input);
-        current.as_deref() == Some("Default") && active == current
+        current.is_some_and(|name| !name.is_empty() && active.as_deref() == Some(name.as_str()))
     }
 }
 

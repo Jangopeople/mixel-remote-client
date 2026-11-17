@@ -23,9 +23,7 @@ public final class HostModel: ObservableObject {
     @Published public var unattendedControl = false
 
     private static let unattendedKey = "mixel.remote.unattended.v1"
-    private var restored = false
     private var restoring = false
-    private var enabledFor: (profile: String, host: UInt32)?
 
     init(app: AppModel) { self.app = app }
 
@@ -37,9 +35,6 @@ public final class HostModel: ObservableObject {
     public var controlAvailable: Bool { asking && (selected?.fullDisplay ?? false) && remote.inputAccess }
 
     func statusChanged(from previous: RemoteStatus, to next: RemoteStatus) {
-        if next.unattendedEnabled, let profile = app.account.account?.profile, let host = next.host {
-            enabledFor = (profile, host)
-        }
         if asking, !next.controllerOnly, previous.phase != "incoming" || previous.session != next.session {
             sources = []
             source = ""
@@ -143,33 +138,34 @@ public final class HostModel: ObservableObject {
     }
 
     public func disableUnattended() {
-        enabledFor = nil
-        UserDefaults.standard.removeObject(forKey: Self.unattendedKey)
+        UserDefaults.standard.set(["enabled": false], forKey: Self.unattendedKey)
         app.act { try await self.app.engine.perform("remote_unattended", ["source": nil, "control": false]) }
     }
 
     /// Restore after a trusted startup or after this same host reconnects during this app run.
     func restoreUnattended() async {
-        guard !restoring, remote.phase == "ready", !remote.codeRequired, !remote.unattendedEnabled, remote.unattendedPending == nil,
-              let profile = app.account.account?.profile, let host = remote.host,
-              let saved = UserDefaults.standard.dictionary(forKey: Self.unattendedKey),
-              let source = saved["source"] as? String, let control = saved["control"] as? Bool else { return }
-        guard saved["profile"] == nil || saved["profile"] as? String == profile,
-              saved["host"] == nil || (saved["host"] as? NSNumber)?.uint32Value == host else { return }
+        guard !restoring, remote.phase == "ready", !remote.unattendedEnabled, remote.unattendedPending == nil,
+              let profile = app.account.account?.profile, let host = remote.host else { return }
         restoring = true
         defer { restoring = false }
-        if enabledFor?.profile != profile || enabledFor?.host != host {
-            guard !restored, let startup: StartupSettings = try? await app.engine.run("startup_settings"),
-                  startup.restored || startup.launchedAtStartup else { return }
+        let saved = UserDefaults.standard.dictionary(forKey: Self.unattendedKey)
+        if let saved {
+            if let explicit = saved["enabled"] as? Bool, !explicit { return }
+            guard saved["profile"] == nil || saved["profile"] as? String == profile,
+                  saved["host"] == nil || (saved["host"] as? NSNumber)?.uint32Value == host else { return }
         }
+        let wantedSource = saved?["source"] as? String
+        let wantedControl = (saved?["control"] as? Bool) ?? true
         guard let targets: [CaptureTarget] = try? await app.engine.run("capture_targets"),
-              targets.contains(where: { $0.id == source && $0.fullDisplay }),
+              let matched = targets.first(where: { $0.id == wantedSource && $0.fullDisplay }) ?? targets.first(where: \.fullDisplay),
               app.account.account?.profile == profile, remote.host == host, remote.phase == "ready",
-              !remote.unattendedEnabled, remote.unattendedPending == nil, !remote.codeRequired,
-              (UserDefaults.standard.dictionary(forKey: Self.unattendedKey) as NSDictionary?) == saved as NSDictionary
+              !remote.unattendedEnabled, remote.unattendedPending == nil
         else { return }
-        restored = true
-        try? await app.engine.perform("remote_unattended", ["source": source, "control": control])
+        let control = wantedControl && remote.inputAccess
+        try? await app.engine.perform("remote_unattended", ["source": matched.id, "control": control])
+        if saved == nil {
+            UserDefaults.standard.set(["source": matched.id, "control": control, "profile": profile, "host": host, "enabled": true], forKey: Self.unattendedKey)
+        }
     }
 
     public func oneTimePassword(required: Bool) {

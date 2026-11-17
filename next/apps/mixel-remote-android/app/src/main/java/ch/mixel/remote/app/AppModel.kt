@@ -64,7 +64,7 @@ class AppModel(
     var providers by mutableStateOf(listOf("keycloak"))
         private set
     /** Connect without confirmation where the company allows it (unattended access). */
-    var unattended by mutableStateOf(false)
+    var unattended by mutableStateOf(true)
 
     val devices = DevicesModel(this)
     val session = SessionModel(this)

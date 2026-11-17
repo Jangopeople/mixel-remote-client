@@ -64,6 +64,16 @@ impl MacInjector {
         Self::display_in_session(id, false)
     }
 
+    /// Multi-display pointer targets in the order the controller numbers them.
+    pub fn with_displays(ids: Vec<u32>, login_window: bool) -> Result<Self, InjectionError> {
+        let Some(&first) = ids.first() else {
+            return Err(InjectionError::Unsupported);
+        };
+        let mut injector = Self::display_in_session(first, login_window)?;
+        injector.target = Target::Desktop(ids);
+        Ok(injector)
+    }
+
     /// The login window may reject allocating a private per-user event source.
     /// Initialize an explicit source after the LoginWindow AppKit startup.
     pub fn login_display(id: u32) -> Result<Self, InjectionError> {
@@ -433,12 +443,19 @@ impl Injector for MacInjector {
                 if !matches!(self.target, Target::Desktop(_)) {
                     return Err(InjectionError::Unsupported);
                 }
+                let scale = |delta: i16| -> i32 {
+                    if delta.abs() < 120 {
+                        i32::from(delta) * 36
+                    } else {
+                        i32::from(delta) / 3
+                    }
+                };
                 let event = CGEvent::new_scroll_wheel_event2(
                     Some(&self.source),
                     CGScrollEventUnit::Pixel,
                     2,
-                    i32::from(vertical),
-                    i32::from(horizontal),
+                    scale(vertical),
+                    scale(horizontal),
                     0,
                 )
                 .ok_or_else(|| InjectionError::Native("Cannot create wheel event".into()))?;

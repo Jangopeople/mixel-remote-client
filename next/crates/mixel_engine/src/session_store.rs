@@ -1,6 +1,6 @@
-//! Optional "stay signed in on this computer": the account refresh token is
-//! kept only in OS-protected storage for the signed-in OS user (Windows DPAPI,
-//! Linux Secret Service, macOS Keychain). No plaintext fallback.
+//! "Stay signed in on this computer": the account refresh token is kept only in
+//! OS-protected storage for the signed-in OS user (Windows DPAPI, Linux Secret
+//! Service, macOS Keychain) until the person signs out. No plaintext fallback.
 use zeroize::Zeroizing;
 
 const MAX_TOKEN: usize = 2048;

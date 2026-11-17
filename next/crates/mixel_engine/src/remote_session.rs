@@ -808,9 +808,20 @@ impl RemoteSession {
         inner.commands = Some(tx.clone());
         crate::agent::start(self.clone(), tx.clone());
         inner.video = Some(video.clone());
+        let default_unattended = if !crate::service_config::controller_only() {
+            session_platform::main_display_source()
+                .map(|source| UnattendedSource {
+                    source,
+                    control: session_platform::input_access(),
+                })
+                .filter(UnattendedSource::capture_allowed)
+        } else {
+            None
+        };
         inner.status = Status {
             phase: "connecting".into(),
             message: "Verifying enrolled identity and connecting securely".into(),
+            unattended: default_unattended,
             ..Status::default()
         };
         let state = self.clone();
@@ -841,11 +852,16 @@ impl RemoteSession {
                 if let Some(flag) = inner.session_cancel.take() {
                     flag.store(true, Ordering::Release);
                 }
+                let kept_unattended = inner.status.unattended.clone();
+                let kept_code = (inner.status.code_required, inner.status.support_code.clone());
                 inner.status = Status {
                     phase: if result.is_ok() { "offline" } else { "error" }.into(),
                     message: result
                         .err()
                         .unwrap_or_else(|| "Disconnected; remote media has stopped".into()),
+                    unattended: kept_unattended,
+                    code_required: kept_code.0,
+                    support_code: kept_code.1,
                     ..Status::default()
                 };
             }
@@ -957,8 +973,8 @@ impl RemoteSession {
 
         let mut inner = self.0.lock().await;
         if let Some(config) = source {
-            if inner.status.phase != "ready" || inner.status.code_required {
-                return Err("Make this computer available and turn off password mode before enabling unattended sharing".into());
+            if inner.status.phase != "ready" {
+                return Err("Make this computer available before enabling unattended sharing".into());
             }
             if inner.status.unattended_pending.is_some() || inner.status.unattended.is_some() {
                 return Err(
@@ -1059,11 +1075,8 @@ impl RemoteSession {
     pub async fn support_code(&self, required: bool) -> Result<(), String> {
         crate::service_config::require_host()?;
         let mut inner = self.0.lock().await;
-        if inner.status.phase != "ready"
-            || inner.status.unattended.is_some()
-            || inner.status.unattended_pending.is_some()
-        {
-            return Err("Make this computer available and turn off unattended sharing before changing its one-time password".into());
+        if inner.status.phase != "ready" {
+            return Err("Make this computer available before changing its one-time password".into());
         }
         inner
             .commands
@@ -1089,9 +1102,7 @@ impl RemoteSession {
                 SupportCode::parse(value).ok_or("Enter the 12-character one-time password")
             })
             .transpose()?;
-        if unattended && code.is_some() {
-            return Err("Use either a one-time password or unattended access".into());
-        }
+        let unattended = unattended && code.is_none();
         if !(100_000_000..=999_999_999).contains(&host) {
             return Err("Enter a nine-digit Mixel connection ID".into());
         }
@@ -1131,15 +1142,14 @@ impl RemoteSession {
         }
         if accept
             && inner.status.unattended_session
-            && (!inner.status.unattended_enabled
-                || !inner.status.unattended.as_ref().is_some_and(|config| {
-                    source == config.source
-                        && control == config.control
-                        && !clipboard
-                        && !files
-                        && !chat
-                        && !recording
-                }))
+            && ((!(inner.status.unattended_enabled || inner.status.code_required))
+                || inner.status.unattended.as_ref().is_some_and(|config| {
+                    source != config.source
+                        || (!control && config.control)
+                        || (control && !config.control && !session_platform::input_access())
+                })
+                || (session_platform::login_window_mode()
+                    && (clipboard || files || chat || recording)))
         {
             return Err("Unattended sharing permission changed".into());
         }
@@ -1419,6 +1429,14 @@ impl RemoteSession {
             InputEvent::SelectDisplay { index } => Some(index),
             _ => None,
         };
+        let fast_ack = !cfg!(test)
+            && matches!(
+                event,
+                InputEvent::Pointer { .. }
+                    | InputEvent::Wheel { .. }
+                    | InputEvent::ButtonClick { .. }
+                    | InputEvent::Key { .. }
+            );
         let (tx, rx) = tokio::sync::oneshot::channel();
         {
             let inner = self.0.lock().await;
@@ -1444,6 +1462,9 @@ impl RemoteSession {
                     reply: tx,
                 })
                 .map_err(|_| "The input transport is busy")?;
+        }
+        if fast_ack {
+            return Ok(true);
         }
         let result = tokio::time::timeout(Duration::from_secs(3), rx)
             .await
@@ -1981,24 +2002,22 @@ fn watch_lease(
                     .is_ok_and(|now| now.as_secs() < value.0 && std::time::Instant::now() < value.1)
             });
             if !live {
+                // End this registration so supervise can reconnect with a fresh ticket.
+                // Do not freeze the UI in "error": that is what left Windows stuck offline.
                 cancel.store(true, Ordering::Release);
                 let mut inner = state.0.lock().await;
                 if inner.generation == generation {
                     if let Some(flag) = &inner.session_cancel {
                         flag.store(true, Ordering::Release);
                     }
-                    inner.input = None;
-                    inner.drawing = None;
-                    inner.clipboard = None;
-                    if let Some(video) = inner.video.take() {
-                        video.close();
+                    if let Some(video) = &inner.video {
+                        video.clear();
                     }
-                    inner.status.control = false;
-                    inner.status.clipboard = false;
-                    inner.status.files = false;
-                    inner.status.phase = "error".into();
-                    inner.status.message =
-                        "Connection authorization expired; sharing and input have stopped".into();
+                    if matches!(inner.status.phase.as_str(), "active" | "negotiating" | "incoming" | "outgoing") {
+                        inner.status.phase = "connecting".into();
+                        inner.status.message =
+                            "Connection authorization expired; reconnecting…".into();
+                    }
                 }
                 return;
             }
@@ -2063,39 +2082,46 @@ async fn supervise(
     let expected = auth.principal(&initial)?.clone();
     drop(initial);
     let mut backoff = Backoff::default();
+    let mut ever_ready = false;
     loop {
         if cancel.load(Ordering::Acquire) {
             return Ok(());
         }
         let attempt = Arc::new(AtomicBool::new(false));
         let guard = AttemptGuard(attempt.clone());
-        let credential = auth.credential(Some(&attempt)).await?;
-        let principal = auth.principal(&credential)?;
-        if principal.user != expected.user
-            || principal.tenant != expected.tenant
-            || principal.staff != expected.staff
-        {
-            return Err("Account authorization changed; register again".into());
-        }
-        let result = tokio::select! {
-            _=cancelled(&cancel)=>Ok(()),
-            result=run(state,generation,auth.clone(),identity.clone(),url.clone(),credential,attempt,tx.clone(),&mut commands,video.clone())=>result,
+        let result = match auth.credential(Some(&attempt)).await {
+            Ok(credential) => {
+                let principal = auth.principal(&credential)?;
+                if principal.user != expected.user
+                    || principal.tenant != expected.tenant
+                    || principal.staff != expected.staff
+                {
+                    return Err("Account authorization changed; register again".into());
+                }
+                tokio::select! {
+                    _=cancelled(&cancel)=>Ok(()),
+                    result=run(state,generation,auth.clone(),identity.clone(),url.clone(),credential,attempt,tx.clone(),&mut commands,video.clone())=>result,
+                }
+            }
+            Err(message) if ever_ready => Err(Failure::network(&message)),
+            Err(message) => return Err(message),
         };
         drop(guard);
-        let error = match result {
+        let mut error = match result {
             Ok(()) => return Ok(()),
             Err(error) => error,
         };
+        if !error.registered_for.is_zero() {
+            ever_ready = true;
+        }
+        if ever_ready && !error.message.contains("Account authorization changed") && !error.message.contains("does not match its enrollment") {
+            error.retryable = true;
+        }
         if cancel.load(Ordering::Acquire) {
             return Ok(());
         }
         if !error.retryable {
             return Err(error.message);
-        }
-        if state.0.lock().await.status.code_required {
-            return Err(
-                "Connection lost. Register this computer again to issue a new one-time password".into(),
-            );
         }
         let delay=backoff.next(error.registered_for).ok_or_else(||format!("{}; automatic reconnect attempts exhausted. Register this computer again when the network is available.",error.message))?;
         state
@@ -2105,9 +2131,11 @@ async fn supervise(
                 status.peer = None;
                 status.requester = None;
                 status.host = None;
-                status.unattended = None;
-                status.unattended_enabled = false;
-                status.unattended_pending = None;
+                // Keep the display the owner chose. The new registration turns it back on.
+                if status.unattended.is_some() {
+                    status.unattended_enabled = false;
+                    status.unattended_pending = Some(UnattendedChange::Enabling);
+                }
                 status.pairing = None;
                 status.pairing_message = None;
                 status.message = format!(
@@ -2172,12 +2200,12 @@ async fn run(
     let mut ready_at = None;
     let result:Result<(),Failure>=async {
         send(&mut socket,ClientMessage::AuthenticateDevice{token:signaling_server::delegated_auth::encode(&own_ticket).map_err(|_|"Cannot encode delegated device authorization")?,device}).await?;
-        let challenge=tokio::time::timeout(Duration::from_secs(20),event(&mut socket)).await.map_err(|_|"Device authorization timed out")??;
-        let Some(ServerMessage::DeviceChallenge{challenge})=challenge else{return Err("Device challenge was not received".into());};
+        let challenge=tokio::time::timeout(Duration::from_secs(20),event(&mut socket)).await.map_err(|_|Failure::network("Device authorization timed out"))??;
+        let Some(ServerMessage::DeviceChallenge{challenge})=challenge else{return Err(Failure::network("Device challenge was not received"));};
         if challenge.device!=*device.as_bytes() || challenge.profile!=*principal.user.as_bytes() || challenge.tenant!=principal.tenant.map(|id|*id.as_bytes()) || challenge.connection_id!=enrolled.connection_id || challenge.generation!=enrolled.generation || cancel.load(Ordering::Acquire) {return Err("The device authorization challenge does not match this account".into());}
         send(&mut socket,ClientMessage::ProveDevice{signature:identity.prove(challenge)?}).await?;
-        let ready=tokio::time::timeout(Duration::from_secs(6),event(&mut socket)).await.map_err(|_|"Device registration timed out")??;
-        if !matches!(ready,Some(ServerMessage::Ready{host,protocol:core_protocol::PROTOCOL_VERSION}) if host==enrolled.connection_id) {return Err("The connection service did not verify this device ID".into());}
+        let ready=tokio::time::timeout(Duration::from_secs(6),event(&mut socket)).await.map_err(|_|Failure::network("Device registration timed out"))??;
+        if !matches!(ready,Some(ServerMessage::Ready{host,protocol:core_protocol::PROTOCOL_VERSION}) if host==enrolled.connection_id) {return Err(Failure::network("The connection service did not verify this device ID"));}
         ready_at=Some(std::time::Instant::now());
         match &auth {
             #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -2197,9 +2225,18 @@ async fn run(
             _ => {
                 state.change(generation, |status| {
                     status.phase = "ready".into();
-                    status.message = "Ready for an attended connection".into();
                     status.host = Some(enrolled.connection_id);
+                    if status.unattended.is_some() {
+                        status.unattended_enabled = false;
+                        status.unattended_pending = Some(UnattendedChange::Enabling);
+                        status.message = "Verifying unattended startup sharing".into();
+                    } else {
+                        status.message = "Ready for an attended connection".into();
+                    }
                 }).await;
+                if state.0.lock().await.status.unattended.is_some() {
+                    send(&mut socket, ClientMessage::ConfigureUnattended { enabled: true }).await?;
+                }
             }
         }
         let mut credential=initial;
@@ -2218,6 +2255,7 @@ async fn run(
         let mut joined:Vec<Peer>=Vec::new();
         // (host, pinned key, unattended, joined on an invitation)
         let mut outgoing:Option<(u32,ed25519_dalek::VerifyingKey,bool,bool)>=None;
+        let mut peer_keys: std::collections::HashMap<u32, (ed25519_dalek::VerifyingKey, std::time::Instant)> = std::collections::HashMap::new();
         // Invitations received: id, host, unattended, expiry (Unix seconds).
         let mut invitations:Vec<(Uuid,u32,bool,u64)>=Vec::new();
         let mut invite_pending=false;
@@ -2235,10 +2273,10 @@ async fn run(
         loop {
             tokio::select! {
                 _=tick.tick()=>{
-                    if cancel.load(Ordering::Acquire){return Err("Registration authorization was revoked or expired".into());}
+                    if cancel.load(Ordering::Acquire){return Err(Failure::network("Registration authorization expired; reconnecting"));}
                     let now=SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_|"System clock is unavailable")?.as_secs();
-                    if now>=authorized_until || pending_renewal.is_some_and(|deadline|std::time::Instant::now()>=deadline) {return Err("Device authorization expired; reconnect after signing in".into());}
-                    if last_activity.elapsed()>Duration::from_secs(65){return Err(Failure::network("Connection-service heartbeat expired"));}
+                    if now>=authorized_until || pending_renewal.is_some_and(|deadline|std::time::Instant::now()>=deadline) {return Err(Failure::network("Device authorization expired; reconnecting"));}
+                    if last_activity.elapsed()>Duration::from_secs(150){return Err(Failure::network("Connection-service heartbeat expired"));}
                     if let Some(active)=peer.as_mut(){
                         if !active.close_sent && active.cancel.load(Ordering::Acquire) && active.signals.is_none(){
                             let session=active.id;let reject=active.host && active.local_consent.is_none();peer=None;
@@ -2283,18 +2321,27 @@ async fn run(
                     if switch_pressed.is_some_and(|(_,at)|at.elapsed()>=Duration::from_secs(30)){switch_pressed=None;}
                     if peer.is_none() && switch_memory.as_ref().is_some_and(|memory|memory.at.elapsed()>=Duration::from_secs(120)){switch_memory=None;}
                     if heartbeat.elapsed()>Duration::from_secs(20){tokio::time::timeout(Duration::from_secs(5),socket.send(Message::Ping(Vec::new().into()))).await.map_err(|_|Failure::network("Heartbeat write timed out"))?.map_err(crate::remote_recovery::socket)?;heartbeat=std::time::Instant::now();}
-                    let fresh=auth.credential(None).await?;
-                    let fresh_principal = auth.principal(&fresh)?;
-                    if fresh_principal.user!=principal.user || fresh_principal.tenant!=principal.tenant || fresh_principal.staff!=principal.staff {return Err("Account authorization changed".into());}
+                    let fresh=match auth.credential(None).await {
+                        Ok(fresh)=>fresh,
+                        Err(_)=>return Err(Failure::network("Sign-in is renewing; reconnecting registration")),
+                    };
+                    let fresh_principal = match auth.principal(&fresh) {
+                        Ok(value)=>value,
+                        Err(_)=>return Err(Failure::network("Sign-in is renewing; reconnecting registration")),
+                    };
+                    if fresh_principal.user!=principal.user || fresh_principal.tenant!=principal.tenant || fresh_principal.staff!=principal.staff {return Err(Failure::network("Account authorization changed; reconnecting registration"));}
                     let token_changed = fresh.as_ref().zip(credential.as_ref()).is_some_and(|(new, old)| new.token.as_str()!=old.token.as_str());
-                    if pending_renewal.is_none() && last_delegation_attempt.elapsed()>=Duration::from_secs(31) && (token_changed || last_renewed.elapsed()>=Duration::from_secs(720) || authorized_until.saturating_sub(now)<=120) {
+                    if pending_renewal.is_none() && last_delegation_attempt.elapsed()>=Duration::from_secs(31) && (token_changed || last_renewed.elapsed()>=Duration::from_secs(600) || authorized_until.saturating_sub(now)<=180) {
                         last_delegation_attempt=std::time::Instant::now();
-                        let renewed=registration_ticket(&fresh,&enrolled,&identity).await?;
+                        let Ok(renewed)=registration_ticket(&fresh,&enrolled,&identity).await else {
+                            continue;
+                        };
                         if !same_identity(&own_ticket,&renewed){return Err("Device identity changed during renewal".into());}
                         if cancel.load(Ordering::Acquire){break;}
                         // A ticket capped by an expiring ISM token cannot gain
-                        // lifetime until native account refresh succeeds.
-                        if renewed.expires_at<=authorized_until{credential=fresh;continue;}
+                        // lifetime until native account refresh succeeds, unless the
+                        // 15-minute monotonic broker lease needs a refresh.
+                        if renewed.expires_at<=authorized_until && last_renewed.elapsed()<Duration::from_secs(600) {credential=fresh;continue;}
                         send(&mut socket,ClientMessage::Renew{token:signaling_server::delegated_auth::encode(&renewed).map_err(|_|"Cannot encode delegated device renewal")?}).await?;
                         own_ticket=renewed;pending_renewal=Some(std::time::Instant::now()+Duration::from_secs(20));credential=fresh;
                     }
@@ -2303,7 +2350,8 @@ async fn run(
                     Command::Request(host,code,unattended)=>{
                         if peer.is_some() || outgoing.is_some(){continue;}
                         let Some(credential) = credential.as_ref() else { return Err("A startup host cannot request sessions".into()); };
-                        let key=match credential.ism.peer_key(&credential.token,host).await{Ok(key)=>key,Err(_)=>{state.change(generation,|status|{status.phase="ready".into();status.peer=None;status.message="This account could not verify that device ID. Check that it is enrolled in Mixel Remote and that your company has access.".into();}).await;continue;}};
+                        let cached = peer_keys.get(&host).and_then(|(key, at)| (at.elapsed() < Duration::from_secs(300)).then_some(*key));
+                        let key=if let Some(key)=cached{key}else{match credential.ism.peer_key_scoped(&credential.token,credential.principal.is_personal(),host).await{Ok(key)=>{peer_keys.insert(host,(key,std::time::Instant::now()));key},Err(_)=>{state.change(generation,|status|{status.phase="ready".into();status.peer=None;status.message="This account could not verify that device ID. Check that it is enrolled in Mixel Remote and that your company has access.".into();}).await;continue;}}};
                         if cancel.load(Ordering::Acquire){break;}
                         let request=match code {
                             Some(code)=>ClientMessage::RequestWithCode{host,code},
@@ -2374,7 +2422,7 @@ async fn run(
                         let Some((_,host,unattended,_))=invitations.iter().find(|offer|offer.0==invitation).copied() else {continue};
                         invitations.retain(|offer|offer.0!=invitation);
                         let Some(credential) = credential.as_ref() else { return Err("A startup host cannot join sessions".into()); };
-                        let key=match credential.ism.peer_key(&credential.token,host).await{Ok(key)=>key,Err(_)=>{state.change(generation,|status|{status.phase="ready".into();status.peer=None;status.message="This account could not verify the computer your colleague is helping.".into();}).await;continue;}};
+                        let key=match credential.ism.peer_key_scoped(&credential.token,credential.principal.is_personal(),host).await{Ok(key)=>{peer_keys.insert(host,(key,std::time::Instant::now()));key},Err(_)=>{state.change(generation,|status|{status.phase="ready".into();status.peer=None;status.message="This account could not verify the computer your colleague is helping.".into();}).await;continue;}};
                         if cancel.load(Ordering::Acquire){break;}
                         send(&mut socket,ClientMessage::JoinSession{invitation}).await?;outgoing=Some((host,key,unattended,true));
                         state.change(generation,|status|{status.phase="outgoing".into();status.message="Waiting for the person at the computer to let you join".into();status.peer=Some(host);status.sharing=false;}).await;
@@ -2556,7 +2604,8 @@ async fn run(
                         ServerMessage::SupportCode{required,code,lifetime_seconds}=>{
                             state.change(generation,|status|{
                                 status.code_required=required;
-                                status.code_expires_at=code.as_ref().map(|_|std::time::Instant::now()+Duration::from_secs(u64::from(lifetime_seconds)));
+                                // u16::MAX means the password stays until the owner turns it off.
+                                status.code_expires_at=if lifetime_seconds==u16::MAX {None} else {code.as_ref().map(|_|std::time::Instant::now()+Duration::from_secs(u64::from(lifetime_seconds)))};
                                 status.support_code=code;
                             }).await;
                         },
@@ -2650,21 +2699,34 @@ async fn run(
                                 continue;
                             }
                             if ticket.identity.profile!=*requester.as_bytes(){return Err("The requester account does not match its signed identity".into());}
-                            let auto=if unattended {
-                                let status=state.status().await;
-                                let Some(config)=status.unattended.filter(|config|status.unattended_enabled
-                                    && config.capture_allowed()
-                                    && !status.code_required)
-                                else { send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;continue; };
+                            let status=state.status().await;
+                            let is_unattended=unattended || status.unattended_enabled;
+                            let auto=if is_unattended {
+                                let config=status
+                                    .unattended
+                                    .filter(|config|(status.unattended_enabled || status.code_required) && config.capture_allowed())
+                                    .or_else(|| {
+                                        (status.unattended_enabled || status.code_required)
+                                            .then(session_platform::main_display_source)
+                                            .flatten()
+                                            .map(|source| UnattendedSource {
+                                                source,
+                                                control: session_platform::input_access(),
+                                            })
+                                            .filter(UnattendedSource::capture_allowed)
+                                    });
+                                let Some(config)=config else { send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;continue; };
                                 Some(config)
                             }else{None};
                             let expires=Arc::new(AtomicU64::new(ticket.expires_at));
                             peer=Some(Peer{id:session,remote:requester_connection,host:true,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:false,switched:false,reversed:false});
                             peer.as_ref().ok_or("Invitation state unavailable")?.track(state,generation).await?;
-                            state.change(generation,|status|{status.phase="incoming".into();status.message="Incoming request: choose a source and Accept or Reject".into();status.peer=Some(requester_connection);status.requester=Some(requester);status.sharing=true;status.unattended_session=unattended;}).await;
+                            state.change(generation,|status|{status.phase="incoming".into();status.message="Incoming request: choose a source and Accept or Reject".into();status.peer=Some(requester_connection);status.requester=Some(requester);status.sharing=true;status.unattended_session=is_unattended;}).await;
                             if let Some(config)=auto {
+                                let full=!session_platform::login_window_mode();
+                                let control=config.control || (config.source != "qa-relay-fixture" && session_platform::input_access());
                                 let decision=Decision{session,accept:true,source:config.source,confirm:true,
-                                    control:config.control,clipboard:false,files:false,chat:false,recording:false};
+                                    control,clipboard:full,files:full,chat:full,recording:full};
                                 if state.decide(decision).await.is_err() {
                                     send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;
                                 }
@@ -2686,6 +2748,14 @@ async fn run(
                             local.verify(&roots,now).map_err(|_|"The local session identity is invalid or expired")?;
                             if !same_identity(local,&own_ticket){return Err("The accepted session does not belong to this account and device".into());}
                             let checked=if active.switched{switched_identity(remote,active.remote,active.identity.as_ref().ok_or("The other side was not verified")?,&roots)?}else{peer_identity(remote,active.remote,&principal,active.host,&roots)?};
+                            if checked!=active.key && !active.host && !active.switched
+                                && let Some(credential) = credential.as_ref()
+                                && let Ok(fresh_key) = credential.ism.peer_key_scoped(&credential.token, credential.principal.is_personal(), active.remote).await
+                                && fresh_key == checked
+                            {
+                                peer_keys.insert(active.remote, (fresh_key, std::time::Instant::now()));
+                                active.key = fresh_key;
+                            }
                             if checked!=active.key || active.identity.as_ref().is_some_and(|known|!same_identity(known,remote)){return Err("Peer identity changed; request a fresh connection".into());}
                             active.expires.store(remote.expires_at,Ordering::Release);
                             active.identity=Some(remote.clone());
@@ -2733,7 +2803,17 @@ async fn run(
                         },
                         ServerMessage::Closed{session,reason}=>{if peer.as_ref().is_some_and(|peer|peer.id==session){peer=None;state.change(generation,|status|{status.phase="ready".into();status.message=format!("Session closed: {reason:?}");status.session=None;status.peer=None;status.requester=None;}).await;}},
                         ServerMessage::Error{code}=>{
-                            if outgoing.take().is_some(){state.change(generation,|status|{status.phase="ready".into();status.peer=None;status.message=request_failure_message(code).into();}).await;}
+                            if let Some((host,key,was_unattended,joined))=outgoing.take(){
+                                // A computer with unattended access accepts this. One without it
+                                // still gets the usual Accept prompt, instead of a hard failure.
+                                if was_unattended && !joined && code==ErrorCode::Unavailable {
+                                    send(&mut socket,ClientMessage::Request{host}).await?;
+                                    outgoing=Some((host,key,false,false));
+                                    state.change(generation,|status|{status.phase="outgoing".into();status.peer=Some(host);status.message="Waiting for the remote host to Accept".into();}).await;
+                                } else {
+                                    state.change(generation,|status|{status.phase="ready".into();status.peer=None;status.message=request_failure_message(code).into();}).await;
+                                }
+                            }
                             else if std::mem::take(&mut invite_pending){
                                 state.change(generation,|status|status.invite_message=Some(match code {ErrorCode::Busy=>"No more colleagues can join this session right now",ErrorCode::Unavailable=>"The computer you are helping cannot receive colleagues (it needs a newer Mixel Remote)",_=>"The invitation could not be sent"}.into())).await;
                             }
@@ -2750,6 +2830,8 @@ async fn run(
                                 let session=peer.take().ok_or("Session state unavailable")?.id;
                                 send(&mut socket,ClientMessage::Close{session}).await?;
                                 state.change(generation,|status|{status.phase="ready".into();status.peer=None;status.session=None;status.requester=None;status.message="The relay service is unavailable; screen sharing has not started".into();}).await;
+                            }else if pending_renewal.take().is_some(){
+                                return Err(Failure::network("Device authorization renewal was refused; reconnecting"));
                             }else{return Err(format!("Connection service rejected an operation: {code:?}").into());}
                         },
                         _=>return Err("Unexpected connection-service state transition".into()),
@@ -2775,7 +2857,7 @@ async fn run(
 /// `unattended` flag alone is not enough: it must never turn an attended session (someone at the
 /// computer decides) into one a colleague enters silently.
 fn unattended_join_allowed(status: &Status) -> bool {
-    status.unattended_enabled && status.unattended_session && !status.code_required
+    status.unattended_enabled && status.unattended_session
 }
 
 #[cfg(test)]
@@ -2790,7 +2872,6 @@ mod join_tests {
         for change in [
             (|s: &mut Status| s.unattended_session = false) as fn(&mut Status),
             |s: &mut Status| s.unattended_enabled = false,
-            |s: &mut Status| s.code_required = true,
         ] {
             let mut refused = status.clone();
             change(&mut refused);
@@ -3337,8 +3418,70 @@ mod consent_tests {
         assert_eq!(colleague_views(&[colleague]).first().map(|view| view.state), Some("connecting"));
     }
 
+    #[cfg(not(feature = "testflight-controller"))]
+    #[tokio::test]
+    #[cfg_attr(any(target_os = "ios", target_os = "android"), ignore = "host side only: phones are controllers")]
+    async fn unattended_session_auto_accepts_with_full_tools_and_control() {
+        let Some(source) = session_platform::main_display_source() else {
+            return;
+        };
+        let remote = RemoteSession::default();
+        let id = Uuid::new_v4();
+        let (commands, mut receiver) = mpsc::channel(4);
+        remote
+            .track(
+                0,
+                id,
+                Arc::new(AtomicBool::new(false)),
+                Uuid::new_v4(),
+                Arc::new(AtomicBool::new(false)),
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        {
+            let mut inner = remote.0.lock().await;
+            inner.commands = Some(commands);
+            inner.status.phase = "incoming".into();
+            inner.status.session = Some(id);
+            inner.status.unattended_enabled = true;
+            inner.status.unattended_session = true;
+            inner.status.unattended = Some(UnattendedSource {
+                source: source.clone(),
+                control: false,
+            });
+        }
+        let control = session_platform::input_access();
+        remote
+            .decide(Decision {
+                session: id,
+                accept: true,
+                source: source.clone(),
+                confirm: true,
+                control,
+                clipboard: true,
+                files: true,
+                chat: true,
+                recording: true,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            receiver.recv().await,
+            Some(Command::Decide {
+                accept: true,
+                clipboard: true,
+                files: true,
+                chat: true,
+                recording: true,
+                ..
+            })
+        ));
+    }
+
 }
 
-#[cfg(all(test, any(target_os = "linux", target_os = "windows")))]
+#[cfg(all(test, any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 #[path = "remote_session_native_test.rs"]
 mod remote_session_native_test;

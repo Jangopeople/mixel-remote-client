@@ -193,7 +193,7 @@ impl Drop for Mapped<'_> {
 pub struct WindowsCapture {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
-    duplication: IDXGIOutputDuplication,
+    duplication: Option<IDXGIOutputDuplication>,
     output: IDXGIOutput1,
     display: Display,
     fallback: Option<gdi::GdiCapture>,
@@ -259,17 +259,35 @@ impl WindowsCapture {
         let context = context
             .ok_or_else(|| CaptureError::Native("Windows returned no D3D context".into()))?;
         let output: IDXGIOutput1 = output.cast().map_err(native)?;
-        let duplication = unsafe { output.DuplicateOutput(&device) }.map_err(native)?;
-        Ok(Self {
-            device,
-            context,
-            duplication,
-            output,
-            display: display.clone(),
-            fallback: None,
-            received_visible_frame: false,
-            staging: None,
-        })
+        match unsafe { output.DuplicateOutput(&device) } {
+            Ok(duplication) => Ok(Self {
+                device,
+                context,
+                duplication: Some(duplication),
+                output,
+                display: display.clone(),
+                fallback: None,
+                received_visible_frame: false,
+                staging: None,
+            }),
+            Err(error) => {
+                if gdi::default_input_desktop()
+                    && let Ok(fallback) = gdi::GdiCapture::open(display)
+                {
+                    return Ok(Self {
+                        device,
+                        context,
+                        duplication: None,
+                        output,
+                        display: display.clone(),
+                        fallback: Some(fallback),
+                        received_visible_frame: false,
+                        staging: None,
+                    });
+                }
+                Err(native(error))
+            }
+        }
     }
     /// A timeout is a normal unchanged-screen result. Desktop switches, lock
     /// screens and display removal fail closed; the caller must reselect/reopen.
@@ -289,20 +307,33 @@ impl WindowsCapture {
                 .frame(&self.display)
                 .map(Some);
         }
+        let Some(duplication) = self.duplication.clone() else {
+            std::thread::sleep(timeout.clamp(Duration::from_millis(1), Duration::from_millis(8)));
+            return self.fallback_frame().map(Some);
+        };
         let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
         let mut resource = None;
         let milliseconds = timeout
             .as_millis()
-            .clamp(1, if self.fallback.is_some() { 50 } else { 250 })
+            .clamp(1, if !self.received_visible_frame { 25 } else { 50 })
             as u32;
         match unsafe {
-            self.duplication
+            duplication
                 .AcquireNextFrame(milliseconds, &mut info, &mut resource)
         } {
             Ok(()) => {}
             Err(error) if error.code() == DXGI_ERROR_WAIT_TIMEOUT => {
+                if !self.received_visible_frame
+                    && self.fallback.is_none()
+                    && gdi::default_input_desktop()
+                {
+                    self.fallback = gdi::GdiCapture::open(&self.display).ok();
+                }
                 return if self.fallback.is_some() {
-                    self.fallback_frame().map(Some)
+                    let frame = self.fallback_frame()?;
+                    self.received_visible_frame = true;
+                    self.fallback = None;
+                    Ok(Some(frame))
                 } else {
                     Ok(None)
                 };
@@ -312,7 +343,7 @@ impl WindowsCapture {
             }
             Err(error) => return Err(native(error)),
         }
-        let acquired = Acquired(Some(self.duplication.clone()));
+        let acquired = Acquired(Some(duplication.clone()));
         let resource = resource
             .ok_or_else(|| CaptureError::Native("Windows returned no desktop resource".into()))?;
         let texture: ID3D11Texture2D = resource.cast().map_err(native)?;
@@ -421,7 +452,7 @@ impl WindowsCapture {
             self.received_visible_frame = true;
             self.fallback = None;
         }
-        let rotation = unsafe { self.duplication.GetDesc() }.Rotation;
+        let rotation = unsafe { duplication.GetDesc() }.Rotation;
         let (out_width, out_height, rotated) = if rotation == DXGI_MODE_ROTATION_IDENTITY
             || rotation == DXGI_MODE_ROTATION_UNSPECIFIED
         {
@@ -435,6 +466,9 @@ impl WindowsCapture {
             .map_err(|error| CaptureError::Native(error.to_string()))
     }
     fn fallback_frame(&mut self) -> Result<CapturedFrame, CaptureError> {
+        if !gdi::default_input_desktop() {
+            return Err(CaptureError::Target);
+        }
         let desc = unsafe { self.output.GetDesc() }.map_err(native)?;
         let bounds = desc.DesktopCoordinates;
         if !desc.AttachedToDesktop.as_bool()

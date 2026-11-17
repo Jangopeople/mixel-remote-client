@@ -52,11 +52,10 @@ impl Context {
     }
 
 
-    /// Ends the sessions and goes offline, then forgets the sign-in in memory (as the desktop app
-    /// does when it quits).
+    /// Ends the sessions and goes offline. A finished sign-in stays on this computer.
     pub async fn shutdown(&self) -> Result<(), String> {
         let stopped = self.remote.stop().await;
-        let signed_out = self.auth.cancel().await;
+        let signed_out = self.auth.suspend().await;
         stopped.and(signed_out)
     }
 

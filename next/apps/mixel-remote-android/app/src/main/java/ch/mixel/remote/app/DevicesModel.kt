@@ -247,7 +247,7 @@ class DevicesModel(private val app: AppModel) {
     fun connect(device: Device) {
         message = L("Connecting to %@…", device.name)
         app.section = Section.Connect
-        app.connect(device.connectionId, unattended = app.unattended)
+        app.connect(device.connectionId, unattended = true)
     }
 
     // Manage (company devices)

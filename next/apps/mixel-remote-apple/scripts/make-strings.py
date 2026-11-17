@@ -207,6 +207,7 @@ NATIVE = {
     "New group": ("Neue Gruppe", "Nouveau groupe", "Nuovo gruppo"),
     "On an iPhone the person taps “Start sharing my screen”; on Android they allow the session.": ("Auf dem iPhone tippt die Person auf «Bildschirm teilen starten»; auf Android erlaubt sie die Sitzung.", "Sur iPhone, la personne touche « Commencer le partage de mon écran » ; sur Android, elle autorise la session.", "Su iPhone la persona tocca «Avvia condivisione dello schermo»; su Android consente la sessione."),
     "One-time password, if provided": ("Einmalpasswort, falls erhalten", "Mot de passe à usage unique, si fourni", "Password monouso, se fornita"),
+    "Share this password with your technician. It stays on until you turn it off, and it works every time you connect.": ("Geben Sie dieses Passwort Ihrem Techniker. Es bleibt aktiv, bis Sie es ausschalten, und es gilt bei jeder Verbindung.", "Communiquez ce mot de passe à votre technicien. Il reste actif jusqu’à ce que vous le désactiviez, et il fonctionne à chaque connexion.", "Comunichi questa password al tecnico. Resta attiva finché non la disattiva e funziona a ogni connessione."),
     "Online · ID %@": ("Online · ID %@", "En ligne · ID %@", "Online · ID %@"),
     "Open Mixel Remote": ("Mixel Remote öffnen", "Ouvrir Mixel Remote", "Apri Mixel Remote"),
     "Or a personal space for your own devices": ("Oder ein persönlicher Bereich für Ihre eigenen Geräte", "Ou un espace personnel pour vos propres appareils", "Oppure uno spazio personale per i Suoi dispositivi"),

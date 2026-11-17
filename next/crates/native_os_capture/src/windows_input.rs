@@ -21,6 +21,7 @@ use windows::Win32::UI::{
 };
 use zeroize::Zeroizing;
 fn submit(events: &[INPUT]) -> Result<(), InjectionError> {
+    let _ = windows_capture::attach_input_desktop();
     // SAFETY: the initialized slice remains live for the call and its element
     // size is the exact SDK INPUT layout. Windows copies the events synchronously.
     let accepted = unsafe { SendInput(events, std::mem::size_of::<INPUT>() as i32) };
@@ -207,14 +208,21 @@ impl Injector for WindowsInjector {
                 horizontal,
                 vertical,
             } => {
+                let scale = |delta: i16| -> i32 {
+                    if delta.abs() < 120 {
+                        i32::from(delta) * 120
+                    } else {
+                        i32::from(delta)
+                    }
+                };
                 if vertical != 0 {
-                    submit(&[mouse(0, 0, i32::from(vertical) as u32, MOUSEEVENTF_WHEEL)])?;
+                    submit(&[mouse(0, 0, scale(vertical) as u32, MOUSEEVENTF_WHEEL)])?;
                 }
                 if horizontal != 0 {
                     submit(&[mouse(
                         0,
                         0,
-                        i32::from(horizontal) as u32,
+                        scale(horizontal) as u32,
                         MOUSEEVENTF_HWHEEL,
                     )])?;
                 }

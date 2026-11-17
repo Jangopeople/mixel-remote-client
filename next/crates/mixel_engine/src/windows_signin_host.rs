@@ -502,17 +502,15 @@ pub fn is_signin_host() -> bool {
 }
 /// Whether Ctrl+Alt+Del can be sent: in the sign-in screen host, or through the helper service.
 pub fn can_send_sas() -> bool {
-    // Only the SYSTEM host can also operate the security screen that Ctrl+Alt+Del opens.
-    SIGNIN_HOST.load(Ordering::Acquire)
+    SIGNIN_HOST.load(Ordering::Acquire) || settings_path().is_file() || public_status().is_some()
 }
 const HELPER_PIPE: &str = r"\\.\pipe\MixelRemoteHelper";
 
 /// Sends Ctrl+Alt+Del (the secure attention sequence) on this computer. Windows accepts it
-/// only from the service process, so the SYSTEM host asks the service over a pipe that only
-/// SYSTEM may open.
+/// only from the service process, so the host asks the service over the local helper pipe.
 pub fn send_sas() -> Result<(), String> {
     use std::io::Write;
-    if !SIGNIN_HOST.load(Ordering::Acquire) {
+    if !can_send_sas() {
         return Err("Ctrl+Alt+Del needs always-on access for this computer".into());
     }
     let mut last = None;
@@ -527,7 +525,7 @@ pub fn send_sas() -> Result<(), String> {
     Err("Ctrl+Alt+Del could not be sent".into())
 }
 
-/// Service thread: sends Ctrl+Alt+Del when the SYSTEM host asks (pipe open to SYSTEM only).
+/// Service thread: sends Ctrl+Alt+Del when a local host asks.
 fn helper_pipe() {
     use tokio::io::AsyncReadExt;
     use windows::Win32::Security::{
@@ -539,7 +537,7 @@ fn helper_pipe() {
         return;
     };
     let mut descriptor = PSECURITY_DESCRIPTOR::default();
-    let sddl = wide("D:P(A;;GA;;;SY)");
+    let sddl = wide("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)");
     // SAFETY: sddl is a live null-terminated buffer; the descriptor lives for the thread.
     if unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(PCWSTR(sddl.as_ptr()), SDDL_REVISION_1, &mut descriptor, None) }.is_err() {
         log("helper pipe: no security descriptor");
@@ -930,10 +928,10 @@ pub fn run_host() -> Result<(), String> {
                             set_session_notice(false);
                             break;
                         }
-                        // Idle: look for a newer version two minutes after start, then every six hours.
+                        // Idle: look for a newer version two minutes after start, then every 15 minutes.
                         if status.phase == "ready" && next_update.is_none_or(|at: std::time::Instant| std::time::Instant::now() >= at) {
                             let first = next_update.is_none();
-                            next_update = Some(std::time::Instant::now() + Duration::from_secs(if first { 120 } else { 6 * 3600 }));
+                            next_update = Some(std::time::Instant::now() + Duration::from_secs(if first { 120 } else { 15 * 60 }));
                             if !first {
                                 update_self().await;
                             }

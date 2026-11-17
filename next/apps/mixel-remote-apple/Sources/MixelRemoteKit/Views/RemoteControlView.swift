@@ -28,7 +28,7 @@ public struct RemoteControlView: View {
     @ObservedObject var session: SessionModel
     @State private var partner = ""
     @State private var password = ""
-    @State private var unattended = false
+    @State private var unattended = true
     @State private var phoneId = ""
 
     public init(app: AppModel) {
@@ -81,10 +81,8 @@ public struct RemoteControlView: View {
             FieldRow(L("One-time password, if provided")) {
                 SecureField(text: $password, prompt: Text(verbatim: "")) { Text(verbatim: L("One-time password, if provided")) }
                     .textFieldStyle(.roundedBorder)
-                    .disabled(unattended)
             }
             Toggle(isOn: $unattended) { Text(verbatim: L("Connect without confirmation (unattended access)")) }
-                .onChange(of: unattended) { value in if value { password = "" } }
             HStack {
                 Button {
                     guard let id = Format.parseRemoteId(partner) else { app.error = L("Enter a nine-digit connection ID"); return }
@@ -120,7 +118,7 @@ public struct RemoteControlView: View {
                 }
                 if let code = remote.supportCode, app.signedIn {
                     FieldRow(L("One-time password")) { Text(verbatim: code).font(.title2.monospaced()).textSelection(.enabled) }
-                    Text(verbatim: L("Share this password with your technician. It lasts five minutes and allows one request.")).font(.callout).foregroundStyle(.secondary)
+                    Text(verbatim: L("Share this password with your technician. It stays on until you turn it off, and it works every time you connect.")).font(.callout).foregroundStyle(.secondary)
                 }
                 HStack {
                     if remote.disconnected {
@@ -200,7 +198,7 @@ public struct RemoteControlView: View {
                     Toggle(isOn: $host.unattendedControl) { Text(verbatim: L("Allow keyboard and mouse control")) }.disabled(!remote.inputAccess)
                     Toggle(isOn: $host.unattendedConfirm) { Text(verbatim: L("I confirm that approved users may see this display without asking.")) }
                     Button(L("Enable unattended sharing")) { host.enableUnattended() }
-                        .disabled(app.busy || !host.unattendedConfirm || remote.codeRequired)
+                        .disabled(app.busy || !host.unattendedConfirm)
                 }
             }
             MessageLine(host.error)

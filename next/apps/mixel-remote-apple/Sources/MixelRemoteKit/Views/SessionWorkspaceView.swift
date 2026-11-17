@@ -66,7 +66,7 @@ public struct SessionWorkspaceView: View {
             if session.frame == nil {
                 VStack(spacing: 12) {
                     ProgressView().controlSize(.large).tint(.white)
-                    Text(verbatim: remote.phase == "outgoing" ? L("Waiting for the other person to accept your request.") : L("Connecting securely…"))
+                    Text(verbatim: remote.phase == "outgoing" ? app.connectionMessage : L("Connecting securely…"))
                         .foregroundStyle(.white.opacity(0.85))
                 }
             }

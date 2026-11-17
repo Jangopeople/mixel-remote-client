@@ -126,9 +126,15 @@ public final class RemoteScreenView: NSView {
 
     public override func scrollWheel(with event: NSEvent) {
         guard controllable, picturePoint(event) != nil else { return }
-        let scale: CGFloat = event.hasPreciseScrollingDeltas ? 1.0 / 40 : 1
-        wheel.x = max(-120, min(120, wheel.x + event.scrollingDeltaX * scale))
-        wheel.y = max(-120, min(120, wheel.y + event.scrollingDeltaY * scale))
+        if event.hasPreciseScrollingDeltas {
+            wheel.x = max(-120, min(120, wheel.x + event.scrollingDeltaX / 12))
+            wheel.y = max(-120, min(120, wheel.y + event.scrollingDeltaY / 12))
+        } else {
+            let dx: CGFloat = event.scrollingDeltaX == 0 ? 0 : (event.scrollingDeltaX > 0 ? max(1, event.scrollingDeltaX) : min(-1, event.scrollingDeltaX))
+            let dy: CGFloat = event.scrollingDeltaY == 0 ? 0 : (event.scrollingDeltaY > 0 ? max(1, event.scrollingDeltaY) : min(-1, event.scrollingDeltaY))
+            wheel.x = max(-120, min(120, wheel.x + dx))
+            wheel.y = max(-120, min(120, wheel.y + dy))
+        }
         let horizontal = Int16(wheel.x.rounded(.towardZero)), vertical = Int16(wheel.y.rounded(.towardZero))
         wheel.x -= CGFloat(horizontal)
         wheel.y -= CGFloat(vertical)

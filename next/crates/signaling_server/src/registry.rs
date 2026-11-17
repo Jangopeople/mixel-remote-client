@@ -114,9 +114,13 @@ impl Peer {
             && self.principal.can_request(&target.principal)
     }
 }
-const CODE_LIFETIME_SECONDS: u16 = 300;
+/// Safety cap for a password the owner has not turned off. The app shows no countdown.
+const CODE_KEEP: Duration = Duration::from_secs(365 * 24 * 60 * 60);
+/// Wire value meaning "until turned off". Any smaller value is a countdown for older apps.
+const CODE_LIFETIME_WIRE: u16 = u16::MAX;
 const CODE_ATTEMPTS: u8 = 5;
 
+#[derive(Clone)]
 struct CodeGate {
     code: Option<SupportCode>,
     expires_at: Instant,
@@ -180,6 +184,8 @@ pub struct Registry {
     sessions: HashMap<Uuid, Session>,
     retired: HashMap<Uuid, Retired>,
     invitations: HashMap<Uuid, Invitation>,
+    /// Support passwords that survive a reconnect of the same connection ID, until turned off.
+    support_codes: HashMap<u32, CodeGate>,
     /// Most connections (peers) and most sessions at once, broker-wide.
     max_peers: usize,
     max_sessions: usize,
@@ -327,7 +333,7 @@ impl Registry {
             || source.principal.expires_at <= unix
             || target.principal.expires_at <= unix
             || !source.can_request(target, unattended)
-            || (unattended && (!target.unattended_enabled || target.code_gate.is_some()))
+            || (unattended && !target.unattended_enabled)
         {
             return None;
         }
@@ -349,7 +355,11 @@ impl Registry {
         unix: u64,
     ) -> Option<PolicyCheck> {
         let (controller, host, unattended) = match message {
-            ClientMessage::Request { host } | ClientMessage::RequestWithCode { host, .. } => {
+            ClientMessage::Request { host } => {
+                let unattended = self.peers.get(host).is_some_and(|peer| peer.unattended_enabled);
+                (from, *host, unattended)
+            }
+            ClientMessage::RequestWithCode { host, .. } => {
                 (from, *host, false)
             }
             ClientMessage::RequestUnattended { host } => (from, *host, true),
@@ -503,6 +513,7 @@ impl Registry {
             sessions: HashMap::new(),
             retired: HashMap::new(),
             invitations: HashMap::new(),
+            support_codes: HashMap::new(),
             max_peers: connections,
             max_sessions: connections,
             journal: SessionJournal::default(),
@@ -571,6 +582,25 @@ impl Registry {
                 protocol: PROTOCOL_VERSION,
             },
         );
+        if let Some(gate) = self
+            .support_codes
+            .get(&host)
+            .filter(|gate| Instant::now() < gate.expires_at && gate.code.is_some())
+            .cloned()
+        {
+            let code = gate.code.clone();
+            if let Some(peer) = self.peers.get_mut(&host) {
+                peer.code_gate = Some(gate);
+            }
+            self.send(
+                host,
+                ServerMessage::SupportCode {
+                    required: true,
+                    code,
+                    lifetime_seconds: CODE_LIFETIME_WIRE,
+                },
+            );
+        }
         Ok((host, generation))
     }
     /// Renewal cannot move a live connection to a different account, tenant or
@@ -664,6 +694,8 @@ impl Registry {
     pub fn expire(&mut self, now: Instant) {
         self.retired.retain(|_, session| now < session.deadline);
         self.invitations.retain(|_, invitation| now < invitation.expires_at);
+        self.support_codes
+            .retain(|_, gate| now < gate.expires_at && gate.code.is_some());
         let expired: Vec<_> = self
             .sessions
             .iter()
@@ -812,7 +844,7 @@ impl Registry {
                 else {
                     return Err(ErrorCode::Forbidden);
                 };
-                peer.unattended_enabled = enabled && peer.code_gate.is_none() && !peer.attended_support;
+                peer.unattended_enabled = enabled && !peer.attended_support;
                 let enabled = peer.unattended_enabled;
                 if !enabled {
                     let rooms: Vec<_> = self
@@ -854,29 +886,37 @@ impl Registry {
                 Ok(())
             }
             ClientMessage::GenerateSupportCode | ClientMessage::ClearSupportCode => {
-                let Some(peer) = self
-                    .peers
-                    .get_mut(&from)
-                    .filter(|peer| peer.identity.is_some() && !peer.unattended_host_only())
-                else {
-                    return Err(ErrorCode::Forbidden);
-                };
                 let required = matches!(message, ClientMessage::GenerateSupportCode);
-                if required && peer.unattended_enabled {
-                    return Err(ErrorCode::Busy);
-                }
                 let code = required.then(SupportCode::generate);
-                peer.code_gate = code.clone().map(|code| CodeGate {
+                let gate = code.clone().map(|code| CodeGate {
                     code: Some(code),
-                    expires_at: now + Duration::from_secs(u64::from(CODE_LIFETIME_SECONDS)),
+                    expires_at: now + CODE_KEEP,
                     attempts_left: CODE_ATTEMPTS,
                 });
+                {
+                    let Some(peer) = self
+                        .peers
+                        .get_mut(&from)
+                        .filter(|peer| peer.identity.is_some() && !peer.unattended_host_only())
+                    else {
+                        return Err(ErrorCode::Forbidden);
+                    };
+                    peer.code_gate = gate.clone();
+                }
+                match gate {
+                    Some(gate) => {
+                        self.support_codes.insert(from, gate);
+                    }
+                    None => {
+                        self.support_codes.remove(&from);
+                    }
+                }
                 self.send(
                     from,
                     ServerMessage::SupportCode {
                         required,
                         code,
-                        lifetime_seconds: if required { CODE_LIFETIME_SECONDS } else { 0 },
+                        lifetime_seconds: if required { CODE_LIFETIME_WIRE } else { 0 },
                     },
                 );
                 Ok(())
@@ -909,13 +949,14 @@ impl Registry {
             ClientMessage::Request { host }
             | ClientMessage::RequestWithCode { host, .. }
             | ClientMessage::RequestUnattended { host } => {
-                let unattended = matches!(message, ClientMessage::RequestUnattended { .. });
                 let offered = match &message {
                     ClientMessage::RequestWithCode { code, .. } => Some(code),
                     _ => None,
                 };
                 let requester = &self.peers[&from];
                 let target = self.peers.get(&host).ok_or(ErrorCode::Unavailable)?;
+                let unattended = matches!(message, ClientMessage::RequestUnattended { .. })
+                    || (offered.is_none() && target.unattended_enabled);
                 if from == host
                     || !requester.can_request(target, unattended)
                     || (unattended && !target.unattended_enabled)
@@ -939,36 +980,50 @@ impl Registry {
                     return Err(ErrorCode::Busy);
                 }
                 let requester = requester.principal.clone();
-                let target = self.peers.get_mut(&host).ok_or(ErrorCode::Unavailable)?;
-                match (target.code_gate.as_mut(), offered) {
-                    (None, None) => {}
-                    (Some(gate), Some(offered)) if now < gate.expires_at && gate.code.is_some() => {
-                        if !gate.code.as_ref().is_some_and(|code| code.matches(offered)) {
-                            gate.attempts_left = gate.attempts_left.saturating_sub(1);
-                            if gate.attempts_left == 0 {
-                                gate.code = None;
-                                self.send(
-                                    host,
-                                    ServerMessage::SupportCode {
-                                        required: true,
-                                        code: None,
-                                        lifetime_seconds: 0,
-                                    },
-                                );
+                let mut remembered = None;
+                let mut rejected = false;
+                {
+                    let target = self.peers.get_mut(&host).ok_or(ErrorCode::Unavailable)?;
+                    match (target.code_gate.as_mut(), offered) {
+                        (None, None) => {}
+                        (_, None) if unattended => {}
+                        (Some(gate), Some(offered))
+                            if now < gate.expires_at && gate.code.is_some() =>
+                        {
+                            if !gate.code.as_ref().is_some_and(|code| code.matches(offered)) {
+                                gate.attempts_left = gate.attempts_left.saturating_sub(1);
+                                rejected = true;
+                                if gate.attempts_left == 0 {
+                                    gate.code = None;
+                                } else {
+                                    remembered = Some(gate.clone());
+                                }
+                            } else {
+                                // The same password keeps working until the owner turns it off.
+                                gate.attempts_left = CODE_ATTEMPTS;
+                                remembered = Some(gate.clone());
                             }
-                            return Err(ErrorCode::Unavailable);
                         }
-                        gate.code = None;
-                        self.send(
-                            host,
-                            ServerMessage::SupportCode {
-                                required: true,
-                                code: None,
-                                lifetime_seconds: 0,
-                            },
-                        );
+                        _ => return Err(ErrorCode::Unavailable),
                     }
-                    _ => return Err(ErrorCode::Unavailable),
+                }
+                if rejected && remembered.is_none() {
+                    self.support_codes.remove(&host);
+                    self.send(
+                        host,
+                        ServerMessage::SupportCode {
+                            required: true,
+                            code: None,
+                            lifetime_seconds: 0,
+                        },
+                    );
+                    return Err(ErrorCode::Unavailable);
+                }
+                if let Some(gate) = remembered {
+                    self.support_codes.insert(host, gate);
+                }
+                if rejected {
+                    return Err(ErrorCode::Unavailable);
                 }
                 let session = Uuid::new_v4();
                 self.sessions.insert(
@@ -999,7 +1054,7 @@ impl Registry {
                         requester_connection: from,
                         requester: requester.user,
                         requester_tenant: requester.tenant,
-                        unattended,
+                        unattended: unattended || offered.is_some(),
                         requester_identity: self
                             .peers
                             .get(&from)
@@ -1582,23 +1637,27 @@ mod rotation_tests {
         );
     }
     #[test]
-    fn one_time_password_is_bound_to_one_host_and_expires_at_its_deadline() {
+    fn support_password_stays_usable_on_one_host_until_it_is_turned_off() {
         let mut registry = Registry::default();
         let now = Instant::now();
-        let (controller, _) = peer(&mut registry, 123_456_789, 10);
+        let (controller, mut controller_events) = peer(&mut registry, 123_456_789, 10);
         let (host, mut host_events) = peer(&mut registry, 234_567_890, 11);
         let (_, mut other_events) = peer(&mut registry, 345_678_901, 12);
+        let _ = controller_events.try_recv().unwrap();
         let _ = host_events.try_recv().unwrap();
         let _ = other_events.try_recv().unwrap();
         registry
             .handle(234_567_890, host, ClientMessage::GenerateSupportCode, now)
             .unwrap();
         let ServerMessage::SupportCode {
-            code: Some(code), ..
+            code: Some(code),
+            lifetime_seconds,
+            ..
         } = host_events.try_recv().unwrap()
         else {
             panic!("missing code");
         };
+        assert_eq!(lifetime_seconds, u16::MAX);
         assert_eq!(
             registry.handle(
                 123_456_789,
@@ -1612,19 +1671,66 @@ mod rotation_tests {
             Err(ErrorCode::Unavailable)
         );
         assert!(other_events.try_recv().is_err());
-        assert_eq!(
-            registry.handle(
+        let request = || ClientMessage::RequestWithCode {
+            host: 234_567_890,
+            code: code.clone(),
+        };
+        registry
+            .handle(123_456_789, controller, request(), now)
+            .unwrap();
+        let ServerMessage::Requested { session } = controller_events.try_recv().unwrap() else {
+            panic!("missing first request");
+        };
+        assert!(matches!(host_events.try_recv().unwrap(), ServerMessage::Consent { .. }));
+        registry
+            .handle(123_456_789, controller, ClientMessage::Close { session }, now)
+            .unwrap();
+        let _ = controller_events.try_recv().unwrap();
+        let _ = host_events.try_recv().unwrap();
+        // The old five-minute deadline no longer consumes the password.
+        registry
+            .handle(
                 123_456_789,
                 controller,
-                ClientMessage::RequestWithCode {
-                    host: 234_567_890,
-                    code
-                },
-                now + Duration::from_secs(u64::from(CODE_LIFETIME_SECONDS))
-            ),
+                request(),
+                now + Duration::from_secs(300),
+            )
+            .unwrap();
+        let ServerMessage::Requested { session: again } = controller_events.try_recv().unwrap()
+        else {
+            panic!("missing second request");
+        };
+        assert_ne!(session, again);
+        registry
+            .handle(
+                123_456_789,
+                controller,
+                ClientMessage::Close { session: again },
+                now,
+            )
+            .unwrap();
+        let generation = registry.peers.get(&234_567_890).unwrap().generation;
+        registry.disconnect(234_567_890, generation);
+        let (host, mut host_events) = peer(&mut registry, 234_567_890, 11);
+        assert!(matches!(host_events.try_recv().unwrap(), ServerMessage::Ready { .. }));
+        let ServerMessage::SupportCode {
+            code: Some(restored),
+            ..
+        } = host_events.try_recv().unwrap()
+        else {
+            panic!("password was not restored");
+        };
+        assert_eq!(restored.reveal(), code.reveal());
+        registry
+            .handle(123_456_789, controller, request(), now + Duration::from_secs(300))
+            .unwrap();
+        registry
+            .handle(234_567_890, host, ClientMessage::ClearSupportCode, now)
+            .unwrap();
+        assert_eq!(
+            registry.handle(123_456_789, controller, request(), now),
             Err(ErrorCode::Unavailable)
         );
-        assert!(host_events.try_recv().is_err());
     }
 
     #[test]

@@ -232,8 +232,7 @@ public sealed class DevicesModel : Observable
     public Task Connect(Device device)
     {
         Message = L("Connecting to %@…", device.Name);
-        app.Section = AppSection.Remote;
-        return app.Connect(device.ConnectionId);
+        return app.Connect(device.ConnectionId, unattended: true, checkPhone: false);
     }
 
     private const string MacsKey = "mixel.remote.macs.v1";

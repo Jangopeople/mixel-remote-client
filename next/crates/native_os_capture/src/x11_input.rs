@@ -173,7 +173,12 @@ impl X11Injector {
         positive: u8,
         negative: u8,
     ) -> Result<(), InjectionError> {
-        self.scroll[axis] = (self.scroll[axis] + i32::from(delta)).clamp(-3_840, 3_840);
+        let scaled = if delta.abs() < 120 {
+            i32::from(delta) * 120
+        } else {
+            i32::from(delta)
+        };
+        self.scroll[axis] = (self.scroll[axis] + scaled).clamp(-3_840, 3_840);
         let button = if self.scroll[axis] >= 0 {
             positive
         } else {

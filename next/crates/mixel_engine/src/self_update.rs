@@ -229,14 +229,23 @@ fn install(installer: &Path, _version: &str) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     verify_signature(installer)?;
     let exe = std::env::current_exe().map_err(|_| "Cannot locate Mixel Remote")?;
-    // Hidden helper: wait until this app has closed, install silently, start the new version.
-    let script = "Start-Sleep 2; Add-Content -LiteralPath $env:MIXEL_UPDATE_LOG \"installer started\"; \
+    let pid = std::process::id().to_string();
+    // Hidden helper: run from TEMP so the install folder is not held open, wait until this app
+    // has closed, install silently, and start the new version.
+    let script = "Set-Location $env:TEMP; \
+        for($i=0; $i -lt 40; $i++){ if(-not (Get-Process -Id $env:MIXEL_UPDATE_PID -ErrorAction SilentlyContinue)){ break }; Start-Sleep -Milliseconds 250 }; \
+        Stop-Process -Id $env:MIXEL_UPDATE_PID -Force -ErrorAction SilentlyContinue; \
+        Stop-Process -Name mixel-remote-helper -Force -ErrorAction SilentlyContinue; \
+        Start-Sleep 1; \
+        Add-Content -LiteralPath $env:MIXEL_UPDATE_LOG \"installer started\"; \
         $p=Start-Process -FilePath $env:MIXEL_UPDATE_FILE -ArgumentList '/S' -Wait -PassThru; \
         Add-Content -LiteralPath $env:MIXEL_UPDATE_LOG \"installer exit $($p.ExitCode)\"; \
         if($p.ExitCode -eq 0){ Start-Process -FilePath $env:MIXEL_UPDATE_APP }";
     let spawn = |flags: u32| {
         std::process::Command::new("powershell")
+            .current_dir(std::env::temp_dir())
             .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
+            .env("MIXEL_UPDATE_PID", &pid)
             .env("MIXEL_UPDATE_FILE", installer)
             .env("MIXEL_UPDATE_APP", &exe)
             .env("MIXEL_UPDATE_LOG", log_path())
@@ -263,18 +272,22 @@ fn install(_package: &Path, _version: &str) -> Result<(), String> {
 }
 #[cfg(target_os = "macos")]
 fn install(image: &Path, version: &str) -> Result<(), String> {
+    fn sh_quote(path: &Path) -> String {
+        format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
+    }
     let exe = std::env::current_exe().map_err(|_| "Cannot locate Mixel Remote")?;
-    let bundle = exe
+    let mut bundle = exe
         .ancestors()
         .nth(3)
         .filter(|path| path.extension().is_some_and(|ext| ext == "app"))
         .ok_or("Mixel Remote is not running from an app bundle")?
         .to_path_buf();
+    let bundle_str = bundle.to_string_lossy();
+    if bundle.starts_with("/Volumes/") || bundle_str.contains("/AppTranslocation/") {
+        bundle = PathBuf::from("/Applications/Mixel Remote.app");
+    }
     let parent = bundle.parent().ok_or("Cannot locate the app folder")?.to_path_buf();
     let identifier = native_os_capture::macos_bundle::identifier().ok_or("Cannot read this app's identity")?;
-    let probe = parent.join(".mixel-remote-update-probe");
-    std::fs::write(&probe, b"").map_err(|_| "The app folder is not writable; install the update from the download")?;
-    let _ = std::fs::remove_file(&probe);
     let mount = image.with_extension("mount");
     let _ = std::fs::create_dir_all(&mount);
     run(
@@ -307,15 +320,43 @@ fn install(image: &Path, version: &str) -> Result<(), String> {
         let name = bundle.file_name().ok_or("Cannot locate the app")?.to_string_lossy().into_owned();
         let staged = parent.join(format!(".{name}.update"));
         let old = parent.join(format!(".{name}.previous"));
-        let _ = std::fs::remove_dir_all(&staged);
-        let _ = std::fs::remove_dir_all(&old);
-        run("/usr/bin/ditto", &[source.as_os_str(), staged.as_os_str()])?;
-        std::fs::rename(&bundle, &old).map_err(|_| "Cannot replace the app")?;
-        if std::fs::rename(&staged, &bundle).is_err() {
-            let _ = std::fs::rename(&old, &bundle);
-            return Err("Cannot replace the app".into());
+        let direct = (|| -> Result<(), String> {
+            let _ = std::fs::remove_dir_all(&staged);
+            let _ = std::fs::remove_dir_all(&old);
+            run("/usr/bin/ditto", &[source.as_os_str(), staged.as_os_str()])?;
+            let had_existing = bundle.exists();
+            if had_existing {
+                std::fs::rename(&bundle, &old).map_err(|_| "Cannot replace the app")?;
+            }
+            if std::fs::rename(&staged, &bundle).is_err() {
+                if had_existing {
+                    let _ = std::fs::rename(&old, &bundle);
+                }
+                return Err("Cannot replace the app".into());
+            }
+            let _ = std::fs::remove_dir_all(&old);
+            Ok(())
+        })();
+        if direct.is_err() {
+            let _ = std::fs::remove_dir_all(&staged);
+            let uid = run("/usr/bin/id", &["-u".as_ref()]).unwrap_or_else(|_| "0".into());
+            let gid = run("/usr/bin/id", &["-g".as_ref()]).unwrap_or_else(|_| "0".into());
+            let sh_cmd = format!(
+                "/bin/rm -rf {staged} {old} && /usr/bin/ditto {source} {staged} && (if [ -e {bundle} ]; then /bin/mv {bundle} {old}; fi) && /bin/mv {staged} {bundle} && /usr/sbin/chown -R {uid}:{gid} {bundle} && /bin/rm -rf {old}",
+                source = sh_quote(&source),
+                staged = sh_quote(&staged),
+                old = sh_quote(&old),
+                bundle = sh_quote(&bundle),
+                uid = uid.trim(),
+                gid = gid.trim(),
+            );
+            let osa_script = format!(
+                "do shell script \"{}\" with administrator privileges",
+                sh_cmd.replace('\\', "\\\\").replace('"', "\\\"")
+            );
+            run("/usr/bin/osascript", &["-e".as_ref(), osa_script.as_ref()])
+                .map_err(|_| "The update could not be installed (administrator approval is needed)".to_string())?;
         }
-        let _ = std::fs::remove_dir_all(&old);
         Ok(())
     })();
     let _ = run("/usr/bin/hdiutil", &["detach".as_ref(), "-force".as_ref(), mount.as_os_str()]);

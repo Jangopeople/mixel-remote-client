@@ -1116,7 +1116,7 @@ async fn support_policy_blocks_direct_id_and_revokes_pending_or_active_sessions(
     let ServerMessage::SupportCode {
         required: true,
         code: Some(code),
-        lifetime_seconds: 300,
+        lifetime_seconds: u16::MAX,
     } = event(&mut host).await
     else {
         panic!("one-time password was not generated");
@@ -1152,18 +1152,10 @@ async fn support_policy_blocks_direct_id_and_revokes_pending_or_active_sessions(
     };
     send(&mut viewer, with_code()).await;
     let ServerMessage::Requested { session } = event(&mut viewer).await else {
-        panic!("valid password did not create an attended request");
+        panic!("valid password did not create a request");
     };
-    assert!(matches!(
-        event(&mut host).await,
-        ServerMessage::SupportCode {
-            required: true,
-            code: None,
-            ..
-        }
-    ));
     assert!(
-        matches!(event(&mut host).await, ServerMessage::Consent { session: invited, .. } if invited == session)
+        matches!(event(&mut host).await, ServerMessage::Consent { session: invited, unattended: true, .. } if invited == session)
     );
     send(
         &mut viewer,
@@ -1177,13 +1169,6 @@ async fn support_policy_blocks_direct_id_and_revokes_pending_or_active_sessions(
         event(&mut viewer).await,
         ServerMessage::Error {
             code: ErrorCode::Forbidden
-        }
-    ));
-    send(&mut viewer, with_code()).await;
-    assert!(matches!(
-        event(&mut viewer).await,
-        ServerMessage::Error {
-            code: ErrorCode::Unavailable
         }
     ));
     send(
@@ -1208,6 +1193,21 @@ async fn support_policy_blocks_direct_id_and_revokes_pending_or_active_sessions(
             ..
         }
     ));
+    // The reusable password continues to work for subsequent connections until turned off.
+    send(&mut viewer, with_code()).await;
+    let ServerMessage::Requested { session: again } = event(&mut viewer).await else {
+        panic!("reusable password did not allow a second request");
+    };
+    assert!(
+        matches!(event(&mut host).await, ServerMessage::Consent { session: invited, unattended: true, .. } if invited == again)
+    );
+    send(&mut viewer, ClientMessage::Close { session: again }).await;
+    assert!(
+        matches!(event(&mut viewer).await, ServerMessage::Closed { session, .. } if session == again)
+    );
+    assert!(
+        matches!(event(&mut host).await, ServerMessage::Closed { session, .. } if session == again)
+    );
     send(&mut host, ClientMessage::ClearSupportCode).await;
     assert!(matches!(
         event(&mut host).await,

@@ -78,7 +78,7 @@ public sealed class SessionModel : Observable
 
     internal bool LastRequestUnattended { get; set; }
     /// <summary>Milliseconds to wait when no picture is ready yet.</summary>
-    internal int IdleDelay { get; set; } = 16;
+    internal int IdleDelay { get; set; } = 4;
 
     public RemoteStatus Remote => app.Remote;
     public string? SessionId => Remote.Session;
@@ -195,7 +195,7 @@ public sealed class SessionModel : Observable
 
     // ---- Input ----
 
-    /// <summary>Queues an input event; pointer moves replace the previous unsent move.</summary>
+    /// <summary>Queues an input event; pointer moves and wheel scrolls coalesce with the previous unsent one.</summary>
     public void Send(InputEvent input)
     {
         if (SessionId is not { } session) return;
@@ -204,12 +204,27 @@ public sealed class SessionModel : Observable
         {
             inputQueue[^1] = input;
         }
+        else if (input is InputEvent.Wheel w1 && inputQueue.Count > 0 && inputQueue[^1] is InputEvent.Wheel w0)
+        {
+            var h = (short)Math.Clamp(w0.Horizontal + w1.Horizontal, -120, 120);
+            var v = (short)Math.Clamp(w0.Vertical + w1.Vertical, -120, 120);
+            inputQueue[^1] = new InputEvent.Wheel(h, v);
+        }
         else if (inputQueue.Count >= 64)
         {
-            inputQueue.Clear();
-            Error = L("Input delivery stalled; the session has been stopped");
-            _ = app.Engine.PerformAsync("remote_close", ("session", session));
-            return;
+            var index = inputQueue.FindIndex(item => item is InputEvent.Pointer or InputEvent.Wheel);
+            if (index >= 0)
+            {
+                inputQueue.RemoveAt(index);
+                inputQueue.Add(input);
+            }
+            else
+            {
+                inputQueue.Clear();
+                Error = L("Input delivery stalled; the session has been stopped");
+                _ = app.Engine.PerformAsync("remote_close", ("session", session));
+                return;
+            }
         }
         else
         {
@@ -248,6 +263,7 @@ public sealed class SessionModel : Observable
                     }
                     catch (EngineFailure failure)
                     {
+                        if (next is InputEvent.Pointer or InputEvent.Wheel) continue;
                         inputQueue.Clear();
                         Error = failure.Translated;
                         return;

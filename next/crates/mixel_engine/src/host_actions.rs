@@ -41,42 +41,47 @@ pub fn wake(mac: &str) -> Result<(), String> {
 
 /// Hardware addresses of this computer's network adapters (12 hex digits each), for a later wake.
 pub fn mac_addresses() -> Vec<String> {
-    // The phone is never woken by another device.
-    #[cfg(any(target_os = "ios", target_os = "android"))]
-    return Vec::new();
-    #[allow(unreachable_code)]
-    let mut command: std::process::Command;
-    #[cfg(target_os = "windows")]
-    {
-        command = std::process::Command::new("getmac");
-        command.args(["/fo", "csv", "/nh"]).creation_flags(0x0800_0000);
-    }
-    #[cfg(target_os = "macos")]
-    {
-        command = std::process::Command::new("/sbin/ifconfig");
-        command.arg("-a");
-    }
-    #[cfg(target_os = "linux")]
-    {
-        command = std::process::Command::new("sh");
-        command.args(["-c", "cat /sys/class/net/*/address"]);
-    }
-    let Ok(output) = command.output() else { return Vec::new() };
-    let text = String::from_utf8_lossy(&output.stdout);
-    let mut found: Vec<String> = Vec::new();
-    for token in text.split(|c: char| !(c.is_ascii_hexdigit() || c == ':' || c == '-')) {
-        if token.len() == 17
-            && let Some(mac) = mac_bytes(token)
-            && mac[0] & 2 == 0
-        {
-            let hex: String = mac.iter().map(|byte| format!("{byte:02x}")).collect();
-            if !found.contains(&hex) {
-                found.push(hex);
+    static CACHED: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    CACHED
+        .get_or_init(|| {
+            // The phone is never woken by another device.
+            #[cfg(any(target_os = "ios", target_os = "android"))]
+            return Vec::new();
+            #[allow(unreachable_code)]
+            let mut command: std::process::Command;
+            #[cfg(target_os = "windows")]
+            {
+                command = std::process::Command::new("getmac");
+                command.args(["/fo", "csv", "/nh"]).creation_flags(0x0800_0000);
             }
-        }
-    }
-    found.truncate(4);
-    found
+            #[cfg(target_os = "macos")]
+            {
+                command = std::process::Command::new("/sbin/ifconfig");
+                command.arg("-a");
+            }
+            #[cfg(target_os = "linux")]
+            {
+                command = std::process::Command::new("sh");
+                command.args(["-c", "cat /sys/class/net/*/address"]);
+            }
+            let Ok(output) = command.output() else { return Vec::new() };
+            let text = String::from_utf8_lossy(&output.stdout);
+            let mut found: Vec<String> = Vec::new();
+            for token in text.split(|c: char| !(c.is_ascii_hexdigit() || c == ':' || c == '-')) {
+                if token.len() == 17
+                    && let Some(mac) = mac_bytes(token)
+                    && mac[0] & 2 == 0
+                {
+                    let hex: String = mac.iter().map(|byte| format!("{byte:02x}")).collect();
+                    if !found.contains(&hex) {
+                        found.push(hex);
+                    }
+                }
+            }
+            found.truncate(4);
+            found
+        })
+        .clone()
 }
 
 /// Actions this host can run now.
@@ -99,7 +104,10 @@ pub fn available() -> Vec<String> {
     }
     // macOS 13+: ScreenCaptureKit records what the Mac plays.
     #[cfg(target_os = "macos")]
-    actions.push(SOUND.to_owned());
+    {
+        actions.push(RESTART.to_owned());
+        actions.push(SOUND.to_owned());
+    }
     actions.push(WOL.to_owned());
     actions.extend(crate::session_guard::available().into_iter().map(str::to_owned));
     actions
@@ -133,6 +141,14 @@ pub fn run(name: &str) -> Result<(), String> {
                 .status()
                 .is_ok_and(|status| status.success());
             if ok { Ok(()) } else { Err("The system did not allow the restart".into()) }
+        }
+        #[cfg(target_os = "macos")]
+        RESTART => {
+            let ok = std::process::Command::new("/usr/bin/osascript")
+                .args(["-e", "tell application \"System Events\" to restart"])
+                .status()
+                .is_ok_and(|status| status.success());
+            if ok { Ok(()) } else { Err("macOS did not allow the restart".into()) }
         }
         _ => Err("This action is not available on the remote computer".into()),
     }

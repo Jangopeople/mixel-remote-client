@@ -37,6 +37,12 @@ public final class SettingsModel: ObservableObject {
         if !app.isPhone {
             printing = try? await app.engine.run("remote_printing_status")
             screenAccess = (try? await app.engine.run("screen_access", as: Bool.self)) ?? false
+            if app.signedIn, startup?.autostart != true, UserDefaults.standard.object(forKey: "mixel.remote.autostart.configured") == nil {
+                UserDefaults.standard.set(true, forKey: "mixel.remote.autostart.configured")
+                try? await app.engine.perform("set_stay_signed_in", ["enabled": true])
+                try? await app.engine.perform("set_autostart", ["enabled": true])
+                startup = try? await app.engine.run("startup_settings")
+            }
         }
     }
 
@@ -53,6 +59,7 @@ public final class SettingsModel: ObservableObject {
     }
 
     public func setAutostart(_ enabled: Bool) {
+        UserDefaults.standard.set(true, forKey: "mixel.remote.autostart.configured")
         change {
             if enabled { try await self.app.engine.perform("set_stay_signed_in", ["enabled": true]) }
             try await self.app.engine.perform("set_autostart", ["enabled": enabled])

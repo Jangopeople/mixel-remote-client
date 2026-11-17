@@ -30,61 +30,71 @@ impl FileTransport {
             config.file_authorization(),
             &crypto.verified_session(),
         )?;
-        let channel = if config.host {
-            let deadline = Instant::now() + Duration::from_secs(8);
-            loop {
-                if config.stopped() {
-                    return Err("File negotiation was cancelled".into());
-                }
-                if Instant::now() >= deadline {
-                    return Err("The file channel did not arrive".into());
-                }
-                match tokio::time::timeout(
-                    Duration::from_millis(25),
-                    transport.incoming_channels.recv(),
-                )
-                .await
-                {
-                    Ok(Some(channel)) => break channel,
-                    Ok(None) => return Err("The file transport closed".into()),
-                    Err(_) => {}
-                }
-            }
-        } else {
-            transport
-                .peer
-                .create_data_channel("mixel-files-v1", None)
-                .await
-                .map_err(|_| "Cannot create the encrypted file channel")?
-        };
-        let valid = tokio::time::timeout(Duration::from_secs(1), async {
-            Ok::<_, TransportError>(
-                channel.label().await? == "mixel-files-v1"
-                    && channel.ordered().await?
-                    && channel.max_packet_life_time().await?.is_none()
-                    && channel.max_retransmits().await?.is_none()
-                    && channel.protocol().await?.is_empty()
-                    && !channel.negotiated().await?,
-            )
-        })
-        .await
-        .map_err(|_| "File channel inspection timed out")?
-        .map_err(|_| "Cannot inspect the file channel")?;
-        if !valid {
-            let _ = tokio::time::timeout(Duration::from_secs(2), channel.close()).await;
-            return Err("Unexpected file channel configuration".into());
-        }
+        let peer = transport.peer.clone();
+        let host = config.host;
+        let incoming = host.then(|| {
+            let (_, unused) = tokio::sync::mpsc::channel(1);
+            std::mem::replace(&mut transport.incoming_channels, unused)
+        });
         let stopped = config.input_authorization();
         let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let task_cancel = cancel.clone();
         let task = tokio::spawn(async move {
-            let result = run(&scope, &channel, crypto, || {
-                !stopped() || task_cancel.load(std::sync::atomic::Ordering::Acquire)
-            })
+            let is_stopped = || !stopped() || task_cancel.load(std::sync::atomic::Ordering::Acquire);
+            let channel: Result<Arc<dyn NativeDataChannel>, String> = async {
+                let channel = if let Some(mut incoming) = incoming {
+                    let deadline = Instant::now() + Duration::from_secs(8);
+                    loop {
+                        if is_stopped() {
+                            return Err("File negotiation was cancelled".into());
+                        }
+                        if Instant::now() >= deadline {
+                            return Err("The file channel did not arrive".into());
+                        }
+                        match tokio::time::timeout(Duration::from_millis(25), incoming.recv()).await {
+                            Ok(Some(channel)) => break channel,
+                            Ok(None) => return Err("The file transport closed".into()),
+                            Err(_) => {}
+                        }
+                    }
+                } else {
+                    peer.create_data_channel("mixel-files-v1", None)
+                        .await
+                        .map_err(|_| "Cannot create the encrypted file channel".to_owned())?
+                };
+                let valid = tokio::time::timeout(Duration::from_secs(1), async {
+                    Ok::<_, TransportError>(
+                        channel.label().await? == "mixel-files-v1"
+                            && channel.ordered().await?
+                            && channel.max_packet_life_time().await?.is_none()
+                            && channel.max_retransmits().await?.is_none()
+                            && channel.protocol().await?.is_empty()
+                            && !channel.negotiated().await?,
+                    )
+                })
+                .await
+                .map_err(|_| "File channel inspection timed out".to_owned())?
+                .map_err(|_| "Cannot inspect the file channel".to_owned())?;
+                if !valid {
+                    let _ = tokio::time::timeout(Duration::from_secs(2), channel.close()).await;
+                    return Err("Unexpected file channel configuration".into());
+                }
+                Ok(channel)
+            }
             .await;
-            let _ = tokio::time::timeout(Duration::from_secs(2), channel.close()).await;
-            if let Err(error) = result {
-                scope.transport_error(&error);
+            match channel {
+                Ok(channel) => {
+                    let result = run(&scope, &channel, crypto, is_stopped).await;
+                    let _ = tokio::time::timeout(Duration::from_secs(2), channel.close()).await;
+                    if let Err(error) = result {
+                        scope.transport_error(&error);
+                    }
+                }
+                Err(error) => {
+                    if !is_stopped() {
+                        scope.transport_error(&error);
+                    }
+                }
             }
         });
         Ok(Self { task, cancel })

@@ -66,6 +66,17 @@ public sealed class SettingsModel : Observable
         if (app.Info.ControllerOnly) return;
         try { Printing = await app.Engine.RunAsync<PrintingStatus>("remote_printing_status"); } catch (EngineFailure) { }
         try { SignInScreen = await app.Engine.RunAsync<SignInScreen>("signin_screen_status"); } catch (EngineFailure) { }
+        if (app.SignedIn && Startup?.Autostart != true && app.Preferences.Get("mixel.remote.autostart.configured") is null)
+        {
+            app.Preferences.Set("mixel.remote.autostart.configured", "1");
+            try
+            {
+                await app.Engine.PerformAsync("set_stay_signed_in", ("enabled", true));
+                await app.Engine.PerformAsync("set_autostart", ("enabled", true));
+                Startup = await app.Engine.RunAsync<StartupSettings>("startup_settings");
+            }
+            catch (EngineFailure) { }
+        }
     }
 
     /// <summary>Sends a removal of this computer that was saved while offline.</summary>
@@ -84,6 +95,7 @@ public sealed class SettingsModel : Observable
 
     public Task SetAutostart(bool enabled) => Change(async () =>
     {
+        app.Preferences.Set("mixel.remote.autostart.configured", "1");
         if (enabled) await app.Engine.PerformAsync("set_stay_signed_in", ("enabled", true));
         await app.Engine.PerformAsync("set_autostart", ("enabled", enabled));
     });

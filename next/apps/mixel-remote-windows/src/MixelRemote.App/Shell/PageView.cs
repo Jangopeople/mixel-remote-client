@@ -78,7 +78,16 @@ internal abstract class PageView : Grid
             foreach (var element in kept.Values) Detach(element);
             Children.Clear();
             Children.Add(Build());
-            if (focused is not null && kept.ContainsValue(focused)) focused.Focus(FocusState.Programmatic);
+            if (focused is not null && kept.ContainsValue(focused))
+            {
+                // Keyboard focus keeps the next digit in this field. Programmatic focus selects the text, so the next digit replaces it.
+                focused.Focus(FocusState.Keyboard);
+                if (focused is TextBox text)
+                {
+                    text.SelectionStart = text.Text.Length;
+                    text.SelectionLength = 0;
+                }
+            }
         }
         catch (Exception failure)
         {

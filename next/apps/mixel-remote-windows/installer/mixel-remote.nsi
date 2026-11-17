@@ -62,7 +62,8 @@ LangString StartNow ${LANG_ITALIAN} "Avvia Mixel Remote"
 ; Mixel Remote of this user (0.1 or 2.x) is closed before its files are replaced.
 !macro CloseApp
   ReadEnvStr $0 USERNAME
-  nsExec::Exec 'taskkill /F /T /FI "USERNAME eq $0" /IM mixel-remote.exe'
+  nsExec::Exec 'taskkill /F /FI "USERNAME eq $0" /IM mixel-remote.exe'
+  nsExec::Exec 'taskkill /F /FI "USERNAME eq $0" /IM mixel-remote-helper.exe'
   Sleep 1500
 !macroend
 
@@ -88,6 +89,8 @@ Section "Install"
   WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoRepair" 1
   ; Where 0.1 recorded its folder (its installer reads it again; harmless for 2.x).
   WriteRegStr HKCU "Software\${PUBLISHER}\${PRODUCT}" "" "$INSTDIR"
+  ; Start with Windows by default so this computer stays reachable after reboot.
+  WriteRegStr HKCU "${RUN_KEY}" "${PRODUCT}" '"$INSTDIR\mixel-remote.exe" --autostart'
   CreateShortcut "$SMPROGRAMS\${PRODUCT}.lnk" "$INSTDIR\mixel-remote.exe" "" "$INSTDIR\mixel-remote.exe" 0
 SectionEnd
 

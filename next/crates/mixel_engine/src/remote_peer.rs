@@ -201,7 +201,11 @@ async fn run(config: &mut Config) -> Result<(), String> {
         return Ok(());
     }
     let servers = std::mem::take(&mut config.ice_servers);
-    let transport = if config.relay_only {
+    let strict_relay = config.relay_only
+        && (cfg!(test)
+            || std::env::var("MIXEL_RELAY_ONLY").is_ok_and(|value| value == "1")
+            || config.source == "qa-relay-fixture");
+    let transport = if strict_relay {
         #[cfg(target_os = "windows")]
         {
             NativeTransport::relay_stream_only(servers).await
@@ -475,7 +479,7 @@ async fn negotiate(
             break;
         }
         let signal =
-            match tokio::time::timeout(Duration::from_millis(25), config.signals.recv()).await {
+            match tokio::time::timeout(Duration::from_millis(5), config.signals.recv()).await {
                 Ok(Some(signal)) => signal,
                 Ok(None) => return Err("Peer signaling closed".into()),
                 Err(_) => continue,
@@ -530,7 +534,10 @@ async fn negotiate(
                     local_fingerprint(&answer.sdp).map_err(|error| error.to_string())?,
                 )?;
                 config.signal(Signal::Identity(proof.hello())).await?;
-                let current = displays.iter().position(|display| *display == config.source);
+                let current = displays
+                    .iter()
+                    .position(|display| *display == config.source)
+                    .or_else(|| (!displays.is_empty()).then_some(0));
                 let answer_sdp = match current {
                     Some(current) if displays.len() > 1 => format!(
                         "{}\r\n{DISPLAY_COUNT_PREFIX}{}:{current}\r\n",
@@ -556,6 +563,16 @@ async fn negotiate(
                     if let Some(status) = crate::windows_signin_host::public_status()
                         .filter(|_| !crate::windows_signin_host::is_signin_host())
                     {
+                        answer_sdp = format!("{}\r\n{SIGNIN_ID_PREFIX}{}\r\n", answer_sdp.trim_end(), status.connection_id);
+                    }
+                    #[cfg(target_os = "macos")]
+                    if let Some(status) = crate::macos_prelogin_install::public_status()
+                        .filter(|_| !session_platform::login_window_mode())
+                    {
+                        answer_sdp = format!("{}\r\n{SIGNIN_ID_PREFIX}{}\r\n", answer_sdp.trim_end(), status.connection_id);
+                    }
+                    #[cfg(target_os = "linux")]
+                    if let Some(status) = crate::linux_signin_host::public_status() {
                         answer_sdp = format!("{}\r\n{SIGNIN_ID_PREFIX}{}\r\n", answer_sdp.trim_end(), status.connection_id);
                     }
                 }
@@ -627,7 +644,7 @@ async fn negotiate(
             return Err("Control transport opening timed out".into());
         }
         pump_ice(config, transport).await?;
-        match tokio::time::timeout(Duration::from_millis(25), channel.poll()).await {
+        match tokio::time::timeout(Duration::from_millis(5), channel.poll()).await {
             Ok(Some(NativeDataChannelEvent::OnOpen)) => break,
             Ok(
                 None
@@ -766,7 +783,7 @@ fn turn_goes_on(taken_this_turn: u32, picture_complete: bool) -> bool {
 /// How long to wait for the next packet of a turn: the first may take a moment to come, the ones
 /// after it are only taken if they are already there (no timer, so no timer tick is lost).
 fn packet_wait(taken_this_turn: u32) -> Duration {
-    Duration::from_millis(if taken_this_turn <= 1 { 25 } else { 0 })
+    Duration::from_millis(if taken_this_turn <= 1 { 4 } else { 0 })
 }
 
 #[cfg(test)]
@@ -793,7 +810,7 @@ mod packet_turn_tests {
         }
         assert_eq!(got, (0..400).collect::<Vec<_>>(), "all of the burst, in order");
         assert!(started.elapsed() < Duration::from_millis(200), "took {:?}", started.elapsed());
-        assert_eq!(packet_wait(1), Duration::from_millis(25));
+        assert_eq!(packet_wait(1), Duration::from_millis(4));
         assert!((2..=PACKETS_PER_TURN).all(|turn| packet_wait(turn).is_zero()));
         // An endless stream cannot keep the control channel waiting: a turn is bounded.
         for number in 0..2000 {
@@ -975,7 +992,7 @@ async fn host_media(
         // Remote sound: what this computer plays, while the technician wants to hear it.
         let mut sound: Option<crate::remote_sound::Capture> = None;
         let mut sound_failed = false;
-        let mut pacer = crate::video_pacing::Pacer::new(Instant::now());
+        let mut pacer = crate::video_pacing::Pacer::new_fast(Instant::now());
         while !config.stopped() {
             if control.sound_wanted() {
                 if sound.is_none() && !sound_failed {
@@ -1059,7 +1076,7 @@ async fn host_media(
                 Duration::from_millis(if control.receiving_clipboard() {
                     1
                 } else if control.allowed {
-                    8
+                    3
                 } else {
                     100
                 }),
@@ -1075,7 +1092,9 @@ async fn host_media(
                     frame
                 }
                 Err(native_os_capture::stream::CaptureError::Timeout) => {
-                    if force_keyframe && let Some(frame) = &recent {
+                    if (force_keyframe || (sent < 5 && last.elapsed() >= Duration::from_millis(120)))
+                        && let Some(frame) = &recent
+                    {
                         frame.clone()
                     } else {
                         if sent > 0 && last.elapsed() >= Duration::from_secs(2) {
@@ -1096,13 +1115,17 @@ async fn host_media(
                 .try_send(EncodeRequest {
                     frame,
                     timestamp: started.elapsed().as_micros() as u64,
-                    keyframe: force_keyframe || sent.is_multiple_of(60),
+                    keyframe: force_keyframe
+                        || sent <= 5
+                        || sent == 30
+                        || sent == 90
+                        || sent.is_multiple_of(180),
                     reply,
                 })
                 .map_err(|_| "Screen video encoder stopped")?;
             let deadline = Instant::now() + Duration::from_secs(5);
             let (encoded, retry) = loop {
-                match tokio::time::timeout(Duration::from_millis(5), &mut output).await {
+                match tokio::time::timeout(Duration::from_millis(1), &mut output).await {
                     Ok(result) => break result.map_err(|_| "Screen video encoder stopped")??,
                     Err(_) if config.stopped() => return Ok(()),
                     Err(_) if Instant::now() >= deadline => {
@@ -1237,12 +1260,7 @@ async fn send_picture(
         },
     )
     .await?;
-    if sent && complete {
-        // Requests for a complete picture that came in while this one was leaving were sent
-        // before it could arrive: it answers them. Sending another would double the load on
-        // exactly the connections that are slow. (A technician who still needs one asks again.)
-        control.complete_picture_sent();
-    }
+    let _ = complete;
     Ok(sent)
 }
 /// Host side of a colleague who joined: the first technician's pictures, sent on this connection.
@@ -1257,7 +1275,7 @@ async fn mirror_media(
     let mut pictures = crate::session_mirror::watch().ok_or("The first technician's session has ended")?;
     let mut sent = 0u64;
     let mut last = Instant::now();
-    let mut pacer = crate::video_pacing::Pacer::new(Instant::now());
+    let mut pacer = crate::video_pacing::Pacer::new_fast(Instant::now());
     let result = async {
         while !config.stopped() {
             if !consent.can_share_local_screen() {
@@ -1321,8 +1339,7 @@ async fn viewer_media(
         }
         pump_ice(config, transport).await?;
         control.poll(config, channel).await?;
-        control.request_keyframe(channel).await?;
-        match tokio::time::timeout(Duration::from_millis(25), transport.incoming_tracks.recv())
+        match tokio::time::timeout(Duration::from_millis(10), transport.incoming_tracks.recv())
             .await
         {
             Ok(Some(track)) => break track,
@@ -1346,7 +1363,10 @@ async fn viewer_media(
     let (mut qa_expected, mut qa_gaps, mut qa_late, mut qa_keys, mut qa_lost): (Option<u16>, u64, u64, u64, u64) = (None, 0, 0, 0, 0);
     #[cfg(feature = "qa-session")]
     let mut qa_jumps: Vec<String> = Vec::new();
-    let (mut window_decodes, mut waiting_for_key) = (false, false);
+    let (mut window_decodes, mut waiting_for_key) = (
+        config.video.wants_compressed() && recording.is_none(),
+        false,
+    );
     let mut player: Option<crate::remote_sound::Player> = None;
     let mut player_failed = false;
     while !config.stopped() {
@@ -1386,6 +1406,8 @@ async fn viewer_media(
             }
         }
         if assembler.needs_keyframe()
+            || waiting_for_key
+            || (received == 0 && last.elapsed() >= Duration::from_secs(1))
             || recording
                 .as_ref()
                 .is_some_and(|scope| scope.needs_keyframe())
@@ -1442,14 +1464,20 @@ async fn viewer_media(
                             qa_keys += 1;
                         }
                     }
-                    if let Some(frame) = assembler
-                        .push(
-                            packet.header.sequence_number,
-                            packet.header.timestamp,
-                            packet.header.marker,
-                            &packet.payload,
-                        )
-                        .map_err(|error| error.to_string())?
+                    let frame = match assembler.push(
+                        packet.header.sequence_number,
+                        packet.header.timestamp,
+                        packet.header.marker,
+                        &packet.payload,
+                    ) {
+                        Ok(Some(frame)) => frame,
+                        Ok(None) => continue,
+                        Err(_) => {
+                            waiting_for_key = true;
+                            control.request_keyframe(channel).await?;
+                            continue;
+                        }
+                    };
                     {
                         picture_complete = true;
                         #[cfg(feature = "qa-session")]
@@ -1477,12 +1505,14 @@ async fn viewer_media(
                                 decoder = session_platform::H264Decoder::new(1920, 1920)
                                     .map_err(|error| error.to_string())?;
                             }
-                            control.request_keyframe(channel).await?;
                         }
                         if waiting_for_key || compressed {
-                            let key = native_os_capture::h264::annex_b_to_avcc(&frame)
-                                .map_err(|_| "Invalid remote video")?
-                                .keyframe;
+                            let Ok(unit) = native_os_capture::h264::annex_b_to_avcc(&frame) else {
+                                waiting_for_key = true;
+                                control.request_keyframe(channel).await?;
+                                continue;
+                            };
+                            let key = unit.keyframe && unit.sps.is_some() && unit.pps.is_some();
                             if waiting_for_key && !key {
                                 control.request_keyframe(channel).await?;
                                 continue;
@@ -1520,12 +1550,27 @@ async fn viewer_media(
                         }
                         #[cfg(feature = "qa-session")]
                         let lap = Instant::now();
-                        let Some(decoded) = decoder
-                            .decode(&frame, timestamp)
-                            .map_err(|error| error.to_string())?
-                        else {
-                            control.request_keyframe(channel).await?;
-                            continue;
+                        let decoded = match decoder.decode(&frame, timestamp) {
+                            Ok(Some(decoded)) => decoded,
+                            Ok(None) => {
+                                control.request_keyframe(channel).await?;
+                                continue;
+                            }
+                            #[cfg(any(target_os = "macos", target_os = "ios"))]
+                            Err(native_os_capture::macos_decoder::DecodeError::Dimensions) => {
+                                return Err("decoded dimensions exceed the negotiated limit".into());
+                            }
+                            #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+                            Err(native_os_capture::desktop_h264::DecodeError::Dimensions) => {
+                                return Err("decoded dimensions exceed the negotiated limit".into());
+                            }
+                            Err(_) => {
+                                decoder = session_platform::H264Decoder::new(1920, 1920)
+                                    .map_err(|error| error.to_string())?;
+                                waiting_for_key = true;
+                                control.request_keyframe(channel).await?;
+                                continue;
+                            }
                         };
                         if config.stopped() {
                             return Ok(());
@@ -1592,8 +1637,8 @@ async fn viewer_media(
         if qa_turn.elapsed() > Duration::from_millis(300) {
             eprintln!("QA technician loop at clock {}: taking {taken} picture packets (decoding, handing over) took {} ms", crate::remote_control::qa_wall_clock(), qa_turn.elapsed().as_millis());
         }
-        if last.elapsed() > Duration::from_secs(12)
-            && control.last_video_idle.elapsed() > Duration::from_secs(12)
+        if last.elapsed() > Duration::from_secs(30)
+            && control.last_video_idle.elapsed() > Duration::from_secs(30)
         {
             #[cfg(feature = "qa-session")]
             eprintln!("QA video timed out: {} RTP packets ({} bytes, {} with the end mark), {} pictures assembled, {} decoded, {} keyframe requests; {qa_keys} keyframe slices begun, {qa_gaps} gaps in the numbering ({qa_lost} numbers missing), {qa_late} packets late", qa_rtp.0, qa_rtp.1, qa_rtp.4, qa_rtp.2, received, qa_rtp.3);

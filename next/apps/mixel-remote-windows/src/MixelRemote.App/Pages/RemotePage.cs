@@ -9,7 +9,7 @@ namespace MixelRemote.App.Pages;
 /// <summary>Remote control: connect to another computer or phone, and allow remote access to this computer.</summary>
 internal sealed class RemotePage : PageView
 {
-    private bool unattended;
+    private bool unattended = true;
     private Action? enter;
 
     public RemotePage(AppModel app) : base(app)
@@ -53,7 +53,7 @@ internal sealed class RemotePage : PageView
     {
         var partner = Keep("partner", () => new TextBox { PlaceholderText = "123 456 789", Width = 260, HorizontalAlignment = HorizontalAlignment.Left, FontSize = 18 });
         var password = Keep("password", () => new PasswordBox { Width = 260, HorizontalAlignment = HorizontalAlignment.Left });
-        password.IsEnabled = !unattended;
+        password.IsEnabled = true;
         var ready = !App.Busy && App.SignedIn && Remote.Phase is "ready" or "offline" or "error";
         void Go()
         {
@@ -117,7 +117,7 @@ internal sealed class RemotePage : PageView
         {
             code = Ui.Column(4,
                 Ui.Field(L("One-time password"), Ui.Selectable(supportCode, 22, mono: true)),
-                Ui.Caption(L("Share this password with your technician. It lasts five minutes and allows one request.")));
+                Ui.Caption(L("Share this password with your technician. It stays on until you turn it off, and it works every time you connect.")));
         }
         UIElement? pairing = null;
         if (App.SignedIn && Remote.Phase == "ready")
@@ -184,7 +184,7 @@ internal sealed class RemotePage : PageView
             card.Add(Ui.Field(L("Display"), Ui.Choice(host.UnattendedSources.Select(source => (source.Id, source.Name)), host.UnattendedSource, value => host.UnattendedSource = value ?? "")));
             card.Add(Ui.Check(L("Allow keyboard and mouse control"), host.UnattendedControl, value => host.UnattendedControl = value, Remote.InputAccess));
             card.Add(Ui.Check(L("I confirm that approved users may see this display without asking."), host.UnattendedConfirm, value => host.UnattendedConfirm = value));
-            card.Add(Ui.Primary(L("Enable unattended sharing"), () => _ = host.EnableUnattended(), !App.Busy && host.UnattendedConfirm && !Remote.CodeRequired));
+            card.Add(Ui.Primary(L("Enable unattended sharing"), () => _ = host.EnableUnattended(), !App.Busy && host.UnattendedConfirm));
         }
         card.Add(Ui.Message(host.Error));
         return Ui.Card([.. card]);

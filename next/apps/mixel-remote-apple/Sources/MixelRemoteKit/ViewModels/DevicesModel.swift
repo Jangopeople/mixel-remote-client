@@ -230,8 +230,7 @@ public final class DevicesModel: ObservableObject {
     public func connect(_ device: Device, unattended: Bool = false) {
         guard connectBlocked(device).isEmpty else { return }
         message = L("Connecting to %@…", device.name)
-        app.section = .remote
-        app.connect(to: device.connectionId, unattended: unattended)
+        app.connect(to: device.connectionId, unattended: unattended, checkPhone: false)
     }
 
     // MARK: Manage (company devices)

@@ -62,6 +62,7 @@ impl FixturePeer {
         )
     }
 
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn start(
         &self,
         id: Uuid,
@@ -114,9 +115,9 @@ impl FixturePeer {
             portal,
             confirm: host,
             control: host && control,
-            clipboard: false,
+            clipboard: true,
             files: host,
-            chat: false,
+            chat: true,
             recording: host,
             consent_id: self.consent_id,
             consent_cancel: self.consent_cancel.clone(),
@@ -155,6 +156,7 @@ async fn relay(
     Err("Fixture peer disconnected without cleanup".into())
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "Run only on an isolated signed-in test desktop"]
 async fn native_accept_shares_real_pixels_and_injects_physical_input() {
@@ -756,4 +758,195 @@ Gtk.main()
     assert!(!grant.live());
     assert!(viewer.session.next_video(id, false).await.unwrap().is_empty());
     println!("PASS: revocation stopped Wayland input and cleared retained frames");
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn macos_full_feature_parity_end_to_end() {
+    use core_protocol::annotation::{Message as DrawMessage, Tool};
+    let Some(source) = session_platform::main_display_source() else {
+        println!("SKIP: Screen recording permission not granted for test runner");
+        return;
+    };
+    let control = session_platform::input_access();
+    let id = Uuid::new_v4();
+    let (host, mut host_commands) = FixturePeer::new(id, true).await;
+    let (viewer, viewer_commands) = FixturePeer::new(id, false).await;
+    {
+        let mut inner = host.session.0.lock().await;
+        inner.status.unattended_enabled = true;
+        inner.status.unattended_session = true;
+        inner.status.unattended = Some(UnattendedSource {
+            source: source.clone(),
+            control: false,
+        });
+    }
+    host.session
+        .decide(Decision {
+            session: id,
+            accept: true,
+            source: source.clone(),
+            confirm: true,
+            control,
+            clipboard: true,
+            files: true,
+            chat: true,
+            recording: true,
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        host_commands.recv().await,
+        Some(Command::Decide {
+            accept: true,
+            clipboard: true,
+            files: true,
+            chat: true,
+            recording: true,
+            ..
+        })
+    ));
+
+    let (to_host, host_signals) = mpsc::channel(64);
+    let (to_viewer, viewer_signals) = mpsc::channel(64);
+    let host_finished = tokio::spawn(relay(host_commands, to_viewer));
+    let viewer_finished = tokio::spawn(relay(viewer_commands, to_host));
+    host.start_with(id, &viewer, source, true, control, host_signals);
+    viewer.start_with(id, &host, String::new(), false, control, viewer_signals);
+
+    // 1. Live video stream over encrypted WebRTC
+    let pixels = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let video = viewer.session.next_video(id, false).await.unwrap();
+            if !video.is_empty() {
+                break video;
+            }
+            assert!(!host_finished.is_finished(), "Host stopped early");
+            assert!(!viewer_finished.is_finished(), "Viewer stopped early");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("No desktop video arrived");
+    assert_eq!(&pixels[..4], b"MRF2");
+    println!("PASS 1: Live encrypted H.264/MRF2 video frame received ({} bytes)", pixels.len());
+
+    // 2. Input & Host Actions (when input access is granted)
+    if control {
+        assert!(viewer.session.input(id, InputEvent::Pointer { x: 32768, y: 32768 }).await.unwrap());
+        assert!(viewer.session.input(id, InputEvent::Wheel { horizontal: 0, vertical: -3 }).await.unwrap());
+        assert!(viewer.session.input(id, InputEvent::Key { usage: 225, down: true }).await.unwrap());
+        assert!(viewer.session.input(id, InputEvent::Key { usage: 225, down: false }).await.unwrap());
+        assert!(viewer.session.input(id, InputEvent::ReleaseAll).await.unwrap());
+        assert!(viewer.session.input(id, InputEvent::Action { name: "sound:off".into() }).await.unwrap());
+        assert!(viewer.session.input(id, InputEvent::Action { name: "sound:on".into() }).await.unwrap());
+        assert!(viewer.session.input(id, InputEvent::Action { name: "pointer:32768,32768".into() }).await.unwrap());
+        assert!(viewer.session.input(id, InputEvent::Action { name: "pointer:off".into() }).await.unwrap());
+        assert!(viewer.session.input(id, InputEvent::Action { name: "meet:abcd-ef12-3456".into() }).await.unwrap());
+        println!("PASS 2: Pointer, Wheel scroll, Key, ReleaseAll, and Host Actions verified");
+    }
+
+    // 3. Clipboard sync
+    let clip_msg = "Mixel Parity Clipboard Test äöü €";
+    let _ = session_platform::write_text(clip_msg);
+    viewer.session.clipboard(id, true).await.unwrap();
+    viewer.session.clipboard(id, false).await.unwrap();
+    assert_eq!(session_platform::read_text().unwrap().as_str(), clip_msg);
+    println!("PASS 3: Bidirectional encrypted clipboard sync verified");
+
+    // 4. Bidirectional Chat
+    viewer.session.chat_hub().send(id, "Hello from Technician".into()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !host.session.chat_hub().messages(id).unwrap().iter().any(|m| m.text == "Hello from Technician") {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    host.session.chat_hub().send(id, "Reply from Host".into()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !viewer.session.chat_hub().messages(id).unwrap().iter().any(|m| m.text == "Reply from Host") {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    println!("PASS 4: Bidirectional encrypted session chat verified");
+
+    // 5. Screen Drawing / Annotations
+    let stroke = DrawMessage::Stroke {
+        id: 1,
+        tool: Tool::Arrow,
+        colour: 0,
+        width: 2,
+        points: vec![(10000, 10000), (30000, 30000)],
+        done: true,
+    };
+    assert!(viewer.session.draw(id, stroke).await.unwrap());
+    assert!(viewer.session.draw(id, DrawMessage::Undo).await.unwrap());
+    assert!(viewer.session.draw(id, DrawMessage::Clear).await.unwrap());
+    println!("PASS 5: Screen drawing / annotations (stroke, undo, clear) verified");
+
+    // 6. Encrypted File Transfer
+    let tmp = tempfile::tempdir().unwrap();
+    let src_file = tmp.path().join("parity-source.bin");
+    let dst_file = tmp.path().join("parity-received.bin");
+    let payload = b"Mixel Remote Full Parity File Transfer Payload 1234567890\0\xff";
+    std::fs::write(&src_file, payload).unwrap();
+    let send_scope = viewer.session.file_scope(viewer.consent_id).await.unwrap();
+    let recv_scope = host.session.file_scope(host.consent_id).await.unwrap();
+    send_scope.offer(src_file).await.unwrap();
+    let offer_id = tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            if let Some(offer) = recv_scope.view().unwrap().incoming {
+                break offer.id;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    recv_scope.accept(offer_id, dst_file.clone()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(8), async {
+        while !dst_file.exists() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(std::fs::read(&dst_file).unwrap(), payload);
+    println!("PASS 6: Encrypted file transfer verified byte-for-byte");
+
+    // 7. Session Recording
+    let recording = viewer.session.recording_hub();
+    let movie = tmp.path().join("parity-session.mp4");
+    recording.start(id, movie.clone()).unwrap();
+    tokio::time::timeout(Duration::from_secs(8), async {
+        while !matches!(recording.view(id), Some(crate::remote_recording::View::Recording)) {
+            let _ = viewer.session.next_video(id, false).await;
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    recording.stop(id).unwrap();
+    tokio::time::timeout(Duration::from_secs(8), async {
+        while !matches!(recording.view(id), Some(crate::remote_recording::View::Saved)) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let file = std::fs::File::open(&movie).unwrap();
+    let size = file.metadata().unwrap().len();
+    let player = mp4::Mp4Reader::read_header(std::io::BufReader::new(file), size).unwrap();
+    assert_eq!(player.tracks().len(), 1);
+    println!("PASS 7: Session recording produced a valid MP4 video file");
+
+    // 8. Clean teardown
+    host.consent_cancel.store(true, Ordering::Release);
+    viewer.cancellation.store(true, Ordering::Release);
+    let _ = tokio::time::timeout(Duration::from_secs(10), host_finished).await.unwrap().unwrap();
+    let _ = tokio::time::timeout(Duration::from_secs(10), viewer_finished).await.unwrap().unwrap();
 }

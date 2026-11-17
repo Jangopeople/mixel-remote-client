@@ -272,13 +272,32 @@ impl NativeTransport {
         self.gather_reset.send_replace(false);
         self.gathered.borrow_and_update();
         self.peer.set_local_description(description).await?;
-        let gathering =
-            tokio::time::timeout(Duration::from_secs(3), self.gathered.wait_for(|done| *done))
-                .await;
-        if matches!(gathering, Ok(Err(_))) {
-            return Err(TransportError::Timeout);
+        let started = tokio::time::Instant::now();
+        let deadline = started + Duration::from_secs(3);
+        loop {
+            if *self.gathered.borrow() || tokio::time::Instant::now() >= deadline {
+                break;
+            }
+            if started.elapsed() >= Duration::from_millis(120)
+                && let Some(desc) = self.peer.local_description().await
+            {
+                let has_relay = desc.sdp.lines().any(|line| {
+                    line.starts_with("a=candidate:")
+                        && line
+                            .split_ascii_whitespace()
+                            .collect::<Vec<_>>()
+                            .windows(2)
+                            .any(|pair| pair == ["typ", "relay"])
+                });
+                if has_relay {
+                    break;
+                }
+            }
+            match tokio::time::timeout(Duration::from_millis(15), self.gathered.changed()).await {
+                Ok(Err(_)) => return Err(TransportError::Timeout),
+                _ => {}
+            }
         }
-        drop(gathering);
         let description = self
             .peer
             .local_description()

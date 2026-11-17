@@ -148,7 +148,7 @@ struct PhoneDevicesView: View {
                 let presence = model.presence(of: device)
                 let blocked = model.connectBlocked(device)
                 Button {
-                    model.connect(device)
+                    model.connect(device, unattended: true)
                 } label: {
                     HStack(spacing: 12) {
                         Image(systemName: Format.osSymbol(device.os)).font(.title2).foregroundStyle(presence == .online ? Theme.brand : .secondary).frame(width: 32)

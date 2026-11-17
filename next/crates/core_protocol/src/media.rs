@@ -352,10 +352,12 @@ impl H264Assembler {
             self.needs_keyframe = true;
             return Ok(None);
         }
-        let keyframe = self
-            .data
-            .windows(5)
-            .any(|window| window[..4] == [0, 0, 0, 1] && window[4] & 0x1f == 5);
+        let has_nal = |kind: u8| {
+            self.data
+                .windows(5)
+                .any(|window| window[..4] == [0, 0, 0, 1] && (window[4] & 0x1f) == kind)
+        };
+        let keyframe = has_nal(5) && (!self.needs_keyframe || (has_nal(7) && has_nal(8)));
         if self.needs_keyframe && !keyframe {
             self.data.zeroize();
             return Ok(None);

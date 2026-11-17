@@ -30,6 +30,10 @@ WINDOWS = {
     "Saved as internal note in %@": ("Als interne Notiz gespeichert in %@", "Enregistré comme note interne dans %@", "Salvato come nota interna in %@"),
     "Selected": ("Ausgewählt", "Sélectionné", "Selezionato"),
     "Sign-in screen access is on.": ("Der Zugriff auf den Anmeldebildschirm ist eingeschaltet.", "L’accès à l’écran de connexion est activé.", "L’accesso alla schermata di accesso è attivo."),
+    "That code was not accepted. Enter the current code from your authenticator.": (
+        "Dieser Code wurde nicht akzeptiert. Geben Sie den aktuellen Code aus Ihrer Authenticator-App ein.",
+        "Ce code n’a pas été accepté. Saisissez le code actuel de votre application d’authentification.",
+        "Questo codice non è stato accettato. Inserisca il codice attuale dell’app di autenticazione."),
     "The other computer is disconnected.": ("Der andere Computer wird getrennt.", "L’autre ordinateur est déconnecté.", "L’altro computer viene disconnesso."),
     "Turn off": ("Ausschalten", "Désactiver", "Disattiva"),
     "Turn on": ("Einschalten", "Activer", "Attiva"),

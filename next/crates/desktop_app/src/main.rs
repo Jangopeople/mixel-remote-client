@@ -2045,7 +2045,7 @@ fn request_quit(app: tauri::AppHandle) {
         .map_err(|_| "Local media cleanup timed out".to_owned())
         .and_then(|value| value.map_err(|_| "Local media cleanup failed".to_owned()))
         .and_then(|value| value);
-        let signed_out = auth.cancel().await;
+        let signed_out = auth.suspend().await;
         if let Err(error) = stopped.and(local_stopped).and(signed_out) {
             remote
                 .report_error(format!(

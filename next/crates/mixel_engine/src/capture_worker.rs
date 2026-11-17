@@ -188,7 +188,7 @@ impl Worker {
                         // Windows replaced the user's desktop (lock screen or a
                         // secure prompt). The previous duplication is released;
                         // reattach to the same display once it is back.
-                        std::thread::sleep(std::time::Duration::from_millis(500));
+                        std::thread::sleep(std::time::Duration::from_millis(100));
                         #[cfg(target_os = "windows")]
                         native_os_capture::windows_capture::attach_input_desktop();
                         match PlatformCapture::open(&display) {

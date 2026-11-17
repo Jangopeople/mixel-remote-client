@@ -146,7 +146,7 @@ public partial class App : Application
         // A technician asks: the consent window comes to the front, even from the notification area.
         if (Model.Host.Asking) consent?.Present();
         else consent?.Dismiss();
-        var viewing = remote.Viewing || remote.Phase == "outgoing" || (remote.Phase == "negotiating" && !remote.Sharing && remote.Session is not null);
+        var viewing = remote.Viewing || (Model.Section != AppSection.Devices && (remote.Phase == "outgoing" || (remote.Phase == "negotiating" && !remote.Sharing && remote.Session is not null)));
         if (viewing) session?.Present();
         else session?.Dismiss();
         // After a session to a company computer: offer a note for the session report.
