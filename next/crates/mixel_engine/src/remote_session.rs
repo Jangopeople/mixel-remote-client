@@ -3936,10 +3936,11 @@ async fn run(
                                 // computer was still registering again): the minute of asking goes on.
                                 let again=closed_before_it_ran(reason) && !ctrl[index].joined && !ctrl[index].host && !ctrl[index].close_sent
                                     && lost_at.get(&ctrl[index].remote).is_some_and(|at|at.elapsed()<crate::reconnect::WINDOW)
-                                    && !retries.iter().any(|active|active.host==ctrl[index].remote)
                                     && last_access.get(&ctrl[index].remote).is_some_and(crate::reconnect::Access::repeatable);
+                                let retrying=retries.iter().any(|active|active.host==ctrl[index].remote);
                                 let over=ctrl.remove(index);remember_gone(&mut recent,over.id);
-                                let asking_again=again && begin_reconnect(state,generation,&mut retries,&last_access,&mut lost_at,over.ui).await;
+                                // The minute of asking is still open: it asks again by itself (the tab stays).
+                                let asking_again=again && (retrying || begin_reconnect(state,generation,&mut retries,&last_access,&mut lost_at,over.ui).await);
                                 if !asking_again{state.slot_end(generation,over.ui,text).await;}
                             }
                         },
