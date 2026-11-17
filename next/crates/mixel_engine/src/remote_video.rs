@@ -19,6 +19,48 @@ struct Slot {
     compressed: bool,
     queue: std::collections::VecDeque<VideoPacket>,
     queued_bytes: usize,
+    /// Lab builds only: pictures handed to the window per second and the longest gap between two
+    /// of them, across transport renewals (the window sees one stream).
+    #[cfg(feature = "qa-session")]
+    qa: QaGaps,
+}
+#[cfg(feature = "qa-session")]
+#[derive(Default)]
+struct QaGaps {
+    last: Option<std::time::Instant>,
+    second: Option<std::time::Instant>,
+    count: u32,
+    longest: u128,
+}
+#[cfg(feature = "qa-session")]
+impl QaGaps {
+    fn path() -> Option<std::ffi::OsString> {
+        let mut path = std::env::var_os("MIXEL_QA_VIDEO_LOG")?;
+        path.push(".gaps");
+        Some(path)
+    }
+    /// One line per second (wall clock in ms): pictures handed over and the longest gap before one.
+    fn shown(&mut self) {
+        let now = std::time::Instant::now();
+        if let Some(last) = self.last {
+            self.longest = self.longest.max(now.duration_since(last).as_millis());
+        }
+        self.last = Some(now);
+        self.count += 1;
+        let second = *self.second.get_or_insert(now);
+        if now.duration_since(second) >= std::time::Duration::from_secs(1) {
+            Self::line(&format!("shown/s={} maxgap={}ms", self.count, self.longest));
+            (self.second, self.count, self.longest) = (Some(now), 0, 0);
+        }
+    }
+    pub(crate) fn line(text: &str) {
+        let Some(path) = Self::path() else { return };
+        let clock = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_millis());
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            use std::io::Write;
+            let _ = writeln!(file, "{clock} {text}");
+        }
+    }
 }
 const MAX_QUEUE: usize = 90;
 const MAX_QUEUE_BYTES: usize = 12 * 1024 * 1024;
@@ -35,6 +77,8 @@ impl VideoMailbox {
         slot.queued_bytes = 0;
         slot.compressed = false;
         slot.session = Some(session);
+        #[cfg(feature = "qa-session")]
+        QaGaps::line(&format!("activate {session}"));
         Ok(())
     }
     pub fn clear(&self) {
@@ -87,6 +131,8 @@ impl VideoMailbox {
         }
         slot.queued_bytes += packet.bytes.len();
         slot.queue.push_back(packet);
+        #[cfg(feature = "qa-session")]
+        slot.qa.shown();
         Ok(true)
     }
     pub fn publish(&self, packet: VideoPacket) -> Result<(), String> {
@@ -95,6 +141,8 @@ impl VideoMailbox {
             return Err("This video session has stopped".into());
         }
         slot.latest = Some(packet);
+        #[cfg(feature = "qa-session")]
+        slot.qa.shown();
         Ok(())
     }
     pub fn take(&self, session: Uuid) -> Result<Vec<u8>, String> {
