@@ -71,12 +71,17 @@ public sealed class SessionModel : Observable
     public bool RecordingPending { get => recordingPending; private set => Set(ref recordingPending, value); }
     public string MeetingNotice { get => meetingNotice; private set => Set(ref meetingNotice, value); }
     public string DismissedMeetingRoom { get; set; } = "";
+    private DateTimeOffset? recordingSince;
+    /// <summary>When the running recording started (for "REC 00:42" over the picture).</summary>
+    public DateTimeOffset? RecordingSince { get => recordingSince; private set => Set(ref recordingSince, value); }
     /// <summary>A print job of the other computer arrived (the session window opens the print jobs).</summary>
     public event EventHandler? PrintJobArrived;
     /// <summary>Raised for every new picture (the screen redraws without going through bindings).</summary>
     public event EventHandler<VideoFrame>? FrameArrived;
 
     internal bool LastRequestUnattended { get; set; }
+    /// <summary>This session was requested as unattended (without asking the person at the other computer).</summary>
+    public bool RequestedUnattended => LastRequestUnattended;
     /// <summary>Milliseconds to wait when no picture is ready yet.</summary>
     internal int IdleDelay { get; set; } = 4;
 
@@ -114,6 +119,9 @@ public sealed class SessionModel : Observable
         {
             Clear();
         }
+        var recording = next.Recording?.Running == true;
+        if (recording && RecordingSince is null) RecordingSince = DateTimeOffset.UtcNow;
+        else if (!recording && RecordingSince is not null) RecordingSince = null;
         if (next.Phase is "active" or "incoming" or "outgoing") StartTools();
         else StopTools();
         if (!next.InSession) stoppedConsent = null;
@@ -128,10 +136,12 @@ public sealed class SessionModel : Observable
         video?.Cancel();
         video = null;
         viewingSession = null;
+        var had = Frame is not null;
         Frame = null;
         Fps = 0;
         shownTimes.Clear();
         inputQueue.Clear();
+        if (had) app.Workspace.Refresh();
     }
 
     private void StartVideo(string session)
@@ -182,7 +192,11 @@ public sealed class SessionModel : Observable
     {
         var first = Frame is null;
         frame = decoded;
-        if (first) Raise(nameof(Frame));
+        if (first)
+        {
+            Raise(nameof(Frame));
+            app.Workspace.Refresh();
+        }
         FrameArrived?.Invoke(this, decoded);
         var now = DateTimeOffset.UtcNow;
         shownTimes.Enqueue(now);
@@ -192,6 +206,20 @@ public sealed class SessionModel : Observable
 
     /// <summary>For screenshots and tests: show this picture without a running engine.</summary>
     public void ShowSample(byte[] data) => Show(VideoFrame.Decode(data));
+
+    /// <summary>
+    /// A session started with a support password ends after 2 hours: "ends in 5 minutes" and "ends in 1 minute"
+    /// (the broker's session_ending, as remote_status.password_session). Empty when there is nothing to say.
+    /// </summary>
+    public string PasswordWarning(DateTimeOffset? now = null)
+    {
+        if (Format.ParseDate(Remote.PasswordSession?.EndsAt) is not { } ends) return "";
+        var seconds = (ends - (now ?? DateTimeOffset.UtcNow)).TotalSeconds;
+        if (seconds <= 0 || seconds > 300) return "";
+        return seconds <= 60
+            ? L("This support session ends in 1 minute (support password limit). Ask for a new password to continue.")
+            : L("This support session ends in %d minutes (support password limit). Ask for a new password to continue.", (int)Math.Ceiling(seconds / 60));
+    }
 
     // ---- Input ----
 

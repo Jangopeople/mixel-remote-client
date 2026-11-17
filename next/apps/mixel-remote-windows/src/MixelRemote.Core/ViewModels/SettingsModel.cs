@@ -103,6 +103,21 @@ public sealed class SettingsModel : Observable
     /// <summary>Adds or removes "Mixel Remote Printer" (one administrator prompt).</summary>
     public Task SetPrinting(bool enabled) => Change(() => app.Engine.PerformAsync("remote_printing_set", ("enabled", enabled)));
 
+    public const string AppearanceKey = "mixel.remote.appearance.v1";
+
+    /// <summary>system, light or dark (Settings > General > Appearance).</summary>
+    public string Appearance
+    {
+        get => app.Preferences.Get(AppearanceKey) is ("light" or "dark") and var chosen ? chosen : "system";
+        set
+        {
+            var next = value is "light" or "dark" ? value : "system";
+            if (next == Appearance) return;
+            app.Preferences.Set(AppearanceKey, next == "system" ? null : next);
+            Raise();
+        }
+    }
+
     public void SetLanguage(string value)
     {
         Language = value;

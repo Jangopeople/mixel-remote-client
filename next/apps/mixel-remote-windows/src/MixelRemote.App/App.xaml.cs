@@ -25,7 +25,6 @@ public partial class App : Application
     private MainWindow? main;
     private TrayIcon? tray;
     private ConsentWindow? consent;
-    private SessionWindow? session;
     private DispatcherQueueTimer? updates;
     private bool quitting;
 
@@ -97,7 +96,6 @@ public partial class App : Application
             main = new MainWindow(Model);
             tray = new TrayIcon(main, Model);
             consent = new ConsentWindow(Model);
-            session = new SessionWindow(Model);
             Model.PropertyChanged += OnModelChanged;
             if (!options.Hidden) main.Show();
             Model.Start();
@@ -110,7 +108,7 @@ public partial class App : Application
 #if LAB
             if (options.Lab.Length >= 4)
             {
-                ExitCode = await Lab.UiLiveCheck.Run(options.Lab, Model, main, session!);
+                ExitCode = await Lab.UiLiveCheck.Run(options.Lab, Model, main);
                 await Quit();
             }
 #endif
@@ -128,7 +126,7 @@ public partial class App : Application
         model.OpenUrl = OpenUrl;
         model.CopyText = Clipboard.Copy;
         model.ChooseFile = () => Dialogs.OpenFile(main?.Handle ?? 0);
-        model.ChooseSaveLocation = name => Dialogs.SaveFile(session?.Visible == true ? session.Handle : main?.Handle ?? 0, name);
+        model.ChooseSaveLocation = name => Dialogs.SaveFile(main?.DialogOwner ?? 0, name);
         model.Settings.QuitForUpdate = () => main?.DispatcherQueue.TryEnqueue(() => _ = Quit());
     }
 
@@ -146,9 +144,6 @@ public partial class App : Application
         // A technician asks: the consent window comes to the front, even from the notification area.
         if (Model.Host.Asking) consent?.Present();
         else consent?.Dismiss();
-        var viewing = remote.Viewing || (Model.Section != AppSection.Devices && (remote.Phase == "outgoing" || (remote.Phase == "negotiating" && !remote.Sharing && remote.Session is not null)));
-        if (viewing) session?.Present();
-        else session?.Dismiss();
         // After a session to a company computer: offer a note for the session report.
         if (!remote.InSession && Model.Session.NoteFor is { } helped && main is not null)
         {
@@ -188,7 +183,6 @@ public partial class App : Application
         updates?.Stop();
         tray?.Dispose();
         await Model.Shutdown();
-        session?.Close();
         consent?.Close();
         main?.CloseForQuit();
         Exit();

@@ -13,7 +13,7 @@ public enum Presence { This, Online, Offline, Checking, Unknown }
 /// connection service's last record), or the devices a Mixel team member or a personal account may reach.
 /// Says for every device whether it can be reached, and why not.
 /// </summary>
-public sealed class DevicesModel : Observable
+public sealed partial class DevicesModel : Observable
 {
     public const int PageSize = 50;
     private readonly AppModel app;
@@ -45,6 +45,9 @@ public sealed class DevicesModel : Observable
     public bool HasNext { get => hasNext; private set => Set(ref hasNext, value); }
     public string Message { get => message; private set => Set(ref message, value); }
     public string Error { get => error; set => Set(ref error, value); }
+    private string notice = "";
+    /// <summary>A short confirmation (the wake signal was sent).</summary>
+    public string Notice { get => notice; set => Set(ref notice, value); }
     public Dictionary<uint, SaasPresence> ServerPresence { get => serverPresence; private set => SetList(ref serverPresence, value); }
     /// <summary>The deploy link just created (shown once).</summary>
     public DeployLinkCreated? DeployLink { get => deployLink; set => Set(ref deployLink, value); }
@@ -78,6 +81,7 @@ public sealed class DevicesModel : Observable
         Message = "";
         Error = "";
         DeployLink = null;
+        ResetAdmin();
     }
 
     public async Task Load(int wanted = 0)
@@ -124,6 +128,7 @@ public sealed class DevicesModel : Observable
             }
             Message = Devices.Count == 0 ? "" : L("Page %d · %d devices.", Page + 1, Devices.Count);
             await CheckPresence(force: true);
+            await LoadAdmin();
         }
         catch (EngineFailure failure)
         {
@@ -157,11 +162,14 @@ public sealed class DevicesModel : Observable
     /// <summary>Asks the connection service which listed devices are online (every 15 s while connected).</summary>
     internal async Task CheckPresence(bool force = false)
     {
-        if (!app.Remote.Connected || Devices.Count == 0 || (!force && DateTimeOffset.UtcNow - lastPresence < TimeSpan.FromSeconds(15))) return;
+        if (!app.Remote.Connected || AllDevices.Count == 0 || (!force && DateTimeOffset.UtcNow - lastPresence < TimeSpan.FromSeconds(15))) return;
         lastPresence = DateTimeOffset.UtcNow;
-        var hosts = Devices.Select(device => device.ConnectionId).Where(id => id != app.Remote.Host).Take(100).ToArray();
+        var hosts = AllDevices.Select(device => device.ConnectionId).Where(id => id != app.Remote.Host).Take(2000).ToArray();
         if (hosts.Length == 0) return;
-        try { await app.Engine.PerformAsync("remote_presence", ("hosts", hosts)); } catch (EngineFailure) { }
+        foreach (var batch in hosts.Chunk(100))
+        {
+            try { await app.Engine.PerformAsync("remote_presence", ("hosts", batch)); } catch (EngineFailure) { }
+        }
         // The answer arrives in remote_status.online; the next read shows it.
         await Task.Delay(force ? 0 : 600);
         foreach (var host in hosts) checkedHosts.Add(host);
@@ -394,6 +402,7 @@ public sealed class DevicesModel : Observable
         if (macs.Length == 0) throw new EngineFailure("No network address is known for this computer yet");
         await app.Engine.PerformAsync("wake_on_lan", ("macs", macs));
         Message = L("Wake signal sent to %@. It shows Online when it has started.", device.Name);
+        Notice = Message;
     });
 
     private async Task<bool> Change(Func<Task> work)
