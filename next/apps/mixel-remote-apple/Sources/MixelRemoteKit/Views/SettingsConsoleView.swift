@@ -142,7 +142,6 @@ struct SettingsConsoleView: View {
             heading(L("Sessions"), L("How new remote sessions open. You can always move a session between tab and window."))
             ConsoleCard {
                 SettingRow(title: L("Open new sessions in"), help: L("Default for Connect, Connect by ID and links from Mixel ISM"), first: true) { EmptyView() }
-                    .padding(.bottom, -14)
                 HStack(spacing: 12) {
                     choice(L("A tab in the main window"), L("All sessions in one place; switch with the tabs in the title bar."), on: workspace.openIn == .tab, window: false) { workspace.openIn = .tab }
                     choice(L("Its own window"), L("Best with several monitors; drag it where you want."), on: workspace.openIn == .window, window: true) { workspace.openIn = .window }

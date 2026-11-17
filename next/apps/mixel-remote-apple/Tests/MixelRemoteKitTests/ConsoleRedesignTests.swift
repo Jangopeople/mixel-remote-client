@@ -366,10 +366,68 @@ final class ConsoleRedesignTests: XCTestCase {
                 ("sign-in", AnyView(RootView(app: out))),
                 ("reports", AnyView(ReportsView(app: reportApp))),
                 ("settings", AnyView(SettingsView(app: reportApp))),
+                ("settings-tall", AnyView(SettingsView(app: reportApp))),
             ]
             for (name, view) in views {
-                let png = try Snapshot.render(view, size: CGSize(width: 1080, height: 720), dark: dark)
+                let png = try Snapshot.render(view, size: CGSize(width: 1080, height: name == "settings-tall" ? 1900 : 720), dark: dark)
                 XCTAssertGreaterThan(png.count, 5_000, name)
+                if let folder = ProcessInfo.processInfo.environment["SNAPSHOT_DIR"].map({ URL(fileURLWithPath: $0, isDirectory: true) }) {
+                    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                    try png.write(to: folder.appendingPathComponent("redesign-\(name)-\(dark ? "dark" : "light").png"))
+                }
+            }
+        }
+    }
+    #endif
+
+    #if os(macOS)
+    /// Devices with the administration data, the three dialogs and the session banners, in light and dark.
+    func testDevicesDialogsAndSessionBannersRenderInLightAndDark() async throws {
+        let engine = MockEngine()
+        Fixtures.company(engine)
+        engine.reply("remote_admin_devices", json: adminJSON(version: ("2.0.18", "2.0.19")))
+        let app = await Fixtures.app(engine)
+        app.devices.admin = EngineDeviceAdminService(engine: engine)
+        await app.devices.load()
+        app.section = .devices
+        let device = try XCTUnwrap(app.devices.allDevices.first { $0.connectionId == 731_204_118 })
+
+        func session(_ endsIn: TimeInterval?, unattended: Bool = false) async -> AppModel {
+            let e = MockEngine()
+            Fixtures.viewing(e)
+            var status = RemoteStatus(phase: "active", host: 482_913_557, session: DemoFixtures.session, consent: DemoFixtures.consent, peer: 731_204_118, received: 12,
+                                      control: true, clipboard: true, files: true, recording: RecordingView(phase: "ready"), displays: 2,
+                                      hostActions: ["privacy", "block", "pointer", "lock", "sas", "restart", "sound", "meet"], peerFeatures: ["join", "switch"], unattendedSession: unattended)
+            if let endsIn {
+                status.passwordSession = PasswordSessionView(endsAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(endsIn)))
+            }
+            e.reply("remote_status", status)
+            e.queue(frame: VideoFrame.sample(width: 320, height: 200, sequence: 1))
+            let a = await Fixtures.app(e)
+            a.session.showSample(VideoFrame.sample(width: 1280, height: 800))
+            a.workspace.refresh()
+            a.workspace.selected = .session(731_204_118)
+            return a
+        }
+        let password = await session(4 * 3600 / 4 * 1)
+        let warning = await session(240)
+        let urgent = await session(40)
+        let unattended = await session(nil, unattended: true)
+
+        for dark in [false, true] {
+            let items: [(String, AnyView, CGSize)] = [
+                ("devices-admin", AnyView(RootView(app: app)), CGSize(width: 1180, height: 720)),
+                ("dialog-rename", AnyView(RenameDeviceDialog(model: app.devices, device: device, company: "Muster Treuhand AG")), CGSize(width: 420, height: 230)),
+                ("dialog-notes", AnyView(DeviceNotesDialog(model: app.devices, device: device)), CGSize(width: 420, height: 320)),
+                ("dialog-remove", AnyView(RemoveDeviceDialog(model: app.devices, device: device, inSession: true)), CGSize(width: 420, height: 270)),
+                ("session-password", AnyView(RootView(app: password)), CGSize(width: 1180, height: 720)),
+                ("session-password-5min", AnyView(RootView(app: warning)), CGSize(width: 1180, height: 720)),
+                ("session-password-1min", AnyView(RootView(app: urgent)), CGSize(width: 1180, height: 720)),
+                ("session-unattended", AnyView(RootView(app: unattended)), CGSize(width: 1180, height: 720)),
+            ]
+            for (name, view, size) in items {
+                let png = try Snapshot.render(view, size: size, dark: dark)
+                XCTAssertGreaterThan(png.count, 4_000, name)
                 if let folder = ProcessInfo.processInfo.environment["SNAPSHOT_DIR"].map({ URL(fileURLWithPath: $0, isDirectory: true) }) {
                     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
                     try png.write(to: folder.appendingPathComponent("redesign-\(name)-\(dark ? "dark" : "light").png"))

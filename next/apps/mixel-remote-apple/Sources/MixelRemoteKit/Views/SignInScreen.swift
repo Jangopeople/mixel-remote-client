@@ -92,7 +92,7 @@ struct SignInScreen: View {
         ZStack(alignment: .top) {
             WindowDragArea().frame(height: 40).frame(maxWidth: .infinity)
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 12) {
                     MixelMark(size: 44)
                     Text(verbatim: L("Sign in to Mixel Remote")).font(.system(size: 24, weight: .bold)).accessibilityAddTraits(.isHeader)
                     if inProgress {
@@ -112,7 +112,7 @@ struct SignInScreen: View {
                     }
                     MessageLine(app.error)
                 }
-                .padding(.horizontal, 48).padding(.vertical, 56)
+                .padding(.horizontal, 48).padding(.top, 44).padding(.bottom, 28)
                 .frame(maxWidth: 440)
                 .frame(maxWidth: .infinity)
             }
