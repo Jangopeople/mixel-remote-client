@@ -132,6 +132,12 @@ fn authorization_live(
             })
     });
     if !live {
+        // Lab builds only: which authorization ended the session.
+        #[cfg(feature = "qa-session")]
+        if let Ok(lease) = broker.lock() {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| since.as_secs());
+            eprintln!("QA authorization ended at clock {}: broker lease {} s left (monotonic {:?}), peer ticket {} s left", crate::remote_control::qa_wall_clock(), lease.0 as i64 - now as i64, lease.1.checked_duration_since(Instant::now()), peer.load(Ordering::Acquire) as i64 - now as i64);
+        }
         session.store(true, Ordering::Release);
     }
     live

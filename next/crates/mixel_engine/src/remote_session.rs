@@ -2390,7 +2390,11 @@ async fn run(
                         own_ticket=renewed;pending_renewal=Some(std::time::Instant::now()+Duration::from_secs(20));credential=fresh;
                     }
                 },
-                Some(command)=commands.recv()=>match command {
+                Some(command)=commands.recv()=>{
+                    // Lab builds only: the session commands (no signalling, no contents).
+                    #[cfg(feature = "qa-session")]
+                    match &command{Command::Close(session)=>eprintln!("QA command close {session} at clock {}",crate::remote_control::qa_wall_clock()),Command::Restart(session)=>eprintln!("QA command restart {session} at clock {}",crate::remote_control::qa_wall_clock()),Command::Finished{session,result}=>eprintln!("QA command finished {session} {:?} at clock {}",result.as_ref().err(),crate::remote_control::qa_wall_clock()),_=>{}}
+                    match command {
                     Command::Request(host,code,unattended)=>{
                         if peer.is_some() || outgoing.is_some(){continue;}
                         crate::qa_timeline::begin(if unattended {"connect asked (unattended)"} else if code.is_some() {"connect asked (password)"} else {"connect asked (attended)"});
@@ -2514,10 +2518,16 @@ async fn run(
                         continue;
                     }
                     if peer.as_ref().is_some_and(|peer|peer.id==session && !peer.close_sent){peer=None;send(&mut socket,ClientMessage::Close{session}).await?;state.change(generation,|status|{status.phase="ready".into();status.session=None;status.peer=None;status.requester=None;status.message=result.err().unwrap_or_else(||"Session closed; ready for a new connection".into());}).await;}},
-                },
+                }},
                 incoming=event(&mut socket)=>{
                     let message=incoming?;last_activity=std::time::Instant::now();
                     let Some(message)=message else{continue;};
+                    // Lab builds only: what the connection service sent (kind only, never contents).
+                    #[cfg(feature = "qa-session")]
+                    if !matches!(message,ServerMessage::Signal{..}|ServerMessage::Presence{..}){
+                        let detail=match &message{ServerMessage::Closed{reason,..}=>format!(" {reason:?}"),ServerMessage::Error{code}=>format!(" {code:?}"),_=>String::new()};
+                        eprintln!("QA broker sent {}{detail} at clock {}",match &message{ServerMessage::Ice{..}=>"Ice",ServerMessage::DeviceChallenge{..}=>"DeviceChallenge",ServerMessage::Ready{..}=>"Ready",ServerMessage::Renewed{..}=>"Renewed",ServerMessage::SupportCode{..}=>"SupportCode",ServerMessage::PairingStatus{..}=>"PairingStatus",ServerMessage::UnattendedStatus{..}=>"UnattendedStatus",ServerMessage::SupportHostStatus{..}=>"SupportHostStatus",ServerMessage::Presence{..}=>"Presence",ServerMessage::Agent{..}=>"Agent",ServerMessage::Requested{..}=>"Requested",ServerMessage::Invited{..}=>"Invited",ServerMessage::InviteStatus{..}=>"InviteStatus",ServerMessage::Switched{..}=>"Switched",ServerMessage::Consent{..}=>"Consent",ServerMessage::Accepted{..}=>"Accepted",ServerMessage::PeerRenewed{..}=>"PeerRenewed",ServerMessage::Restarted{..}=>"Restarted",ServerMessage::Signal{..}=>"Signal",ServerMessage::Closed{..}=>"Closed",ServerMessage::Error{..}=>"Error"},crate::remote_control::qa_wall_clock());
+                    }
                     // A colleague's session (second technician) is handled on its own: a failure
                     // there ends that colleague's view, never the first technician's session.
                     let colleague_session=match &message {
