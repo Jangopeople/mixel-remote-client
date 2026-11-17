@@ -89,12 +89,38 @@ impl SessionJournal {
         self.events.push_back(event);
     }
 }
+/// A session may ask for relay credentials once per this interval.
+const ICE_SESSION_INTERVAL: Duration = Duration::from_secs(5);
+/// One connection may be issued at most `ICE_BURST_MAX` relay credentials per `ICE_BURST_WINDOW`
+/// (the plans allow at most 10 sessions at once; a few reconnects fit).
+const ICE_BURST_MAX: usize = 24;
+const ICE_BURST_WINDOW: Duration = Duration::from_secs(60);
+/// Limits relay (TURN) credentials of one connection: once per session per 5 s, and a burst cap across
+/// all its sessions.
+#[derive(Default)]
+struct IceLimiter {
+    next: HashMap<Uuid, Instant>,
+    issued: VecDeque<Instant>,
+}
+impl IceLimiter {
+    /// True (and recorded) when `session` may be issued credentials at `now`.
+    fn allow(&mut self, session: Uuid, now: Instant) -> bool {
+        self.next.retain(|_, next| *next > now);
+        self.issued.retain(|at| now.duration_since(*at) < ICE_BURST_WINDOW);
+        if self.next.contains_key(&session) || self.issued.len() >= ICE_BURST_MAX {
+            return false;
+        }
+        self.next.insert(session, now + ICE_SESSION_INTERVAL);
+        self.issued.push_back(now);
+        true
+    }
+}
 struct Peer {
     generation: Uuid,
     principal: Principal,
     tx: mpsc::Sender<ServerMessage>,
     stop: watch::Sender<bool>,
-    ice_next: Instant,
+    ice: IceLimiter,
     identity: Option<core_protocol::delegation::DeviceTicket>,
     code_gate: Option<CodeGate>,
     unattended_enabled: bool,
@@ -571,10 +597,11 @@ impl Registry {
         if peer.generation != generation || peer.principal.expires_at.saturating_sub(unix) < 30 {
             return Err(ErrorCode::Forbidden);
         }
-        if now < peer.ice_next {
+        // Per session, so a technician can start several sessions back to back; a client asking
+        // again for the same session within 5 s, or too many times overall, is still refused.
+        if !peer.ice.allow(session, now) {
             return Err(ErrorCode::Busy);
         }
-        peer.ice_next = now + Duration::from_secs(5);
         Ok(peer.principal.expires_at)
     }
     /// A registry for at most `connections` peers and as many sessions at once (`limits.rs`).
@@ -639,7 +666,7 @@ impl Registry {
                 principal,
                 tx,
                 stop,
-                ice_next: Instant::now(),
+                ice: IceLimiter::default(),
                 identity: None,
                 code_gate: None,
                 unattended_enabled: false,
@@ -1786,6 +1813,23 @@ mod rotation_tests {
         .unwrap();
         registry.bind_identity(id, generation, ticket).unwrap();
         (generation, rx)
+    }
+    #[test]
+    fn relay_credentials_are_limited_per_session_with_a_burst_cap_per_connection() {
+        let mut limiter = IceLimiter::default();
+        let start = Instant::now();
+        let sessions: Vec<Uuid> = (1..=30).map(Uuid::from_u128).collect();
+        // Different sessions back to back are fine, up to the cap.
+        for session in &sessions[..ICE_BURST_MAX] {
+            assert!(limiter.allow(*session, start));
+        }
+        assert!(!limiter.allow(sessions[ICE_BURST_MAX], start), "the burst cap holds across sessions");
+        // The same session is refused for 5 s, then allowed again; the cap frees after its window.
+        let later = start + ICE_BURST_WINDOW + Duration::from_secs(1);
+        assert!(limiter.allow(sessions[0], later));
+        assert!(!limiter.allow(sessions[0], later + Duration::from_secs(4)));
+        assert!(limiter.allow(sessions[0], later + Duration::from_secs(6)));
+        assert!(limiter.next.len() <= 2, "expired entries are dropped");
     }
     #[test]
     fn the_connection_capacity_is_a_setting() {

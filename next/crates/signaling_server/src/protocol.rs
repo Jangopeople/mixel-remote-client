@@ -328,6 +328,10 @@ pub enum ServerMessage {
     DevicePolicy {
         unattended_default: bool,
         unattended_allowed: bool,
+        /// D4 phase 3: refuse remote commands that are not signed. Sent only to apps that announced
+        /// `signed`; absent for the others. Follows the broker setting `MIXEL_AGENT_REQUIRE_SIGNED`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        require_signed_commands: Option<bool>,
     },
     /// The session is known again after a broker restart and this side is back in it (feature `resume`).
     Resumed {

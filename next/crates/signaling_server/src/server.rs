@@ -614,12 +614,13 @@ fn send_device_policy(state: &AppState, id: u32, generation: uuid::Uuid, tx: mps
     let Some(binding) = registry.agent_binding(id, generation, unix_now()) else {
         return;
     };
+    let require_signed_commands = registry.supports(id, generation, crate::protocol::FEATURE_SIGNED).then_some(state.require_signed);
     drop(registry);
     let slots = state.policy_slots.clone();
     tokio::spawn(async move {
         let Ok(_slot) = slots.try_acquire() else { return };
         if let Some((unattended_default, unattended_allowed)) = policy.device_policy(&binding).await {
-            let _ = tx.try_send(ServerMessage::DevicePolicy { unattended_default, unattended_allowed });
+            let _ = tx.try_send(ServerMessage::DevicePolicy { unattended_default, unattended_allowed, require_signed_commands });
         }
     });
 }

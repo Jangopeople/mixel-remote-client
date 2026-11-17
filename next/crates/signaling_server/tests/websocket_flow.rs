@@ -2451,7 +2451,7 @@ async fn server_additions_reach_only_apps_that_announced_them_and_old_apps_keep_
     })
     .await;
     assert!(matches!(event(&mut new_host).await,
-        ServerMessage::DevicePolicy { unattended_default: true, unattended_allowed: false }));
+        ServerMessage::DevicePolicy { unattended_default: true, unattended_allowed: false, require_signed_commands: Some(false) }));
     assert!(quiet(&mut old_host).await, "an old app got a device policy");
 
     // App version: accepted from any app, reported with presence.
@@ -2638,4 +2638,118 @@ async fn one_technician_holds_four_sessions_that_end_in_any_order() {
     .await;
     assert!(matches!(event(&mut fifth.0).await, ServerMessage::Signal { session, .. } if session == again));
     task.abort();
+}
+
+/// Relay credentials are limited per session, not per computer (Mixel Remote 2.1): one technician starts
+/// four sessions to four hosts within a second and every session gets its credentials; asking again for
+/// the same session at once is still refused, and so is a connection asking far too often overall.
+#[tokio::test]
+async fn relay_credentials_are_limited_per_session_not_per_computer() {
+    use ed25519_dalek::SigningKey;
+    use signaling_server::{delegated_auth::TicketAuth, turn::TurnConfig};
+
+    let signer = SigningKey::from_bytes(&[81; 32]);
+    let state = AppState::new(Arc::new(TicketAuth::new(vec![signer.verifying_key()]).unwrap()), HashSet::new())
+        .with_turn(Some(TurnConfig::LanOnly));
+    let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/v1/ws", socket.local_addr().unwrap());
+    let broker = tokio::spawn(async move { axum::serve(socket, router(state)).await.unwrap() });
+    let identity = |profile: u128, device: u128, connection_id: u32, key_byte: u8| SignedPeer {
+        profile: Uuid::from_u128(profile),
+        device: Uuid::from_u128(device),
+        tenant: None,
+        connection_id,
+        generation: 1,
+        key_byte,
+    };
+    let mut viewer = signed_peer(&url, &signer, identity(11, 30, 234_567_890, 90)).await;
+    let mut hosts = Vec::new();
+    for index in 0..4u32 {
+        let host = signed_peer(&url, &signer, identity(10, 40 + index as u128, 123_456_800 + index, 91 + index as u8)).await;
+        hosts.push((host, 123_456_800 + index));
+    }
+    let mut sessions = Vec::new();
+    for (host, id) in hosts.iter_mut() {
+        let session = request(&mut viewer, host, *id).await;
+        send(host, ClientMessage::Decide { session, accept: true }).await;
+        assert!(matches!(event(&mut viewer).await, ServerMessage::Accepted { .. }));
+        assert!(matches!(event(host).await, ServerMessage::Accepted { .. }));
+        sessions.push(session);
+    }
+    // All four ask back to back: every one is answered with its own credentials.
+    let started = std::time::Instant::now();
+    for session in &sessions {
+        send(&mut viewer, ClientMessage::Ice { session: *session }).await;
+        assert!(
+            matches!(event(&mut viewer).await, ServerMessage::Ice { session: answered, .. } if answered == *session),
+            "session {session} got no relay credentials"
+        );
+    }
+    assert!(started.elapsed() < Duration::from_secs(2), "the four asks were not back to back");
+    // The same session again within 5 s: refused. The other sessions are not affected by it.
+    send(&mut viewer, ClientMessage::Ice { session: sessions[0] }).await;
+    assert!(matches!(event(&mut viewer).await, ServerMessage::Error { code: ErrorCode::Busy }));
+    // A host asking for a session of its own is limited by that session too.
+    send(&mut hosts[1].0, ClientMessage::Ice { session: sessions[1] }).await;
+    assert!(matches!(event(&mut hosts[1].0).await, ServerMessage::Ice { .. }));
+    send(&mut hosts[1].0, ClientMessage::Ice { session: sessions[1] }).await;
+    assert!(matches!(event(&mut hosts[1].0).await, ServerMessage::Error { code: ErrorCode::Busy }));
+    // Hammering one session never gets a second lease.
+    for _ in 0..30 {
+        send(&mut viewer, ClientMessage::Ice { session: sessions[2] }).await;
+        assert!(matches!(event(&mut viewer).await, ServerMessage::Error { code: ErrorCode::Busy }));
+    }
+    // After 5 s the session may ask again (a normal renewal).
+    tokio::time::sleep(Duration::from_millis(5_200)).await;
+    send(&mut viewer, ClientMessage::Ice { session: sessions[0] }).await;
+    assert!(matches!(event(&mut viewer).await, ServerMessage::Ice { .. }));
+    broker.abort();
+}
+
+/// D4 phase 3: with MIXEL_AGENT_REQUIRE_SIGNED on, `device_policy` carries `require_signed_commands: true`,
+/// but only for apps that announced `signed`; an app that announced only `policy` gets the old shape.
+#[tokio::test]
+async fn device_policy_tells_signing_apps_to_refuse_unsigned_commands_when_the_broker_requires_it() {
+    use axum::{Json, Router, http::StatusCode, routing::post};
+    use ed25519_dalek::SigningKey;
+    use signaling_server::{delegated_auth::TicketAuth, support_policy::SupportPolicy};
+
+    const TOKEN: &str = "7444744474447444744474447444744474447444744474447444744474447444";
+    let policy = Router::new()
+        .route("/api/internal/remote/authorize", post(|| async { StatusCode::NO_CONTENT }))
+        .route(
+            "/api/internal/remote/device-policy",
+            post(|| async { Json(serde_json::json!({ "unattended_default": false, "unattended_allowed": true })) }),
+        );
+    let policy_socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let policy_url = format!("http://{}/api/internal/remote/authorize", policy_socket.local_addr().unwrap());
+    let policy_task = tokio::spawn(async move { axum::serve(policy_socket, policy).await.unwrap() });
+    let signer = SigningKey::from_bytes(&[82; 32]);
+    let state = AppState::new(Arc::new(TicketAuth::new(vec![signer.verifying_key()]).unwrap()), HashSet::new())
+        .with_support_policy(SupportPolicy::new(policy_url.parse().unwrap(), TOKEN.into()).unwrap())
+        .with_signed_commands_required(true);
+    let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/v1/ws", socket.local_addr().unwrap());
+    let broker = tokio::spawn(async move { axum::serve(socket, router(state)).await.unwrap() });
+    let identity = |profile: u128, device: u128, connection_id: u32, key_byte: u8| SignedPeer {
+        profile: Uuid::from_u128(profile),
+        device: Uuid::from_u128(device),
+        tenant: Some(Uuid::from_u128(1)),
+        connection_id,
+        generation: 1,
+        key_byte,
+    };
+    let mut signing_host = signed_peer(&url, &signer, identity(10, 20, 123_456_810, 61)).await;
+    let mut policy_only_host = signed_peer(&url, &signer, identity(11, 21, 123_456_811, 62)).await;
+    send(&mut signing_host, ClientMessage::Capabilities { features: [FEATURE_POLICY, FEATURE_SIGNED].map(String::from).to_vec() }).await;
+    send(&mut policy_only_host, ClientMessage::Capabilities { features: vec![FEATURE_POLICY.to_string()] }).await;
+    assert!(matches!(event(&mut signing_host).await,
+        ServerMessage::DevicePolicy { unattended_default: false, unattended_allowed: true, require_signed_commands: Some(true) }));
+    let text = loop {
+        let message = timeout(Duration::from_secs(3), policy_only_host.next()).await.unwrap().unwrap().unwrap();
+        if let Message::Text(text) = message { break text.to_string(); }
+    };
+    assert!(text.contains("device_policy") && !text.contains("require_signed"), "{text}");
+    policy_task.abort();
+    broker.abort();
 }
