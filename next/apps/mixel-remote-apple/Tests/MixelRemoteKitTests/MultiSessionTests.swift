@@ -321,6 +321,50 @@ final class MultiSessionTests: XCTestCase {
         app.stop()
     }
 
+    func testRefusedUnattendedRequestShowsTheKeptRefusalAsAdviceForTheAdmin() async throws {
+        let (app, engine) = try await app(sessions: 1)
+        let ws = app.workspace
+        ws.connect(peer: peer(2), name: "Second", unattended: true, checkPhone: false)
+        engine.reply("remote_request", json: "\"id-2\"")
+        await show([item(1), item(2, phase: "outgoing")], app, engine)
+        try await waitFor { !app.busy }
+        // The request is refused; another session is still in front, so the top-level message is not the reason.
+        var refused = status([item(1)])
+        refused.message = "Something about the session in front"
+        refused.lastRefusal = Refusal(peer: peer(2), message: "The remote device is not available to you. Ask the other person to make their computer available.",
+                                      at: UInt64(Date().timeIntervalSince1970))
+        engine.reply("remote_status", refused)
+        await app.refreshRemote()
+        let failure = try XCTUnwrap(ws.attempt?.failure)
+        XCTAssertTrue(failure.contains("Ask an admin to allow you unattended access to this computer"), failure)
+        app.stop()
+    }
+
+    func testRefusalReadsFromTheEngineStatusAndTheListOfWhoMayConnectIsBuilt() throws {
+        var sent = RemoteStatus(phase: "ready")
+        sent.lastRefusal = Refusal(peer: 482_913_557, message: "The remote device is busy.", at: 1_789_000_000)
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let wire = try encoder.encode(sent)
+        XCTAssertTrue(String(decoding: wire, as: UTF8.self).contains("\"last_refusal\""))
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let status = try decoder.decode(RemoteStatus.self, from: wire)
+        XCTAssertEqual(status.lastRefusal, Refusal(peer: 482_913_557, message: "The remote device is busy.", at: 1_789_000_000))
+        XCTAssertNil(DevicesModel.unattendedRefusalAdvice("The remote device is busy."))
+        let members = [
+            Member(userId: "u2", name: "", email: "zed@example.com", role: "technician", createdAt: ""),
+            Member(userId: "u1", name: "Anna", email: "anna@example.com", role: "owner", createdAt: ""),
+            Member(userId: "u3", name: "Bob", email: "bob@example.com", role: "viewer", createdAt: ""),
+            Member(userId: "u4", name: "Cleo", email: "cleo@example.com", role: "admin", createdAt: ""),
+        ]
+        let grants = [UnattendedGrant(userId: "u2", source: "grant"), UnattendedGrant(userId: "u4", source: "company_setting")]
+        let rows = DevicesModel.grantRows(members: members, grants: grants)
+        XCTAssertEqual(rows.map(\.userId), ["u1", "u4", "u2"], "viewers are left out; sorted by name (an empty name shows the e-mail)")
+        XCTAssertEqual(rows.map(\.granted), [false, false, true])
+        XCTAssertEqual(rows.map(\.automatic), [false, true, false])
+    }
+
     func testPasswordAndUnattendedFlagsBelongToTheirOwnSession() async throws {
         let engine = MockEngine()
         var first = item(1)

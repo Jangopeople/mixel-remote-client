@@ -194,9 +194,16 @@ public final class WorkspaceModel: ObservableObject {
             } else if step >= 1 {
                 // The request was sent and the session is gone again: declined, timed out or refused.
                 let sentence = status.viewerSessions.isEmpty && status.phase != "ready" ? status.message : ""
-                current.failure = sentence.isEmpty
-                    ? L("The connection was not established. The other side declined, did not answer, or unattended access is not allowed.")
-                    : Translator.shared.translate(sentence)
+                let now = UInt64(Date().timeIntervalSince1970)
+                if let refusal = status.lastRefusal, refusal.peer == current.peer, now &- min(now, refusal.at) < 120, !refusal.message.isEmpty {
+                    // The reason the engine kept apart from the message of whatever session is in front.
+                    current.failure = (current.unattended ? DevicesModel.unattendedRefusalAdvice(refusal.message) : nil)
+                        ?? Translator.shared.translate(refusal.message)
+                } else {
+                    current.failure = sentence.isEmpty
+                        ? L("The connection was not established. The other side declined, did not answer, or unattended access is not allowed.")
+                        : Translator.shared.translate(sentence)
+                }
             }
         }
         if !current.failure.isEmpty { filesWanted.remove(current.peer) }

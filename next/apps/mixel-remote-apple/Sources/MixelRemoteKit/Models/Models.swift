@@ -63,6 +63,14 @@ public struct Factor: Codable, Equatable, Sendable, Identifiable {
 }
 
 /// The connection to Mixel and the session (`remote_status`).
+/// A refused request: the computer, the engine's reason and when (seconds since the Unix epoch).
+public struct Refusal: Codable, Equatable, Sendable {
+    public var peer: UInt32
+    public var message: String
+    public var at: UInt64
+    public init(peer: UInt32, message: String, at: UInt64) { self.peer = peer; self.message = message; self.at = at }
+}
+
 public struct RemoteStatus: Codable, Equatable, Sendable {
     public var controllerOnly: Bool
     public var platform: String
@@ -119,6 +127,9 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
     public var maxSessions: Int?
     /// The connection to the connection service was lost; the session itself continues and is resumed (engine 2.1.0).
     public var reconnecting: Bool?
+    /// Why the last request that never became a session was refused; kept apart from `message`, which belongs to
+    /// the session in front (engine 2.1.0, `last_refusal`).
+    public var lastRefusal: Refusal?
     public var isReconnecting: Bool { reconnecting == true }
 
     public static let offline = RemoteStatus(phase: "offline")

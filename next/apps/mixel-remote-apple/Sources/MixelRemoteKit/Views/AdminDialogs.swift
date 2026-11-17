@@ -146,3 +146,52 @@ struct RemoveDeviceDialog: View {
     }
 }
 #endif
+
+/// "Unattended access, Who may connect…": the company's technicians with a switch each (owners and administrators only).
+struct UnattendedWhoDialog: View {
+    @ObservedObject var model: DevicesModel
+    let device: Device
+    @Environment(\.dismiss) private var dismiss
+    @State private var rows: [GrantRow]?
+    @State private var loaded = false
+    @State private var error = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(verbatim: L("Who may connect…")).font(.headline)
+            Text(verbatim: L("People who may connect to %@ (%@) without anyone there being asked.", device.name, Format.remoteId(device.connectionId)))
+                .font(.callout).foregroundStyle(.secondary)
+            if !loaded {
+                ProgressView().controlSize(.small)
+            } else if let rows {
+                if rows.isEmpty { Text(verbatim: L("This company has no other technicians.")).foregroundStyle(.secondary) }
+                ForEach(rows) { row in
+                    Toggle(isOn: Binding(get: { row.granted || row.automatic }, set: { on in change(row, on) })) {
+                        Text(verbatim: row.name + " · " + row.role + (row.automatic ? " · " + L("automatic (company setting)") : ""))
+                    }.disabled(row.automatic)
+                }
+            } else {
+                Text(verbatim: error.isEmpty ? L("The list could not be read.") : error)
+            }
+            if loaded, rows != nil, !error.isEmpty { Text(verbatim: error).foregroundStyle(.red).font(.callout) }
+            HStack { Spacer(); Button(L("Done")) { dismiss() }.keyboardShortcut(.defaultAction) }
+        }
+        .padding(20).frame(minWidth: 380)
+        .task {
+            rows = await model.unattendedWho(device)
+            if rows == nil { error = model.error }
+            loaded = true
+        }
+    }
+
+    private func change(_ row: GrantRow, _ on: Bool) {
+        Task {
+            if await model.setUnattendedGrant(device, user: row.userId, granted: on) {
+                error = ""
+                if let index = rows?.firstIndex(where: { $0.userId == row.userId }) { rows?[index].granted = on }
+            } else {
+                error = model.error
+            }
+        }
+    }
+}

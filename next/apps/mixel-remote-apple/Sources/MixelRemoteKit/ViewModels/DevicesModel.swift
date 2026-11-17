@@ -80,6 +80,57 @@ public final class DevicesModel: ObservableObject {
         await adminChange { _ = try await self.admin.setUnattended(device: device.device, setting: on ? "on" : "off") }
     }
 
+    /// The people of the company who may connect to this device without being asked: owners, administrators and
+    /// technicians, each with their grant. Nil with `error` set when the list cannot be read.
+    public func unattendedWho(_ device: Device) async -> [GrantRow]? {
+        guard let tenant else { return nil }
+        error = ""
+        do {
+            let grants = try await admin.unattendedGrants(device: device.device)
+            let members: [Member] = try await app.engine.run("saas_members", ["tenant": tenant.tenantId])
+            return Self.grantRows(members: members, grants: grants)
+        } catch {
+            if let failure = error as? EngineFailure, failure.message.contains("not_saas") {
+                self.error = L("The people who may connect to this computer are managed in the administration console of its company.")
+            } else {
+                self.error = AppModel.message(error)
+            }
+            return nil
+        }
+    }
+
+    public static func grantRows(members: [Member], grants: [UnattendedGrant]) -> [GrantRow] {
+        members.filter { ["owner", "admin", "technician"].contains($0.role) }.map { member in
+            let own = grants.contains { $0.userId == member.userId && $0.source != "company_setting" }
+            let automatic = grants.contains { $0.userId == member.userId && $0.source == "company_setting" }
+            return GrantRow(userId: member.userId, name: member.name.isEmpty ? member.email : member.name, email: member.email,
+                            role: member.role, granted: own, automatic: automatic)
+        }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    public func setUnattendedGrant(_ device: Device, user: String, granted: Bool) async -> Bool {
+        error = ""
+        do {
+            try await admin.setUnattendedGrant(device: device.device, user: user, granted: granted)
+            return true
+        } catch {
+            if let failure = error as? EngineFailure, failure.message.contains("invalid_user") {
+                self.error = L("This person cannot be given access to this computer.")
+            } else {
+                self.error = AppModel.message(error)
+            }
+            return false
+        }
+    }
+
+    /// The sentence for a refused unattended request: the engine's "not available to you" does not say what to do.
+    /// Nil when the message is not that refusal.
+    public static func unattendedRefusalAdvice(_ engineMessage: String) -> String? {
+        engineMessage.hasPrefix("The remote device is not available to you")
+            ? L("This computer did not accept an unattended connection from you. Ask an admin to allow you unattended access to this computer (its menu in Devices, Unattended access, Who may connect…), or connect and ask the person there to accept.")
+            : nil
+    }
+
     private func adminChange(_ work: @escaping () async throws -> Void) async -> Bool {
         error = ""
         do {

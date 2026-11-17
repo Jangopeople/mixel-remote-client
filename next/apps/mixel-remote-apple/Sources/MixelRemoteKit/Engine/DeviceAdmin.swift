@@ -100,6 +100,33 @@ public protocol DeviceAdminService: Sendable {
     func setUnattended(device: String, setting: String) async throws -> AdminDevice
     /// `confirmConnectionId` must equal the device's 9-digit ID.
     func remove(device: String, confirmConnectionId: UInt32) async throws
+    /// Who may connect to the device without anyone there being asked (`remote_admin_unattended_grants`).
+    func unattendedGrants(device: String) async throws -> [UnattendedGrant]
+    /// Gives or takes away one person's unattended access (`remote_admin_set_unattended_grant`).
+    func setUnattendedGrant(device: String, user: String, granted: Bool) async throws
+}
+
+/// One row of `remote_admin_unattended_grants`: a per-user grant, or automatic access from the company setting.
+public struct UnattendedGrant: Codable, Equatable, Sendable {
+    public var userId: String
+    public var name: String?
+    public var role: String?
+    /// `company_setting` for automatic access (read-only); `grant` (or absent) for a per-user grant.
+    public var source: String?
+    public init(userId: String, name: String? = nil, role: String? = nil, source: String? = nil) {
+        self.userId = userId; self.name = name; self.role = role; self.source = source
+    }
+}
+
+/// One person in the "Who may connect" list.
+public struct GrantRow: Equatable, Sendable, Identifiable {
+    public var userId: String
+    public var name: String
+    public var email: String
+    public var role: String
+    public var granted: Bool
+    public var automatic: Bool
+    public var id: String { userId }
 }
 
 /// No administration commands in the engine: every call says so.
@@ -112,6 +139,8 @@ public struct UnavailableDeviceAdminService: DeviceAdminService {
     public func setFavorite(device: String, favorite: Bool) async throws -> Bool { throw DeviceAdminError.unavailable }
     public func setUnattended(device: String, setting: String) async throws -> AdminDevice { throw DeviceAdminError.unavailable }
     public func remove(device: String, confirmConnectionId: UInt32) async throws { throw DeviceAdminError.unavailable }
+    public func unattendedGrants(device: String) async throws -> [UnattendedGrant] { throw DeviceAdminError.unavailable }
+    public func setUnattendedGrant(device: String, user: String, granted: Bool) async throws { throw DeviceAdminError.unavailable }
 }
 
 /// The engine commands asked for in docs/mixel-remote-ui-engine-requests.md (item 1): same names and
@@ -139,6 +168,13 @@ public struct EngineDeviceAdminService: DeviceAdminService {
     }
     public func remove(device: String, confirmConnectionId: UInt32) async throws {
         try await call { try await engine.perform("remote_admin_remove_device", ["device": device, "confirm_connection_id": confirmConnectionId]) }
+    }
+
+    public func unattendedGrants(device: String) async throws -> [UnattendedGrant] {
+        try await call { try await engine.run("remote_admin_unattended_grants", ["device": device]) }
+    }
+    public func setUnattendedGrant(device: String, user: String, granted: Bool) async throws {
+        try await call { try await engine.perform("remote_admin_set_unattended_grant", ["device": device, "user": user, "granted": granted]) }
     }
 
     /// An engine that does not know the command answers with an "unknown command" failure: that is

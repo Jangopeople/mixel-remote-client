@@ -13,6 +13,7 @@ public struct DeviceConsoleView: View {
     @State private var moving: Device?
     @State private var removing: Device?
     @State private var noting: Device?
+    @State private var whoing: Device?
     @State private var addingOthers = false
     @State private var addingThis = false
     @State private var byId = ""
@@ -41,6 +42,7 @@ public struct DeviceConsoleView: View {
         }
         .sheet(item: $renaming) { device in RenameDeviceDialog(model: model, device: device, company: model.tenant?.name ?? "") }
         .sheet(item: $noting) { device in DeviceNotesDialog(model: model, device: device) }
+        .sheet(item: $whoing) { device in UnattendedWhoDialog(model: model, device: device) }
         .sheet(item: $removing) { device in RemoveDeviceDialog(model: model, device: device, inSession: workspace.state(of: device.connectionId) != nil) }
         .sheet(item: $moving) { device in MoveSheet(model: model, device: device) }
         .sheet(item: $editing) { device in StaffDeviceSheet(model: model, device: device) }
@@ -223,7 +225,7 @@ public struct DeviceConsoleView: View {
                             Section {
                                 ForEach(group.devices) { device in
                                     DeviceTableRow(app: app, model: model, workspace: workspace, device: device,
-                                                   rename: { renaming = $0 }, move: { moving = $0 }, remove: { removing = $0 }, edit: { editing = $0 }, notes: { noting = $0 })
+                                                   rename: { renaming = $0 }, move: { moving = $0 }, remove: { removing = $0 }, edit: { editing = $0 }, notes: { noting = $0 }, who: { whoing = $0 })
                                 }
                             } header: {
                                 GroupHeader(name: group.name, color: group.id == "-" ? Color.secondary : Theme.groupColor(group.name), count: group.devices.count, online: group.online)
@@ -356,6 +358,7 @@ struct DeviceTableRow: View {
     let remove: (Device) -> Void
     let edit: (Device) -> Void
     let notes: (Device) -> Void
+    let who: (Device) -> Void
     @State private var hovering = false
 
     var body: some View {
@@ -531,6 +534,7 @@ struct DeviceTableRow: View {
                 Toggle(isOn: Binding(get: { model.adminRow(device)?.unattendedOn ?? false }, set: { on in Task { _ = await model.setUnattended(device, on: on) } })) {
                     Text(verbatim: L("Unattended access"))
                 }.disabled(!model.writable)
+                if model.deploys { Button(L("Who may connect…")) { who(device) } }
             }
             Divider()
             Button(L("Remove…"), role: .destructive) { remove(device) }
