@@ -752,7 +752,8 @@ async fn hosted(check: &mut Check<'_>, suffix: &str, mine: u64) {
     }
     // Long enough for a technician that holds the session through renewals (hold-minutes.txt, up to 40 min).
     check.print("WAITING for the technician to end the session");
-    let ended = check.wait(2700, |status| status["phase"] != "active").await;
+    // A transport renewal (older builds show "negotiating" meanwhile) does not end the session.
+    let ended = check.wait(2700, |status| status["phase"] != "active" && status["phase"] != "negotiating").await;
     check.check("the technician ends the session; this computer is ready again", ended.is_some() && check.wait(20, |status| status["phase"] == "ready").await.is_some(), check.status().await["message"].clone());
     check.print(&format!("shown after the session: {}", check.status().await["message"]));
 }

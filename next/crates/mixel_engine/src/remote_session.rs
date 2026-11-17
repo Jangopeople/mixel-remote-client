@@ -1989,6 +1989,11 @@ impl Peer {
         self.rotated_at = std::time::Instant::now();
         self.accepted_at = Some(std::time::Instant::now());
     }
+    /// A renewal under way: the session stays "active" for the window while the new transport
+    /// negotiates (its picture, tools and input go on over the transport before).
+    fn renewing(&self) -> bool {
+        self.handover.is_some()
+    }
     fn take_close(&mut self) -> bool {
         self.cancel.store(true, Ordering::Release);
         !std::mem::replace(&mut self.close_sent, true)
@@ -2823,7 +2828,9 @@ async fn run(
                             auth.credential(Some(&active.cancel)).await?;
                             let binding=core_protocol::delegation::session_binding(*session.as_bytes(),nonce,&controller,&host);
                             if active.nonce.replace(binding).is_some(){return Err("Duplicate accepted invitation".into());}
-                            state.change(generation,|status|{status.phase="negotiating".into();status.message="Accepted; obtaining authenticated short-lived relay configuration".into();}).await;
+                            // A renewal: the session stays active (the transport before still shares), so the
+                            // window keeps its picture and tools and input goes on.
+                            if !active.renewing(){state.change(generation,|status|{status.phase="negotiating".into();status.message="Accepted; obtaining authenticated short-lived relay configuration".into();}).await;}
                             send(&mut socket,ClientMessage::Ice{session}).await?;
                         },
                         ServerMessage::Ice{session,lease}=>{
@@ -3177,6 +3184,7 @@ mod consent_tests {
         assert!(!running.retire.load(Ordering::Acquire), "it keeps sharing until the new one takes over");
         assert!(!Arc::ptr_eq(&peer.link.retire, &running.retire), "the renewed transport has its own flags");
         assert!(peer.signals.is_none() && peer.nonce.is_none() && peer.can_negotiate(std::time::Instant::now()));
+        assert!(peer.renewing(), "the window keeps seeing an active session");
         // A second renewal before the first one's transport started: the one sharing stays.
         let unstarted = peer.link.clone();
         peer.begin_renewal(Uuid::from_u128(4));
