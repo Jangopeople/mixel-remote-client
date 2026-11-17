@@ -27,4 +27,32 @@ public static class Perf
         }
         totals[name] = totals.TryGetValue(name, out var found) ? (found.Count + 1, found.Ms + ms) : (1, ms);
     }
+
+    // Lab builds only (LAB): the UI side of "QA connect" marks (same clock as the engine's, on stderr) and per-picture stage times.
+    private static double copyMs, drawMs, presentMs;
+    private static int pictures;
+    private static long labSecond;
+
+    [Conditional("LAB")]
+    public static void LabMark(string step)
+    {
+        var clock = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() % 100_000_000;
+        Console.Error.WriteLine($"QA connect UI {step} (clock {clock})");
+    }
+
+    /// <summary>One picture's UI cost: bitmap copy, drawing into the swap chain, present. Once a second, written to MIXEL_QA_VIDEO_LOG.draw.</summary>
+    [Conditional("LAB")]
+    public static void LabPicture(double copy, double draw, double present)
+    {
+        (copyMs, drawMs, presentMs, pictures) = (copyMs + copy, drawMs + draw, presentMs + present, pictures + 1);
+        var second = Environment.TickCount64 / 1000;
+        if (second == labSecond) return;
+        labSecond = second;
+        if (Environment.GetEnvironmentVariable("MIXEL_QA_VIDEO_LOG") is { Length: > 0 } path && pictures > 0)
+        {
+            try { File.WriteAllText(path + ".draw", $"drawn/s={pictures} copy={copyMs / pictures:0.0}ms draw={drawMs / pictures:0.0}ms present={presentMs / pictures:0.0}ms"); }
+            catch (IOException) { }
+        }
+        (copyMs, drawMs, presentMs, pictures) = (0, 0, 0, 0);
+    }
 }

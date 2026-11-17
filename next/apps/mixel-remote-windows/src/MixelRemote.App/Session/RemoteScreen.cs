@@ -114,6 +114,7 @@ internal sealed class RemoteScreen : Grid
     }
 
     private bool inside;
+    private bool firstDrawn;
     private bool cursorHidden;
 
     /// <summary>The host's cursor is in the picture (no host does this today; see <see cref="PointerPolicy"/>).</summary>
@@ -189,6 +190,8 @@ internal sealed class RemoteScreen : Grid
         picture = new Rect(x, y, pw, ph);
         try
         {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            double copied = 0, drawn;
             if (!ReferenceEquals(bitmapFrame, frame) || bitmap is null)
             {
                 bitmap?.Dispose();
@@ -196,13 +199,17 @@ internal sealed class RemoteScreen : Grid
                     ? CanvasBitmap.CreateFromBytes(device, frame.ToBgraCopy(), frame.Width, frame.Height, DirectXPixelFormat.B8G8R8A8UIntNormalized, 96f, CanvasAlphaMode.Ignore)
                     : CanvasBitmap.CreateFromBytes(device, frame.ToRgba(), frame.Width, frame.Height, DirectXPixelFormat.R8G8B8A8UIntNormalized);
                 bitmapFrame = frame;
+                copied = clock.Elapsed.TotalMilliseconds;
             }
             using (var drawing = chain.CreateDrawingSession(Colors.Black))
             {
                 drawing.DrawImage(bitmap, picture, new Rect(0, 0, frame.Width, frame.Height), 1, fit >= 1 ? CanvasImageInterpolation.NearestNeighbor : CanvasImageInterpolation.Linear);
                 DrawStrokes(drawing);
             }
+            drawn = clock.Elapsed.TotalMilliseconds - copied;
             chain.Present();
+            Shell.Perf.LabPicture(copied, drawn, clock.Elapsed.TotalMilliseconds - copied - drawn);
+            if (!firstDrawn) { firstDrawn = true; Shell.Perf.LabMark("first picture presented"); }
         }
         catch (Exception failure) when (device.IsDeviceLost(failure.HResult))
         {

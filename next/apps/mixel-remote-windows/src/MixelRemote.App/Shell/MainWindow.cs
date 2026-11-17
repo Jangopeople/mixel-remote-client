@@ -298,7 +298,9 @@ internal sealed partial class MainWindow : Window
         }
         if (shown is { } open && !sessionViews.ContainsKey(open))
         {
+            Perf.LabMark("session view creating");
             var view = new SessionView(app, this, open);
+            Perf.LabMark("session view created");
             sessionViews[open] = view;
             sessionHost.Children.Add(view);
             view.Screen.FocusScreen();
