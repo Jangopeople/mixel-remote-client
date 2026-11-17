@@ -7,3 +7,5 @@
 !vendor/**
 !deployment/
 !deployment/*.Dockerfile
+!apps/mixel-remote-linux/
+!apps/mixel-remote-linux/**
