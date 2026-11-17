@@ -165,7 +165,8 @@ public sealed partial class DevicesModel
         if (!app.SignedIn) return;
         try
         {
-            var rows = await DeviceAdmin.Devices(Tenant?.TenantId, null);
+            // "company" of the API is the ISM client id, not the tenant id; every row is matched by its 9-digit ID anyway.
+            var rows = await DeviceAdmin.Devices(null, null);
             admin = rows.GroupBy(row => row.ConnectionId).ToDictionary(group => group.Key, group => group.First());
             AdminAvailable = true;
         }

@@ -122,6 +122,23 @@ public sealed class ConsoleTests
     }
 
     [TestMethod]
+    public async Task The_engines_typed_failure_text_gives_the_right_sentence()
+    {
+        var (engine, app) = await Company();
+        var device = app.Devices.AllDevices.Single(item => item.Name == "Reception PC");
+        // The engine's failure text of a refused remote_admin_* call: {"hint", "message", "status"}.
+        engine.Fail("remote_admin_remove_device", """{"status":400,"hint":"confirm_mismatch","message":"The ID does not match"}""");
+        Assert.IsFalse(await app.Devices.RemoveConfirmed(device, device.ConnectionId.ToString()));
+        Assert.AreEqual("The ID does not match the device.", app.Devices.Error);
+        engine.Fail("remote_admin_set_device_unattended", """{"status":403,"hint":"mfa_required","message":"Second step needed"}""");
+        Assert.IsFalse(await app.Devices.SetUnattended(device, "off"));
+        Assert.AreEqual("Sign in again with the second confirmation step to change devices.", app.Devices.Error);
+        engine.Fail("remote_admin_set_device_note", """{"status":409,"hint":"changed","message":"The device changed"}""");
+        Assert.IsFalse(await app.Devices.SetNote(device, "x"));
+        Assert.AreEqual("The device was changed in the meantime. The list is read again.", app.Devices.Error);
+    }
+
+    [TestMethod]
     public async Task Reports_load_the_period_and_export_csv_with_formula_protection()
     {
         var (engine, app) = await Company();
