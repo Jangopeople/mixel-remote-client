@@ -54,3 +54,18 @@ Build image `mixel-ui-linux-build` (Debian 12 arm64, Rust 1.99.1, GTK 4.8 / liba
 - The connecting card shows one connection at a time (a second Connect while the first still connects replaces the card; both
   sessions still open as tabs).
 - The tray's "End session" ends the session in front, else the only session; with several and none in front it does nothing.
+
+## 2.1.0 build-complete
+- Per-session `password_session` and `unattended_session` (`SessionItem`; `RemoteStatus::viewed_as` copies them into the view of
+  that session, so the 5-min/1-min warning shows only in its own session). An engine without `sessions[]` falls back to the
+  top-level fields (`technician_sessions`). Restart-and-reconnect reads the session's own `unattended_session` too.
+- Reconnect: a session with `reconnecting` or `reconnect_failed` (phase `outgoing`, top-level session empty) keeps its tab and
+  window (`TabState::Reconnecting` / `ReconnectFailed`, no "ready" notice when it returns). The view's wait card reads
+  "Reconnecting..." or "Could not reconnect" with Retry (`App::reconnect_session` -> `remote_reconnect {session: stable id}`);
+  End uses the stable id (`end_session_id`), so it works while the top-level session is empty. de/fr/it in `po/`.
+- Closing a popped-out window ends the session after "End session with <device>?" (`logic::window_close`); the "Back into a tab"
+  button docks. Cancel keeps window and session.
+- Sign-in: the "Continue with e-mail" step now has a real text entry (`signin.rs`), pre-filled with `Settings.last_signin_email`,
+  any address accepted (`logic::signin_email`), sent to the engine as `login_hint`. The engine's `account_sign_in` ignores
+  `login_hint` until it forwards it to the sign-in page (engine is not part of this change); the address is remembered either way.
+- Tests: `cargo test -p mixel_remote_linux`: 81 passed, 0 failed, 1 ignored; `cargo clippy -p mixel_remote_linux --tests -- -D warnings` clean.

@@ -67,6 +67,8 @@ impl SessionsPage {
                 TabState::Starting => t("Starting video"),
                 TabState::Ready => t("In session"),
                 TabState::Ending => t("Ending the session…"),
+                TabState::Reconnecting => t("Reconnecting..."),
+                TabState::ReconnectFailed => t("Could not reconnect"),
             };
             line.append(&badge(crate::logic::Badge::Online, &state_text));
             line.append(&dim(&format::remote_id(Some(peer))));

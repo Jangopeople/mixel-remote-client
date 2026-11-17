@@ -519,6 +519,8 @@ impl DevicesPage {
                 status.append(&inner);
             }
             Some("ready" | "starting" | "ending") => status.append(&pill_tag("session", &t("In session"))),
+            Some("reconnecting") => status.append(&pill_tag("session", &t("Reconnecting..."))),
+            Some("reconnect_failed") => status.append(&pill_tag("session", &t("Could not reconnect"))),
             _ => {
                 status.append(&badge(logic::presence_badge(presence), &logic::presence_label(presence, &state.remote)));
                 if meta.is_some_and(crate::models::AdminDevice::unattended_on) {

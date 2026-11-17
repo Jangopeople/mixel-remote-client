@@ -154,6 +154,28 @@ fn closes(engine: &MockEngine) -> Vec<String> {
     engine.called("remote_close").iter().map(|args| args["session"].as_str().unwrap_or_default().to_owned()).collect()
 }
 
+/// A session whose computer is gone: phase `outgoing`, and the top-level single-session fields are empty.
+fn gone(n: usize, failed: bool) -> Value {
+    let mut value = item(n, "outgoing", "");
+    value["reconnecting"] = json!(!failed);
+    value["reconnect_failed"] = json!(failed);
+    value["message"] = json!(if failed { "Could not reconnect" } else { "Reconnecting..." });
+    value
+}
+
+fn report_with_empty_top_level(rig: &Rig, items: Vec<Value>) {
+    let mut value = status_json(items);
+    for key in ["session", "peer", "consent"] {
+        value[key] = Value::Null;
+    }
+    for key in ["control", "clipboard", "files"] {
+        value[key] = json!(false);
+    }
+    value["phase"] = json!("ready");
+    rig.engine.set("remote_status", value.clone());
+    rig.app.take_status(serde_json::from_value(value).expect("status"));
+}
+
 scenarios! {
 fn two_to_four_sessions_give_two_to_four_tabs_bound_to_their_stable_ids() {
     for count in 2..=4 {
@@ -256,6 +278,89 @@ fn closing_one_session_ends_only_that_session() {
     // The first one was never touched, and its input still works.
     rig.app.send_input(json!({ "kind": "key", "usage": 4, "down": true }));
     pump_until("input of the first", || rig.engine.inputs_of(&id(0)).len() == 1);
+}
+
+fn a_reconnecting_session_keeps_its_tab_and_can_be_ended_by_its_stable_id() {
+    let rig = rig();
+    rig.sessions((0..2).map(|n| item(n, "active", &format!("t{n}"))).collect());
+    rig.app.select_tab(Tab::Session(PEERS[1]));
+    // The second computer is gone: its session stays listed, the top-level session is empty.
+    report_with_empty_top_level(&rig, vec![item(0, "active", "t0"), gone(1, false)]);
+    assert_eq!(tab_ids(&rig.app), vec![id(0), id(1)], "the tab stays");
+    {
+        let state = rig.app.state.borrow();
+        assert_eq!(state.workspace.tab(PEERS[1]).map(|tab| tab.state), Some(crate::workspace::TabState::Reconnecting));
+        assert_eq!(state.workspace.selected, Tab::Session(PEERS[1]), "and stays selected");
+        assert!(state.raw.session.is_none());
+        let view = state.viewed_as(&id(1)).expect("view");
+        assert!(view.remote.session_reconnecting && !view.remote.session_reconnect_failed);
+        assert_eq!(crate::logic::session_wait_text(&view.remote), "Reconnecting...");
+    }
+    // End works without a top-level session, by the stable id, and only ends that one.
+    rig.app.end_session_id(&id(1));
+    pump_until("the close", || !closes(&rig.engine).is_empty());
+    assert_eq!(closes(&rig.engine), vec![id(1)]);
+}
+
+fn a_failed_reconnect_stays_listed_and_retry_asks_again_by_stable_id() {
+    let rig = rig();
+    rig.sessions(vec![item(0, "active", "t0")]);
+    report_with_empty_top_level(&rig, vec![gone(0, true)]);
+    assert_eq!(tab_ids(&rig.app), vec![id(0)]);
+    assert_eq!(rig.app.state.borrow().workspace.tab(PEERS[0]).map(|tab| tab.state), Some(crate::workspace::TabState::ReconnectFailed));
+    assert_eq!(crate::logic::session_wait_text(&rig.app.state.borrow().viewed_as(&id(0)).expect("view").remote), "Could not reconnect");
+    rig.app.reconnect_session(&id(0));
+    pump_until("remote_reconnect", || !rig.engine.called("remote_reconnect").is_empty());
+    assert_eq!(rig.engine.called("remote_reconnect"), vec![json!({ "session": id(0) })]);
+    // Retry means nothing for a session that is connected or retrying already.
+    report_with_empty_top_level(&rig, vec![gone(0, false)]);
+    rig.app.reconnect_session(&id(0));
+    pump();
+    assert_eq!(rig.engine.called("remote_reconnect").len(), 1);
+    // The computer came back: the same session is active again, in the same tab, and is not "new".
+    rig.sessions(vec![item(0, "active", "t1")]);
+    assert_eq!(tab_ids(&rig.app), vec![id(0)]);
+    assert!(rig.app.state.borrow().workspace.ready_notices.is_empty());
+    // An ended session can be closed while it is failed, too.
+    report_with_empty_top_level(&rig, vec![gone(0, true)]);
+    rig.app.end_session_id(&id(0));
+    pump_until("the close", || !closes(&rig.engine).is_empty());
+    assert_eq!(closes(&rig.engine), vec![id(0)]);
+}
+
+fn a_typed_sign_in_address_is_remembered_and_offered_to_the_sign_in_page() {
+    let rig = rig();
+    assert_eq!(rig.app.store.borrow().settings.last_signin_email, "", "nothing remembered yet: the field starts empty");
+    // A bad address starts nothing and says so.
+    rig.app.sign_in_with_email(false, "not an address");
+    pump();
+    assert!(rig.engine.called("account_sign_in").is_empty());
+    assert_eq!(rig.app.state.borrow().error, "Enter an e-mail address");
+    // Any typed address is accepted, trimmed, remembered as the last used one and passed on.
+    rig.app.sign_in_with_email(false, "  tech@kunde-ag.example ");
+    pump_until("account_sign_in", || !rig.engine.called("account_sign_in").is_empty());
+    assert_eq!(rig.engine.called("account_sign_in")[0]["login_hint"], "tech@kunde-ag.example");
+    assert_eq!(rig.app.store.borrow().settings.last_signin_email, "tech@kunde-ag.example");
+    // An empty field lets the browser ask; the last used address stays.
+    rig.app.sign_in_with_email(false, "");
+    pump_until("second account_sign_in", || rig.engine.called("account_sign_in").len() == 2);
+    assert!(rig.engine.called("account_sign_in")[1]["login_hint"].is_null());
+    assert_eq!(rig.app.store.borrow().settings.last_signin_email, "tech@kunde-ag.example");
+}
+
+fn the_password_limit_warns_only_in_the_session_it_belongs_to() {
+    let rig = rig();
+    let mut first = item(0, "active", "t0");
+    first["password_session"] = json!({ "ends_at": "2026-11-17T12:00:00Z", "seconds_left": 200 });
+    let mut second = item(1, "active", "t1");
+    second["unattended_session"] = json!(true);
+    rig.sessions(vec![first, second]);
+    let state = rig.app.state.borrow();
+    let warn = |n: usize| crate::logic::session_warnings(&state.viewed_as(&id(n)).expect("view").remote);
+    assert!(warn(0)[0].contains("4 minutes"));
+    assert!(warn(1).is_empty());
+    assert!(state.viewed_as(&id(1)).expect("view").remote.unattended_session);
+    assert!(!state.viewed_as(&id(0)).expect("view").remote.unattended_session);
 }
 
 fn a_session_ending_removes_only_its_tab_and_keeps_the_others_state() {

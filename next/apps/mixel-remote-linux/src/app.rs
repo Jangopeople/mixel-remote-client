@@ -657,9 +657,32 @@ impl App {
 
     /// Sign-in in the system browser; `provider`: Mixel ID (None), `google`, `azure` or `apple`.
     pub fn sign_in(self: &Rc<Self>, show_link: bool, provider: Option<String>) {
+        self.sign_in_as(show_link, provider, None);
+    }
+
+    /// Continue with e-mail: the address typed on the sign-in screen (any address; empty lets the
+    /// browser ask). A bad one is reported and nothing starts; a good one is remembered as the last
+    /// used and offered as `login_hint` to the sign-in page.
+    pub fn sign_in_with_email(self: &Rc<Self>, show_link: bool, typed: &str) {
+        match logic::signin_email(typed) {
+            Err(message) => self.edit(|state| state.error = message),
+            Ok(email) => {
+                if let Some(address) = &email {
+                    let mut store = self.store.borrow_mut();
+                    if store.settings.last_signin_email != *address {
+                        store.settings.last_signin_email = address.clone();
+                        store.save();
+                    }
+                }
+                self.sign_in_as(show_link, None, email);
+            }
+        }
+    }
+
+    fn sign_in_as(self: &Rc<Self>, show_link: bool, provider: Option<String>, email: Option<String>) {
         self.act(move |app| {
             Box::pin(async move {
-                let url: String = app.run("account_sign_in", json!({ "open_browser": !show_link, "provider": provider })).await?;
+                let url: String = app.run("account_sign_in", json!({ "open_browser": !show_link, "provider": provider, "login_hint": email })).await?;
                 if show_link {
                     app.edit(|state| state.sign_in_link = Some(url));
                 }
@@ -800,20 +823,23 @@ impl App {
     }
 
     fn observed(&self) -> Observed {
-        let sessions: Vec<(String, u32, String, bool)> = {
+        let sessions: Vec<(String, u32, String, bool, bool, bool)> = {
             let state = self.state.borrow();
             state
                 .raw
                 .sessions
                 .iter()
-                .filter_map(|item| Some((item.id.clone(), item.peer?, item.phase.clone(), state.session_state(&item.id).is_some_and(|session| session.has_frame))))
+                .filter_map(|item| {
+                    let link = item.link();
+                    Some((item.id.clone(), item.peer?, item.phase.clone(), state.session_state(&item.id).is_some_and(|session| session.has_frame), link == Link::Reconnecting, link == Link::Failed))
+                })
                 .collect()
         };
         let sessions = sessions
             .into_iter()
-            .map(|(id, peer, phase, frame_shown)| {
+            .map(|(id, peer, phase, frame_shown, reconnecting, reconnect_failed)| {
                 let (name, os) = self.peer_label(peer);
-                ObservedSession { id, peer, phase, frame_shown, name, os }
+                ObservedSession { id, peer, phase, frame_shown, name, os, reconnecting, reconnect_failed }
             })
             .collect();
         let state = self.state.borrow();
@@ -2413,7 +2439,7 @@ impl App {
             let Some(id) = state.focus.clone() else { return };
             let Some(item) = state.session_item(&id) else { return };
             let Some(peer) = item.peer else { return };
-            (id, peer, item.signin_id, state.unattended_peers.contains(&peer), state.session.restart_armed)
+            (id, peer, item.signin_id, item.unattended_session || state.unattended_peers.contains(&peer), state.session.restart_armed)
         };
         if !armed {
             self.edit(|state| state.session.restart_armed = true);
@@ -2569,6 +2595,16 @@ impl App {
         if let Some(id) = id {
             self.end_session_id(&id);
         }
+    }
+
+    /// "Retry" on a session that could not reconnect: asks the same computer again for a minute. The
+    /// session is addressed by its stable id (the top-level session is empty while the computer is gone).
+    pub fn reconnect_session(self: &Rc<Self>, id: &str) {
+        if self.state.borrow().session_item(id).is_none_or(|item| item.link() != Link::Failed) {
+            return;
+        }
+        let id = id.to_owned();
+        self.act(move |app| Box::pin(async move { app.perform("remote_reconnect", json!({ "session": id })).await }));
     }
 
     /// Ends one session, by its stable id, and only that one: the others go on.

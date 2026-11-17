@@ -70,6 +70,10 @@ pub enum TabState {
     Starting,
     Ready,
     Ending,
+    /// The other computer is gone and the engine asks again (about a minute); the tab stays.
+    Reconnecting,
+    /// It did not come back: the tab stays with a Retry until the session is ended.
+    ReconnectFailed,
 }
 
 /// One session tab.
@@ -120,6 +124,8 @@ pub struct ObservedSession {
     pub frame_shown: bool,
     pub name: String,
     pub os: String,
+    pub reconnecting: bool,
+    pub reconnect_failed: bool,
 }
 
 /// What the engine reports, reduced to what the workspace reads.
@@ -171,9 +177,12 @@ impl Workspace {
             .iter()
             .filter_map(|session| {
                 let state = match session.phase.as_str() {
+                    // The computer is gone: the session stays listed with phase "outgoing".
+                    "closing" => TabState::Ending,
+                    _ if session.reconnect_failed => TabState::ReconnectFailed,
+                    _ if session.reconnecting => TabState::Reconnecting,
                     "active" if session.frame_shown => TabState::Ready,
                     "active" => TabState::Starting,
-                    "closing" => TabState::Ending,
                     // "outgoing" and "negotiating" are the connecting card; a tab exists once the other
                     // side accepted (the picture is coming).
                     _ => return None,
@@ -203,9 +212,10 @@ impl Workspace {
         }
         self.update_attempt(observed);
         for tab in &next {
-            let was_ready = before
-                .iter()
-                .any(|old| old.peer == tab.peer && old.state == TabState::Ready);
+            // A session that lost its computer and got it back was ready before: it is not "new".
+            let was_ready = before.iter().any(|old| {
+                old.peer == tab.peer && matches!(old.state, TabState::Ready | TabState::Reconnecting | TabState::ReconnectFailed)
+            });
             if tab.state == TabState::Ready && !was_ready {
                 self.became_ready(tab.peer, &mut effects);
             }
@@ -396,6 +406,8 @@ impl Workspace {
                 TabState::Starting => "starting",
                 TabState::Ready => "ready",
                 TabState::Ending => "ending",
+                TabState::Reconnecting => "reconnecting",
+                TabState::ReconnectFailed => "reconnect_failed",
             });
         }
         self.attempt
@@ -413,7 +425,7 @@ mod tests {
     const OTHER: u32 = 205_118_340;
 
     fn session(id: &str, peer: u32, phase: &str, frame: bool) -> ObservedSession {
-        ObservedSession { id: id.into(), peer, phase: phase.into(), frame_shown: frame, name: format!("PC {peer}"), os: "windows".into() }
+        ObservedSession { id: id.into(), peer, phase: phase.into(), frame_shown: frame, name: format!("PC {peer}"), os: "windows".into(), ..ObservedSession::default() }
     }
     fn observe(sessions: Vec<ObservedSession>) -> Observed {
         Observed { sessions, ..Observed::default() }
@@ -558,7 +570,33 @@ mod tests {
     }
 
     #[test]
-    fn closing_the_window_docks_it() {
+    fn a_session_that_lost_its_computer_keeps_its_tab_window_and_selection() {
+        let (mut ws, _) = ready(WhenReady::Open, OpenIn::Window);
+        assert!(ws.is_in_window(PEER));
+        let lost = |reconnecting: bool, failed: bool| {
+            observe(vec![ObservedSession { reconnecting, reconnect_failed: failed, ..session("s-1", PEER, "outgoing", true) }])
+        };
+        let effects = ws.refresh(&lost(true, false));
+        assert!(effects.is_empty(), "nothing closes while it retries");
+        assert_eq!(ws.tab(PEER).map(|tab| tab.state), Some(TabState::Reconnecting));
+        assert!(ws.is_in_window(PEER));
+        assert_eq!(ws.state_of(PEER), Some("reconnecting"));
+        ws.refresh(&lost(false, true));
+        assert_eq!(ws.tab(PEER).map(|tab| tab.state), Some(TabState::ReconnectFailed));
+        assert!(ws.is_in_window(PEER));
+        // It comes back (Retry worked): same tab and window, no "ready" notice or second window.
+        let effects = ws.refresh(&viewing(true));
+        assert!(effects.is_empty());
+        assert!(ws.ready_notices.is_empty() && ws.is_in_window(PEER));
+        assert_eq!(ws.tab(PEER).map(|tab| tab.state), Some(TabState::Ready));
+        // Ending it (End works in every one of these states) removes tab and window.
+        ws.refresh(&lost(true, false));
+        assert_eq!(ws.refresh(&ended()), vec![Effect::Close(PEER)]);
+        assert!(ws.tabs.is_empty());
+    }
+
+    #[test]
+    fn a_window_that_is_gone_already_docks_without_closing_anything() {
         let (mut ws, _) = ready(WhenReady::Stay, OpenIn::Window);
         assert_eq!(ws.show(PEER, None), vec![Effect::Open(PEER)], "default own window");
         assert!(ws.is_in_window(PEER));

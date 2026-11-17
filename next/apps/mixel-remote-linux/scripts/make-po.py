@@ -17,6 +17,11 @@ LANGS = ['de', 'fr', 'it']
 
 # English: (German (Swiss spelling), French, Italian) — texts only the Linux app shows.
 LINUX = {
+    "Reconnecting...": ("Verbindung wird wiederhergestellt ...", "Reconnexion en cours...", "Riconnessione in corso..."),
+    "Could not reconnect": ("Verbindung konnte nicht wiederhergestellt werden", "Reconnexion impossible", "Impossibile riconnettersi"),
+    "Retry": ("Erneut versuchen", "Réessayer", "Riprova"),
+    "End session with %@?": ("Sitzung mit %@ beenden?", "Terminer la session avec %@ ?", "Terminare la sessione con %@?"),
+    "The session ends for both computers. To keep it running, move the window back into a tab instead.": ("Die Sitzung endet für beide Computer. Um sie weiterlaufen zu lassen, legen Sie das Fenster stattdessen zurück in einen Tab.", "La session se termine pour les deux ordinateurs. Pour la conserver, remettez plutôt la fenêtre dans un onglet.", "La sessione termina per entrambi i computer. Per mantenerla attiva, riporti invece la finestra in una scheda."),
     "You already have %d computers open. End one before connecting to another.": ("Sie haben bereits %d Computer geöffnet. Beenden Sie eine Sitzung, bevor Sie sich mit einem weiteren Computer verbinden.", "Vous avez déjà %d ordinateurs ouverts. Terminez une session avant de vous connecter à un autre ordinateur.", "Ha già %d computer aperti. Termini una sessione prima di collegarsi a un altro computer."),
     "You are already connected to this computer.": ("Sie sind bereits mit diesem Computer verbunden.", "Vous êtes déjà connecté à cet ordinateur.", "È già collegato a questo computer."),
     'This support session ends in 1 minute (support password limit). Ask for a new password to continue.': ('Diese Support-Sitzung endet in 1 Minute (Limit des Support-Passworts). Fragen Sie nach einem neuen Passwort, um fortzufahren.', 'Cette session de support se termine dans 1 minute (limite du mot de passe de support). Demandez un nouveau mot de passe pour continuer.', 'Questa sessione di supporto termina tra 1 minuto (limite della password di supporto). Chieda una nuova password per continuare.'),

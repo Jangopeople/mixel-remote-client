@@ -82,6 +82,59 @@ pub fn session_warnings(remote: &RemoteStatus) -> Vec<String> {
     lines
 }
 
+/// What the wait card in the middle of a session view says. A session whose computer is gone keeps
+/// its tab and window: it reads "Reconnecting..." for the minute the engine asks again, then "Could
+/// not reconnect" (with Retry); `remote` is the session as `RemoteStatus::viewed_as` describes it.
+pub fn session_wait_text(remote: &RemoteStatus) -> String {
+    if remote.session_reconnect_failed {
+        t("Could not reconnect")
+    } else if remote.session_reconnecting {
+        t("Reconnecting...")
+    } else if remote.phase == "outgoing" {
+        t("Waiting for the other person to accept your request.")
+    } else {
+        t("Connecting securely…")
+    }
+}
+
+/// The wait card shows a spinner while something is still running, and Retry once it gave up.
+pub fn session_wait_spins(remote: &RemoteStatus) -> bool {
+    !remote.session_reconnect_failed
+}
+
+/// What closing the window of a popped-out session does. Closing ends the session (after the person
+/// confirmed); putting it back into a tab is the separate "Back into a tab" button.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WindowClose {
+    /// Ask "End session with <device>?"; on yes end the session `id` (the stable id).
+    Ask { id: String, prompt: String },
+    /// The session is ending already: the window just goes back into its tab.
+    Dock,
+    /// No session behind the window (it ended): the window closes.
+    Close,
+}
+
+pub fn window_close(workspace: &crate::workspace::Workspace, peer: u32) -> WindowClose {
+    match workspace.tab(peer) {
+        None => WindowClose::Close,
+        Some(tab) if tab.state == crate::workspace::TabState::Ending => WindowClose::Dock,
+        Some(tab) => WindowClose::Ask { id: tab.id.clone(), prompt: tf("End session with %@?", &[&tab.name]) },
+    }
+}
+
+/// The e-mail address typed on the sign-in screen: `Ok(None)` when it is empty (the browser asks),
+/// `Ok(Some(address))` trimmed when it looks like an address, else an error for the person.
+pub fn signin_email(text: &str) -> Result<Option<String>, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    let valid = text.len() <= 254 && !text.chars().any(|c| c.is_whitespace() || c.is_control()) && text.split_once('@').is_some_and(|(local, domain)| {
+        !local.is_empty() && !domain.contains('@') && domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.') && !domain.contains("..")
+    });
+    if valid { Ok(Some(text.to_owned())) } else { Err(t("Enter an e-mail address")) }
+}
+
 /// The status line of the connection, as the desktop app words it.
 pub fn connection_message(signed_in: bool, remote: &RemoteStatus, stopping: bool) -> String {
     if stopping {
@@ -776,6 +829,107 @@ mod tests {
         let source = include_str!("ui/session.rs");
         assert!(!source.contains("draw_pointer") && !source.contains("fake_cursor"));
         assert_eq!(source.matches("set_cursor_from_name").count(), 1);
+    }
+
+    fn item(json: &str) -> SessionItem {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn password_and_unattended_belong_to_their_session() {
+        let status: RemoteStatus = serde_json::from_str(
+            r#"{"phase":"active","sessions":[
+                {"id":"a","peer":1,"phase":"active","password_session":{"ends_at":"2026-11-17T12:00:00Z","seconds_left":240},"unattended_session":false},
+                {"id":"b","peer":2,"phase":"active","password_session":null,"unattended_session":true}]}"#,
+        )
+        .unwrap();
+        let sessions = status.technician_sessions();
+        let (a, b) = (status.viewed_as(&sessions[0]), status.viewed_as(&sessions[1]));
+        assert!(session_warnings(&a)[0].contains("4 minutes"), "the session the limit belongs to warns");
+        assert!(session_warnings(&b).is_empty(), "the other session does not");
+        assert!(!a.unattended_session && b.unattended_session);
+        // The top-level fields of a status that lists sessions are not read for a session.
+        let mut top = status.clone();
+        top.password_session = Some(PasswordSessionView { ends_at: None, seconds_left: Some(30) });
+        assert!(session_warnings(&top.viewed_as(&sessions[1])).is_empty());
+    }
+
+    #[test]
+    fn an_old_engine_without_sessions_still_warns_from_the_top_level_fields() {
+        let status: RemoteStatus = serde_json::from_str(
+            r#"{"phase":"active","peer":7,"session":"s1","password_session":{"seconds_left":50},"unattended_session":true}"#,
+        )
+        .unwrap();
+        assert!(status.sessions.is_empty());
+        let sessions = status.technician_sessions();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].password_session.as_ref().and_then(|p| p.seconds_left), Some(50));
+        assert!(sessions[0].unattended_session);
+        let view = status.viewed_as(&sessions[0]);
+        assert!(session_warnings(&view)[0].contains("1 minute"));
+        assert!(view.unattended_session);
+    }
+
+    #[test]
+    fn a_reconnecting_session_keeps_its_id_and_says_so_then_gives_up() {
+        let status: RemoteStatus = serde_json::from_str(
+            r#"{"phase":"ready","sessions":[{"id":"stable-1","peer":5,"phase":"outgoing","message":"Reconnecting...","reconnecting":true}]}"#,
+        )
+        .unwrap();
+        assert!(status.session.is_none(), "the top-level session is empty while the computer is gone");
+        let sessions = status.technician_sessions();
+        assert_eq!(sessions[0].link(), Link::Reconnecting);
+        let view = status.viewed_as(&sessions[0]);
+        assert_eq!(view.session.as_deref(), Some("stable-1"), "every command uses the stable id");
+        assert_eq!(session_wait_text(&view), "Reconnecting...");
+        assert!(session_wait_spins(&view));
+
+        let failed = item(r#"{"id":"stable-1","peer":5,"phase":"outgoing","reconnecting":false,"reconnect_failed":true,"message":"Could not reconnect"}"#);
+        assert_eq!(failed.link(), Link::Failed);
+        let view = status.viewed_as(&failed);
+        assert_eq!(session_wait_text(&view), "Could not reconnect");
+        assert!(!session_wait_spins(&view), "Retry replaces the spinner");
+        assert_eq!(item(r#"{"id":"x"}"#).link(), Link::Up);
+        assert_eq!(session_wait_text(&remote("outgoing")), "Waiting for the other person to accept your request.");
+    }
+
+    #[test]
+    fn closing_a_popped_out_window_asks_to_end_the_session_it_does_not_dock() {
+        use crate::workspace::{Observed, ObservedSession, OpenIn, Tab, WhenReady, Workspace};
+        let mut ws = Workspace::new(WhenReady::Open, OpenIn::Window);
+        let observe = |phase: &str, reconnecting: bool| Observed {
+            sessions: vec![ObservedSession { id: "s1".into(), peer: 9, phase: phase.into(), frame_shown: true, name: "SRV-DC-02".into(), os: "windows".into(), reconnecting, reconnect_failed: false }],
+            ..Observed::default()
+        };
+        ws.refresh(&observe("active", false));
+        assert!(ws.is_in_window(9));
+        assert_eq!(window_close(&ws, 9), WindowClose::Ask { id: "s1".into(), prompt: "End session with SRV-DC-02?".into() });
+        // Asking changes nothing: the window and the session stay until the person says yes.
+        assert!(ws.is_in_window(9) && ws.selected != Tab::Session(9));
+        // While the computer is gone the window is still there and closing still asks.
+        ws.refresh(&observe("outgoing", true));
+        assert!(ws.is_in_window(9));
+        assert!(matches!(window_close(&ws, 9), WindowClose::Ask { .. }));
+        // The Dock button docks: the session goes into its tab.
+        let effects = ws.dock(9, true, true);
+        assert_eq!(effects, vec![crate::workspace::Effect::Close(9)]);
+        assert_eq!(ws.selected, Tab::Session(9));
+        // Ending already: closing just puts it back; gone: it closes.
+        ws.refresh(&observe("closing", false));
+        assert_eq!(window_close(&ws, 9), WindowClose::Dock);
+        ws.refresh(&Observed::default());
+        assert_eq!(window_close(&ws, 9), WindowClose::Close);
+    }
+
+    #[test]
+    fn the_sign_in_address_is_typed_free_text_and_checked() {
+        assert_eq!(signin_email("  anna@muster.ch "), Ok(Some("anna@muster.ch".into())));
+        assert_eq!(signin_email("any.one+tag@sub.example.org"), Ok(Some("any.one+tag@sub.example.org".into())));
+        assert_eq!(signin_email(""), Ok(None));
+        assert_eq!(signin_email("   "), Ok(None));
+        for bad in ["anna", "anna@", "@muster.ch", "anna@muster", "a b@muster.ch", "a@@muster.ch", "a@muster..ch", "a@.ch"] {
+            assert!(signin_email(bad).is_err(), "{bad}");
+        }
     }
 
     fn remote(phase: &str) -> RemoteStatus {

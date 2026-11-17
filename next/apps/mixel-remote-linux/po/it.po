@@ -382,6 +382,9 @@ msgstr "Non è stato possibile confermare la fine della sessione. Riprovi «Term
 msgid "Could not connect"
 msgstr "Impossibile collegarsi"
 
+msgid "Could not reconnect"
+msgstr "Impossibile riconnettersi"
+
 msgid "Create Mixel ID"
 msgstr "Crea Mixel ID"
 
@@ -528,6 +531,9 @@ msgstr "Fine"
 
 msgid "End session"
 msgstr "Termina la sessione"
+
+msgid "End session with %@?"
+msgstr "Terminare la sessione con %@?"
 
 msgid "End the current session first."
 msgstr "Termina prima la sessione in corso."
@@ -1072,6 +1078,9 @@ msgstr "Riconnetti ora"
 msgid "Reconnecting automatically."
 msgstr "Riconnessione automatica."
 
+msgid "Reconnecting..."
+msgstr "Riconnessione in corso..."
+
 msgid "Reconnecting… the session stays open"
 msgstr "Riconnessione… la sessione resta aperta"
 
@@ -1161,6 +1170,9 @@ msgstr "Rapporti"
 
 msgid "Restart computer"
 msgstr "Riavvia il computer"
+
+msgid "Retry"
+msgstr "Riprova"
 
 msgid "Revoke"
 msgstr "Revoca"
@@ -1455,6 +1467,9 @@ msgstr "Il computer remoto non è tornato entro 10 minuti."
 
 msgid "The remote computer is restarting. Mixel Remote reconnects when it is back…"
 msgstr "Il computer remoto si sta riavviando. Mixel Remote si ricollega appena torna disponibile…"
+
+msgid "The session ends for both computers. To keep it running, move the window back into a tab instead."
+msgstr "La sessione termina per entrambi i computer. Per mantenerla attiva, riporti invece la finestra in una scheda."
 
 msgid "The session is ready."
 msgstr "La sessione è pronta."

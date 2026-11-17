@@ -382,6 +382,9 @@ msgstr "Das Ende der Sitzung konnte nicht bestätigt werden. Wählen Sie nochmal
 msgid "Could not connect"
 msgstr "Verbindung nicht möglich"
 
+msgid "Could not reconnect"
+msgstr "Verbindung konnte nicht wiederhergestellt werden"
+
 msgid "Create Mixel ID"
 msgstr "Mixel ID erstellen"
 
@@ -528,6 +531,9 @@ msgstr "Ende"
 
 msgid "End session"
 msgstr "Sitzung beenden"
+
+msgid "End session with %@?"
+msgstr "Sitzung mit %@ beenden?"
 
 msgid "End the current session first."
 msgstr "Beenden Sie zuerst die laufende Sitzung."
@@ -1072,6 +1078,9 @@ msgstr "Jetzt neu verbinden"
 msgid "Reconnecting automatically."
 msgstr "Verbindet sich automatisch neu."
 
+msgid "Reconnecting..."
+msgstr "Verbindung wird wiederhergestellt ..."
+
 msgid "Reconnecting… the session stays open"
 msgstr "Verbindung wird wiederhergestellt… die Sitzung bleibt offen"
 
@@ -1161,6 +1170,9 @@ msgstr "Berichte"
 
 msgid "Restart computer"
 msgstr "Computer neu starten"
+
+msgid "Retry"
+msgstr "Erneut versuchen"
 
 msgid "Revoke"
 msgstr "Widerrufen"
@@ -1456,6 +1468,9 @@ msgstr "Der entfernte Computer ist innert 10 Minuten nicht zurückgekommen."
 msgid "The remote computer is restarting. Mixel Remote reconnects when it is back…"
 msgstr "Der entfernte Computer startet neu. Mixel Remote verbindet sich wieder, sobald er zurück ist…"
 
+msgid "The session ends for both computers. To keep it running, move the window back into a tab instead."
+msgstr "Die Sitzung endet für beide Computer. Um sie weiterlaufen zu lassen, legen Sie das Fenster stattdessen zurück in einen Tab."
+
 msgid "The session is ready."
 msgstr "Die Sitzung ist bereit."
 
@@ -1703,7 +1718,7 @@ msgid "You already have %d computers open. End one before connecting to another.
 msgstr "Sie haben bereits %d Computer geöffnet. Beenden Sie eine Sitzung, bevor Sie sich mit einem weiteren Computer verbinden."
 
 msgid "You are already connected to this computer."
-msgstr "Sie sind bereits mit diesem Computer verbunden."
+msgstr "Sie sind mit diesem Computer bereits verbunden."
 
 msgid "You are using this device."
 msgstr "Sie verwenden dieses Gerät."

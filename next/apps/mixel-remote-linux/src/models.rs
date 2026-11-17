@@ -112,6 +112,13 @@ pub struct RemoteStatus {
     pub reconnecting: bool,
     /// A session opened with a support password ends by itself after 2 hours (engine 2.1.0).
     pub password_session: Option<PasswordSessionView>,
+    /// The session this status describes lost its computer and is asking again (set by `viewed_as`
+    /// from `SessionItem::reconnecting`; never sent by the engine at this level).
+    #[serde(skip)]
+    pub session_reconnecting: bool,
+    /// ... and gave up after a minute: "Could not reconnect", with a Retry (set by `viewed_as`).
+    #[serde(skip)]
+    pub session_reconnect_failed: bool,
 }
 
 /// `remote_status.password_session`: when the broker's limit ends the session, once known.
@@ -164,6 +171,35 @@ pub struct SessionItem {
     pub switched: bool,
     pub quality: SessionQuality,
     pub started_at: u64,
+    /// The host computer is gone and this app asks again for a minute (phase stays `outgoing`).
+    pub reconnecting: bool,
+    /// The minute is over: "Could not reconnect"; the session stays listed until it is ended or retried.
+    pub reconnect_failed: bool,
+    /// Opened with a support password: the broker's limit ends it (this session only).
+    pub password_session: Option<PasswordSessionView>,
+    /// Opened without a person confirming at the other computer (this session only).
+    pub unattended_session: bool,
+}
+
+/// Where one session's connection to its computer stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Link {
+    Up,
+    Reconnecting,
+    Failed,
+}
+
+impl SessionItem {
+    /// A failed reconnect wins over a running one (the engine clears `reconnecting` first anyway).
+    pub fn link(&self) -> Link {
+        if self.reconnect_failed {
+            Link::Failed
+        } else if self.reconnecting {
+            Link::Reconnecting
+        } else {
+            Link::Up
+        }
+    }
 }
 
 /// How many technician sessions an engine without `max_sessions` allows.
@@ -246,6 +282,8 @@ impl RemoteStatus {
             peer_features: self.peer_features.clone(),
             joined_session: self.joined_session,
             switched: self.switched,
+            password_session: self.password_session.clone(),
+            unattended_session: self.unattended_session,
             ..SessionItem::default()
         }]
     }
@@ -296,6 +334,12 @@ impl RemoteStatus {
         view.peer_features = item.peer_features.clone();
         view.joined_session = item.joined_session;
         view.switched = item.switched;
+        // These belong to the session, not to this computer: another session's limit or reconnect
+        // must not show here.
+        view.password_session = item.password_session.clone();
+        view.unattended_session = item.unattended_session;
+        view.session_reconnecting = item.reconnecting && !item.reconnect_failed;
+        view.session_reconnect_failed = item.reconnect_failed;
         view
     }
 }

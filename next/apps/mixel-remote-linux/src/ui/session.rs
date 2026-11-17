@@ -30,6 +30,8 @@ pub struct SessionView {
     picture: gtk::Picture,
     wait: gtk::Box,
     wait_text: gtk::Label,
+    wait_spinner: gtk::Spinner,
+    wait_retry: gtk::Button,
     notes: gtk::Box,
     notes_key: RefCell<String>,
     tools: gtk::Revealer,
@@ -152,6 +154,15 @@ impl SessionView {
         let wait_text = gtk::Label::new(None);
         wait_text.add_css_class("mixel-wait");
         wait.append(&wait_text);
+        // After a minute without the computer: "Could not reconnect" and Retry (asks again, by stable id).
+        let wait_retry = primary(&t("Retry"), {
+            let (a, own) = (app.clone(), id.clone());
+            move || a.reconnect_session(&own.borrow())
+        });
+        wait_retry.set_halign(gtk::Align::Center);
+        wait_retry.set_visible(false);
+        wait.append(&wait_retry);
+        let wait_spinner = spinner.clone();
         // The technician's drawings over the picture (input still goes to the picture below).
         let ink = gtk::DrawingArea::new();
         ink.set_can_target(false);
@@ -297,6 +308,8 @@ impl SessionView {
             picture,
             wait,
             wait_text,
+            wait_spinner,
+            wait_retry,
             notes,
             notes_key: RefCell::new(String::new()),
             tools,
@@ -506,8 +519,12 @@ impl SessionView {
     fn render_own(&self, app: &Rc<App>, state: &State, ui: &super::Ui) {
         let remote = &state.remote;
         let session = &state.session;
-        self.wait.set_visible(!session.has_frame);
-        self.wait_text.set_text(&if remote.phase == "outgoing" { t("Waiting for the other person to accept your request.") } else { t("Connecting securely…") });
+        // A session whose computer is gone keeps its view: the wait card says "Reconnecting..." (or
+        // "Could not reconnect" with Retry) over the last picture.
+        self.wait.set_visible(!session.has_frame || remote.session_reconnecting || remote.session_reconnect_failed);
+        self.wait_text.set_text(&logic::session_wait_text(remote));
+        self.wait_spinner.set_visible(logic::session_wait_spins(remote));
+        self.wait_retry.set_visible(remote.session_reconnect_failed);
         // The one pointer of the session view: the remote computer's own is in the picture.
         self.picture.set_cursor_from_name(Some(logic::picture_cursor(session.pointer_mode)));
         self.render_warning(state);
@@ -688,7 +705,9 @@ impl SessionView {
             add(icon_button("window-new-symbolic", &t("Open in its own window"), move || a.pop_out(peer)));
         }
         let a = app.clone();
-        let end = destructive(&t("End"), move || a.end_session_peer(peer));
+        // By the stable id: it works while the computer is gone (the top-level session is empty then).
+        let own = self.id.clone();
+        let end = destructive(&t("End"), move || a.end_session_id(&own.borrow()));
         end.set_tooltip_text(Some(&format!("{} (Ctrl+.)", t("End session"))));
         end.update_property(&[gtk::accessible::Property::Label(&t("End session"))]);
         end.set_sensitive(!session.stopping);
