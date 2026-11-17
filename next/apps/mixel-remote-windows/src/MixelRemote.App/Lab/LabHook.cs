@@ -68,6 +68,15 @@ internal static class LabHook
             case "display": session.SelectDisplay(ushort.Parse(parts[1])); return "display " + parts[1];
             case "move": session.MoveTo(double.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture), double.Parse(parts[2], System.Globalization.CultureInfo.InvariantCulture)); return "moved";
             case "wheel": session.Send(new MixelRemote.Models.InputEvent.Wheel(0, short.Parse(parts[1]))); return "wheel";
+            case "update":
+            {
+                var settings = app.Settings;
+                var u = settings.Update;
+                return $"update={u?.Version ?? "none"} installable={u?.Installable} silent={u?.Silent} waits={u?.WaitsForSession} idleLeft={u?.IdleSecondsLeft} failed={settings.InstallFailed} installing={settings.Installing} auto={settings.AutoUpdate} signedIn={app.Account.Phase} remembered={app.Account.Account?.Remembered} phase={app.Remote.Phase}";
+            }
+            case "stay": await app.Settings.SetStaySignedIn(parts[1] == "on"); await app.RefreshAccount(); return "stay " + parts[1] + " remembered=" + app.Account.Account?.Remembered;
+            case "checkupdate": await app.Settings.CheckForUpdateQuietly(); return "checked";
+            case "updatenow": await app.Settings.InstallUpdate(); return "install requested error=" + app.Settings.Error;
             case "status":
                 await session.ReadTools();
                 var r = app.Remote;

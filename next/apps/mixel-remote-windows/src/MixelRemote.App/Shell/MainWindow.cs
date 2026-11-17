@@ -184,6 +184,7 @@ internal sealed partial class MainWindow : Window
     private void OnSettings(object? sender, PropertyChangedEventArgs change)
     {
         if (change.PropertyName == nameof(SettingsModel.Appearance)) ApplyAppearance();
+        if (change.PropertyName is nameof(SettingsModel.UpdatePrompt) or nameof(SettingsModel.Installing)) Refresh();
     }
 
     private void OnChanged(object? sender, PropertyChangedEventArgs change)

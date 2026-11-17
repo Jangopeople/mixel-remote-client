@@ -546,6 +546,9 @@ public sealed record UpdateInfo
     public bool Installable { get; init; }
     /// <summary>Nothing would be interrupted and the sign-in survives the restart.</summary>
     public bool Silent { get; init; }
+    /// <summary>The restart keeps the person signed in ("stay signed in" is on, or nobody is signed in). When it is
+    /// false the update is not installed by itself: the app shows a clear "Update available" prompt.</summary>
+    public bool KeepsSignIn { get; init; } = true;
     public bool NeedsPassword { get; init; }
     /// <summary>A session is running (or ended a moment ago): the update is ready and installs after it.</summary>
     public bool WaitsForSession { get; init; }

@@ -963,6 +963,16 @@ async fn sign_in_options(email: &str) -> Result<Value, String> {
     }))
 }
 
+/// Whether restarting for an update keeps the person signed in: nobody is signed in, or "stay signed in" is on. A
+/// sign-in that is under way (browser step, verification) is NOT kept: an update restart would end it.
+fn update_keeps_sign_in(phase: &str, remembered: bool) -> bool {
+    match phase {
+        "authenticated" => remembered,
+        "starting" | "waiting_browser" | "verifying" => false,
+        _ => true,
+    }
+}
+
 /// The newest signed version on this app's update channel (the one the desktop app 0.1.x used:
 /// `remote-updates/<channel>/macos-arm64`), and whether it can be installed in the app. The phone
 /// app updates through TestFlight or the App Store: no answer here.
@@ -982,12 +992,12 @@ async fn update_check(context: &Context) -> Result<String, String> {
         let verdict = crate::update_gate::verdict(&phase, false);
         let idle = verdict.installs() && !matches!(phase.as_str(), "connecting");
         let account = context.auth.status().await;
-        let keeps_sign_in =
-            account.phase != "authenticated" || account.account.as_ref().is_some_and(|account| account.remembered);
+        let keeps_sign_in = update_keeps_sign_in(&account.phase, account.account.as_ref().is_some_and(|account| account.remembered));
         return out(json!({
             "version": manifest.version,
             "installable": true,
             "silent": idle && keeps_sign_in && !crate::self_update::NEEDS_PASSWORD,
+            "keeps_sign_in": keeps_sign_in,
             "needs_password": crate::self_update::NEEDS_PASSWORD,
             "waits_for_session": verdict.waits(),
             "idle_seconds_left": verdict.seconds_left(),
@@ -1479,6 +1489,15 @@ async fn platform(_context: &Context, command: &str, _args: &Args) -> Result<Str
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_update_restart_never_ends_a_sign_in_that_is_not_kept() {
+        assert!(super::update_keeps_sign_in("authenticated", true));
+        assert!(!super::update_keeps_sign_in("authenticated", false));
+        assert!(super::update_keeps_sign_in("signed_out", false));
+        assert!(!super::update_keeps_sign_in("waiting_browser", false));
+        assert!(!super::update_keeps_sign_in("verifying", true));
+    }
+
     use super::*;
 
     fn context() -> Context {

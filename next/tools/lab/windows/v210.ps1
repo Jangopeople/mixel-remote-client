@@ -10,7 +10,7 @@ function ETest {
   $env:MIXEL_DESKTOP_SERVICE_CONFIG = "$src\deployment\public-service-config.json"; $env:MIXEL_ENGINE_APP_VERSION = $Version
   $env:CARGO_TARGET_DIR = "$root\target-test"; Set-Location $src
   foreach ($f in @('', '--features qa-session')) {
-    cmd /c "cargo test --locked -p mixel_engine --lib $f self_update > `"$root\logs\etest.log`" 2>&1"; "ETEST [$f] exit $LASTEXITCODE"
+    cmd /c "cargo test --locked -p mixel_engine --lib $f -- self_update update_restart > `"$root\logs\etest.log`" 2>&1"; "ETEST [$f] exit $LASTEXITCODE"
     Get-Content "$root\logs\etest.log" | Select-String 'test result|FAILED|error' | Select-Object -First 4
   }
 }

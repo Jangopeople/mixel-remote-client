@@ -270,16 +270,21 @@ fn install(installer: &Path, _version: &str) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|_| "Cannot locate Mixel Remote")?;
     let pid = std::process::id().to_string();
     // Hidden helper: run from TEMP so the install folder is not held open, wait until this app
-    // has closed, install silently, and start the new version.
+    // has closed, install silently, and start the new version (or, when the installer failed, the old one again: the
+    // app then waits before the next try, so a failing installer never leaves the computer without the app).
     let script = "Set-Location $env:TEMP; \
         for($i=0; $i -lt 40; $i++){ if(-not (Get-Process -Id $env:MIXEL_UPDATE_PID -ErrorAction SilentlyContinue)){ break }; Start-Sleep -Milliseconds 250 }; \
         Stop-Process -Id $env:MIXEL_UPDATE_PID -Force -ErrorAction SilentlyContinue; \
         Stop-Process -Name mixel-remote-helper -Force -ErrorAction SilentlyContinue; \
         Start-Sleep 1; \
-        Add-Content -LiteralPath $env:MIXEL_UPDATE_LOG \"installer started\"; \
+        $t=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); \
+        Add-Content -LiteralPath $env:MIXEL_UPDATE_LOG \"installer started $t\"; \
         $p=Start-Process -FilePath $env:MIXEL_UPDATE_FILE -ArgumentList '/S' -Wait -PassThru; \
-        Add-Content -LiteralPath $env:MIXEL_UPDATE_LOG \"installer exit $($p.ExitCode)\"; \
-        if($p.ExitCode -eq 0){ Start-Process -FilePath $env:MIXEL_UPDATE_APP }";
+        $t=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); \
+        Add-Content -LiteralPath $env:MIXEL_UPDATE_LOG \"installer exit $($p.ExitCode) $t\"; \
+        Start-Process -FilePath $env:MIXEL_UPDATE_APP; \
+        $t=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); \
+        Add-Content -LiteralPath $env:MIXEL_UPDATE_LOG \"app started $t\"";
     let spawn = |flags: u32| {
         std::process::Command::new("powershell")
             .current_dir(std::env::temp_dir())

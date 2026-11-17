@@ -13,6 +13,10 @@ public sealed class SettingsModel : Observable
     public const string StorePage = "https://store.mixel.ch/app/mixel-remote";
     private const string LanguageKey = "mixel.remote.language.v1";
     private const string AutoUpdateKey = "mixel.remote.autoupdate.v1";
+    private const string UpdateAttemptKey = "mixel.remote.updateattempt.v1";
+    private int updateFailures;
+    private DateTimeOffset? lastUpdateFailure;
+    private string dismissedPrompt = "";
     private bool installing;
     private bool installFailed;
     private readonly AppModel app;
@@ -32,6 +36,24 @@ public sealed class SettingsModel : Observable
         this.app = app;
         language = app.Preferences.Get(LanguageKey) ?? "auto";
         Translator.Shared.Choice = language;
+        (updateFailures, lastUpdateFailure) = UpdatePolicy.Restore(app.Preferences.Get(UpdateAttemptKey), app.Info.Version);
+        if (updateFailures == 0 && app.Preferences.Get(UpdateAttemptKey) is not null) app.Preferences.Set(UpdateAttemptKey, null);
+    }
+
+    /// <summary>Failed installs in a row (kept across restarts, so a failing installer is not retried in a loop).</summary>
+    public int UpdateFailures => updateFailures;
+
+    /// <summary>
+    /// A newer version that is not installed by itself because it would sign the person out (or automatic updates
+    /// are off): the "Update available" prompt of the main window. Dismissed per version until the next start.
+    /// </summary>
+    public UpdateInfo? UpdatePrompt =>
+        UpdatePolicy.Decide(Update, AutoUpdate, Installing, 0, null, DateTimeOffset.UtcNow) == UpdateAction.Prompt && Update!.Version != dismissedPrompt ? Update : null;
+
+    public void DismissUpdatePrompt()
+    {
+        dismissedPrompt = Update?.Version ?? "";
+        Raise(nameof(UpdatePrompt));
     }
 
     public StartupSettings? Startup { get => startup; private set => Set(ref startup, value); }
@@ -157,7 +179,9 @@ public sealed class SettingsModel : Observable
         lastQuietCheck = DateTimeOffset.UtcNow;
         try { await ReadUpdate(); }
         catch (EngineFailure) { return; }
-        if (Update is { Installable: true, Silent: true } && AutoUpdate && !InstallFailed) await InstallUpdate();
+        Raise(nameof(UpdatePrompt));
+        var action = UpdatePolicy.Decide(Update, AutoUpdate, Installing, updateFailures, lastUpdateFailure, DateTimeOffset.UtcNow);
+        if (action == UpdateAction.Install) await InstallUpdate();
     }
 
     /// <summary>Downloads, checks and installs the new version; the app restarts by itself.</summary>
@@ -166,6 +190,11 @@ public sealed class SettingsModel : Observable
         if (Update is not { Installable: true } || Installing) return;
         Installing = true;
         Error = "";
+        // Written BEFORE the install: if the installer fails after the app has quit, the next start still knows the
+        // attempt did not finish and waits (back-off) instead of trying again at once.
+        updateFailures++;
+        lastUpdateFailure = DateTimeOffset.UtcNow;
+        app.Preferences.Set(UpdateAttemptKey, UpdatePolicy.Encode(Update.Version, updateFailures, lastUpdateFailure.Value));
         try
         {
             await app.Engine.PerformAsync("update_install");

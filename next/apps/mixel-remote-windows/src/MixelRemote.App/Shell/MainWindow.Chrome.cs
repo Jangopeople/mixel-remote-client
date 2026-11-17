@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using MixelRemote.ViewModels;
+using MixelRemote.Models;
 
 namespace MixelRemote.App.Shell;
 
@@ -275,6 +276,34 @@ internal sealed partial class MainWindow
             if (workspace.Tab(peer) is { } tab) notices.Children.Add(ReadyNotice(tab));
         }
         if (workspace.Attempt is { } attempt) notices.Children.Add(AttemptPanel(attempt));
+        if (app.Settings.UpdatePrompt is { } update) notices.Children.Add(UpdateNotice(update));
+    }
+
+    /// <summary>A newer version that would sign the person out is not installed in secret: say so, one click installs it.</summary>
+    private UIElement UpdateNotice(UpdateInfo update)
+    {
+        var settings = app.Settings;
+        var text = Ui.Column(2,
+            Ui.Text(L("Update available"), bold: true, wrap: false),
+            Ui.Caption(L("Version %@ is ready. Installing restarts the app and signs you out.", update.Version)));
+        var now = Ui.Primary(L("Update now"), () => _ = settings.InstallUpdate());
+        var later = Ui.IconButton("", L("Dismiss"), settings.DismissUpdatePrompt);
+        later.Style = null;
+        later.Background = new SolidColorBrush(Colors.Transparent);
+        later.BorderThickness = new Thickness(0);
+        var grid = new Grid { ColumnSpacing = 10 };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.Children.Add(text);
+        Grid.SetColumn(now, 1);
+        grid.Children.Add(now);
+        Grid.SetColumn(later, 2);
+        grid.Children.Add(later);
+        var card = Floating(grid, 12);
+        AutomationProperties.SetName(card, L("Update available"));
+        AutomationProperties.SetLiveSetting(card, Microsoft.UI.Xaml.Automation.Peers.AutomationLiveSetting.Polite);
+        return card;
     }
 
     private static Border Floating(UIElement child, double radius) => new()

@@ -857,7 +857,13 @@ async fn update_self() {
         return;
     }
     // The signed program file itself (not the installer) is published as windows/x64-program.
-    let Ok(manifest) = crate::self_update::latest_for("windows", "x64-program").await else { return };
+    let manifest = match crate::self_update::latest_for("windows", "x64-program").await {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            note_update_problem(&error);
+            return;
+        }
+    };
     let newer = matches!(
         (crate::version_parts(crate::agent::APP_VERSION), crate::version_parts(&manifest.version)),
         (Some(current), Some(next)) if next > current
@@ -897,6 +903,18 @@ async fn update_self() {
         .spawn();
     if spawned.is_err() {
         log("update helper could not start");
+    }
+}
+
+/// A failing look for a newer version is written down once per kind of problem (every 15 minutes a new line
+/// would fill the log), so "why does this PC not update" can be answered from signin-host.log.
+fn note_update_problem(error: &str) {
+    static LAST: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+    if let Ok(mut last) = LAST.lock() {
+        if *last != error {
+            *last = error.to_owned();
+            log(&format!("update check: {error} (tries again in 15 minutes)"));
+        }
     }
 }
 
