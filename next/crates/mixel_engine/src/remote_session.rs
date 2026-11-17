@@ -2798,26 +2798,20 @@ impl Drop for AttemptGuard {
         }
     }
 }
-/// The connection service gives a computer relay credentials once every 5 seconds; asks are spaced a little wider.
-const ICE_SPACING: Duration = Duration::from_millis(5500);
-/// Sessions waiting to ask the connection service for relay credentials, one ask per `ICE_SPACING`.
+/// Sessions waiting to ask the connection service for relay credentials. The service limits asks per session,
+/// so sessions that start together ask back to back (at the next tick, at most a quarter of a second later).
 #[derive(Default)]
 struct IceQueue {
     waiting: std::collections::VecDeque<Uuid>,
-    next: Option<std::time::Instant>,
 }
 impl IceQueue {
     fn ask(&mut self, session: Uuid) {
         self.waiting.push_back(session);
     }
-    /// The session to ask for now, if the spacing since the last ask is over; sessions that are gone are skipped.
-    fn due(&mut self, now: std::time::Instant, alive: impl Fn(Uuid) -> bool) -> Option<Uuid> {
-        if self.next.is_some_and(|next| now < next) {
-            return None;
-        }
+    /// The next session to ask for; sessions that are gone are skipped.
+    fn due(&mut self, alive: impl Fn(Uuid) -> bool) -> Option<Uuid> {
         while let Some(session) = self.waiting.pop_front() {
             if alive(session) {
-                self.next = Some(now + ICE_SPACING);
                 return Some(session);
             }
         }
@@ -3140,8 +3134,7 @@ async fn run(
         let mut switch_memory:Option<SwitchMemory>=None;
     // Presence questions still waiting for their answer, oldest first: an answer speaks only for the IDs asked.
     let mut presence_asked: std::collections::VecDeque<Vec<u32>> = std::collections::VecDeque::new();
-        // The connection service hands out relay credentials once per 5 seconds per computer: sessions that start
-        // together ask one after the other (the second picture starts a few seconds later instead of failing).
+        // The connection service limits relay-credential asks per session, so sessions that start together ask back to back.
         let mut ice_queue=IceQueue::default();
         let mut tick=tokio::time::interval(Duration::from_millis(250));
         let mut last_activity=std::time::Instant::now();
@@ -3151,7 +3144,7 @@ async fn run(
                 _=tick.tick()=>{
                     if cancel.load(Ordering::Acquire){return Err(Failure::network("Registration authorization expired; reconnecting"));}
                     // A session that ended while it waited needs no relay credentials.
-                    if let Some(next)=ice_queue.due(std::time::Instant::now(),|id|peer.iter().chain(ctrl.iter()).chain(joined.iter()).any(|active|active.id==id && !active.cancel.load(Ordering::Acquire))){
+                    while let Some(next)=ice_queue.due(|id|peer.iter().chain(ctrl.iter()).chain(joined.iter()).any(|active|active.id==id && !active.cancel.load(Ordering::Acquire))){
                         send(&mut socket,ClientMessage::Ice{session:next}).await?;
                     }
                     let now=SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_|"System clock is unavailable")?.as_secs();
@@ -5252,18 +5245,14 @@ mod ice_spacing_tests {
     use super::*;
 
     #[test]
-    fn relay_credentials_are_asked_for_one_session_at_a_time_at_least_five_seconds_apart() {
+    fn relay_credentials_are_asked_for_every_waiting_session_back_to_back() {
         let (a, b, c) = (Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3));
-        let start = std::time::Instant::now();
         let mut queue = IceQueue::default();
         queue.ask(a);
         queue.ask(b);
         queue.ask(c);
-        assert_eq!(queue.due(start, |_| true), Some(a), "the first asks at once");
-        assert_eq!(queue.due(start + Duration::from_secs(1), |_| true), None);
-        assert_eq!(queue.due(start + Duration::from_millis(5100), |_| true), None, "the broker's 5 s window plus a margin");
-        assert_eq!(queue.due(start + Duration::from_millis(5500), |gone| gone != b), Some(c), "a session that ended while it waited is skipped");
-        assert_eq!(queue.due(start + Duration::from_secs(60), |_| true), None, "nothing left");
-        assert!(ICE_SPACING > Duration::from_secs(5));
+        assert_eq!(queue.due(|_| true), Some(a));
+        assert_eq!(queue.due(|gone| gone != b), Some(c), "a session that ended while it waited is skipped");
+        assert_eq!(queue.due(|_| true), None, "nothing left");
     }
 }
