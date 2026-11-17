@@ -423,6 +423,8 @@ async fn session(check: &mut Check<'_>, suffix: &str, tenant: &str, mine: u64) {
         // The transport is renewed while the session runs (a new session id, the picture back within
         // seconds): counted, not a failure, as long as the session is active again.
         let (mut current, mut renewals) = (active["session"].clone(), 0u32);
+        // Renewed make-before-break, the session keeps its ID: the engine counts those renewals.
+        let renewed_before = crate::remote_session::QA_RENEWALS.load(std::sync::atomic::Ordering::Relaxed);
         while started.elapsed() < Duration::from_secs(minutes * 60) {
             while check.picture(id).await {
                 pictures += 1;
@@ -457,6 +459,7 @@ async fn session(check: &mut Check<'_>, suffix: &str, tenant: &str, mine: u64) {
             }
             tokio::time::sleep(Duration::from_secs(20)).await;
         }
+        renewals = renewals.max(crate::remote_session::QA_RENEWALS.load(std::sync::atomic::Ordering::Relaxed) - renewed_before);
         if !late.is_empty() {
             check.print(&format!("late or not confirmed while held: {}", late.join("; ")));
         }

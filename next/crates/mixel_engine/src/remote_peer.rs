@@ -27,10 +27,63 @@ use std::{
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
+/// One transport of a session. A session's transport is renewed make-before-break: the running
+/// transport keeps sharing until the renewed one takes over (`Config::previous`), so the person
+/// at either side sees no gap. Both are confined to the same accepted session and grants.
+#[derive(Clone, Default)]
+pub struct TransportLink {
+    /// Stop this transport: the renewed one took over. The session goes on.
+    pub retire: Arc<AtomicBool>,
+    /// A renewed transport exists: the end of this one does not end the session.
+    pub superseded: Arc<AtomicBool>,
+    /// Host: this transport's screen capture is closed (or was never opened).
+    pub released: Arc<AtomicBool>,
+}
+impl TransportLink {
+    pub fn retire(&self) {
+        self.superseded.store(true, Ordering::Release);
+        self.retire.store(true, Ordering::Release);
+    }
+    fn retired(&self) -> bool {
+        self.retire.load(Ordering::Acquire)
+    }
+    /// Host: the transport before stops sharing and closes its capture (a display is captured
+    /// once per process); waits for that at most `limit`. `false`: it did not stop in time.
+    async fn take_over(&self, limit: Duration) -> bool {
+        self.retire();
+        let deadline = Instant::now() + limit;
+        while !self.released.load(Ordering::Acquire) {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        true
+    }
+}
+/// Sets a transport's capture as closed when its host media task ends, on every path.
+struct Released(Arc<AtomicBool>);
+impl Drop for Released {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+/// Host: how long a renewed transport waits for the one before to close its capture.
+const CAPTURE_HANDOVER: Duration = Duration::from_secs(3);
+/// Technician: the transport before stops at the latest this long after the renewed one's
+/// picture stream opened, even if no picture came yet.
+const PICTURE_HANDOVER: Duration = Duration::from_secs(10);
+
 pub struct Config {
     pub state: RemoteSession,
     pub generation: u64,
+    /// The session as the person sees it; it stays the same when its transport is renewed.
     pub session: Uuid,
+    /// The connection service's ID of this transport (signalling, end of the transport).
+    pub transport: Uuid,
+    pub link: TransportLink,
+    /// The running transport this one renews: it keeps sharing until this one takes over.
+    pub previous: Option<TransportLink>,
     pub nonce: [u8; 32],
     pub host: bool,
     pub login_window: bool,
@@ -85,6 +138,10 @@ fn authorization_live(
 }
 impl Config {
     pub fn stopped(&self) -> bool {
+        // Replaced by the renewed transport: this one stops, the session goes on.
+        if self.link.retired() {
+            return true;
+        }
         #[cfg(target_os = "linux")]
         if self.portal.as_ref().is_some_and(|grant| !grant.live()) {
             self.session_cancel.store(true, Ordering::Release);
@@ -109,12 +166,13 @@ impl Config {
         let peer = self.peer_expires.clone();
         let broker = self.authorization.clone();
         let consent = self.consent_cancel.clone();
+        let retire = self.link.retire.clone();
         Arc::new(move || {
             if consent.load(Ordering::Acquire) {
                 session.store(true, Ordering::Release);
                 return false;
             }
-            authorization_live(&account, &session, &peer, &broker)
+            !retire.load(Ordering::Acquire) && authorization_live(&account, &session, &peer, &broker)
         })
     }
     pub fn file_authorization(&self) -> Arc<dyn Fn() -> bool + Send + Sync> {
@@ -123,12 +181,13 @@ impl Config {
         let peer = self.peer_expires.clone();
         let broker = self.authorization.clone();
         let started = self.consent_started;
+        let retire = self.link.retire.clone();
         Arc::new(move || {
             if started.elapsed() >= core_protocol::files::LIFETIME {
                 consent.store(true, Ordering::Release);
                 return false;
             }
-            authorization_live(&account, &consent, &peer, &broker)
+            !retire.load(Ordering::Acquire) && authorization_live(&account, &consent, &peer, &broker)
         })
     }
     async fn signal(&self, signal: Signal) -> Result<(), String> {
@@ -138,7 +197,7 @@ impl Config {
         tokio::time::timeout(
             Duration::from_secs(3),
             self.commands.send(Command::Signal {
-                session: self.session,
+                session: self.transport,
                 signal,
             }),
         )
@@ -172,13 +231,17 @@ pub fn start(mut config: Config) -> Result<(), String> {
         #[cfg(feature = "qa-session")]
         eprintln!(
             "QA session end {} host={} at {:?}: {result:?}",
-            config.session,
+            config.transport,
             config.host,
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
         );
-        config.session_cancel.store(true, Ordering::Release);
+        // A transport that was replaced ends alone; any other end ends the session.
+        if !config.link.superseded.load(Ordering::Acquire) {
+            config.session_cancel.store(true, Ordering::Release);
+        }
+        config.link.released.store(true, Ordering::Release);
         let mut command = Command::Finished {
-            session: config.session,
+            session: config.transport,
             result,
         };
         let deadline = Instant::now() + Duration::from_secs(3);
@@ -259,7 +322,9 @@ async fn run(config: &mut Config) -> Result<(), String> {
         } else {
             viewer_media(config, &mut consent, &channel, &mut transport, &mut control).await
         };
-        config.session_cancel.store(true, Ordering::Release);
+        if !config.link.superseded.load(Ordering::Acquire) {
+            config.session_cancel.store(true, Ordering::Release);
+        }
         if let Some(chat) = chat {
             chat.close().await;
         }
@@ -1024,6 +1089,7 @@ async fn host_media(
     control: &mut ControlPipe,
     transport: &mut NativeTransport,
 ) -> Result<(), String> {
+    let _released = Released(config.link.released.clone());
     if config.stopped() {
         return Ok(());
     }
@@ -1038,6 +1104,19 @@ async fn host_media(
         tokio::time::sleep(Duration::from_millis(delay.min(10_000))).await;
     }
     control.poll(config, channel).await?;
+    // A renewed transport: colleagues who joined keep their view, and the transport before (still
+    // sharing until now) stops and closes its capture, then this one opens it. The technician sees
+    // the last picture of the one before until the first one of this one.
+    let mut continuing = config.previous.is_some().then(crate::session_mirror::publish_continuing);
+    if let Some(previous) = config.previous.take() {
+        #[cfg(feature = "qa-session")]
+        let waited = Instant::now();
+        let stopped = previous.take_over(CAPTURE_HANDOVER).await;
+        #[cfg(feature = "qa-session")]
+        eprintln!("QA renewal: the transport before stopped sharing after {} ms (in time: {stopped}) at clock {}", waited.elapsed().as_millis(), crate::remote_control::qa_wall_clock());
+        #[cfg(not(feature = "qa-session"))]
+        let _ = stopped;
+    }
     let mut capture = session_platform::capture(
         &config.source,
         size,
@@ -1074,7 +1153,7 @@ async fn host_media(
         #[cfg(feature = "qa-session")]
         let mut qa_keys = (0u32, 0usize);
         // Colleagues who join this session see these same pictures.
-        let mirror = crate::session_mirror::publish();
+        let mirror = continuing.take().unwrap_or_else(crate::session_mirror::publish);
         // Remote sound: what this computer plays, while the technician wants to hear it.
         let mut sound: Option<crate::remote_sound::Capture> = None;
         let mut sound_failed = false;
@@ -1433,6 +1512,29 @@ async fn mirror_media(
     let released = control.release();
     result.and(released)
 }
+/// Technician: a renewed transport put its first picture on the screen (or waited long enough):
+/// the transport before stops now, and the recording, if allowed, goes on from this one.
+fn hand_over(
+    config: &mut Config,
+    control: &ControlPipe,
+    recording: &mut Option<crate::remote_recording::RecordingScope>,
+) -> Result<(), String> {
+    let Some(previous) = config.previous.take() else {
+        return Ok(());
+    };
+    previous.retire();
+    #[cfg(feature = "qa-session")]
+    eprintln!("QA renewal: the renewed transport took over the picture at clock {}", crate::remote_control::qa_wall_clock());
+    if control.recording_allowed && recording.is_none() {
+        *recording = Some(
+            config
+                .state
+                .recording_hub()
+                .attach(config.session, config.input_authorization())?,
+        );
+    }
+    Ok(())
+}
 async fn viewer_media(
     config: &mut Config,
     consent: &mut Session,
@@ -1440,8 +1542,8 @@ async fn viewer_media(
     transport: &mut NativeTransport,
     control: &mut ControlPipe,
 ) -> Result<(), String> {
-    let recording = control
-        .recording_allowed
+    // A renewed transport records from the moment it takes over (the one before records until then).
+    let mut recording = (control.recording_allowed && config.previous.is_none())
         .then(|| {
             config
                 .state
@@ -1501,9 +1603,13 @@ async fn viewer_media(
     );
     let mut player: Option<crate::remote_sound::Player> = None;
     let mut player_failed = false;
+    let stream_opened = Instant::now();
     while !config.stopped() {
         if !consent.can_view() {
             return Err("Remote-viewing authorization expired".into());
+        }
+        if config.previous.is_some() && stream_opened.elapsed() >= PICTURE_HANDOVER {
+            hand_over(config, control, &mut recording)?;
         }
         // Lab builds only: a part of this loop that took long (input and its confirmations wait meanwhile).
         #[cfg(feature = "qa-session")]
@@ -1689,11 +1795,12 @@ async fn viewer_media(
                                 if received == 1 {
                                     eprintln!("QA first picture after {} ms: {} packets, {qa_gaps} gaps ({qa_lost} numbers missing), {} requests for a complete picture", qa_started.elapsed().as_millis(), qa_rtp.0, qa_rtp.3);
                                 }
-                                let packet = crate::remote_video::compressed_packet(config.session, received, timestamp, &frame, key)?;
+                                let packet = crate::remote_video::compressed_packet(config.session, received, timestamp, &frame, key)?.from_transport(config.transport);
                                 if !config.video.publish_compressed(packet)? {
                                     waiting_for_key = true;
                                     control.request_keyframe(channel).await?;
                                 }
+                                hand_over(config, control, &mut recording)?;
                                 #[cfg(feature = "qa-session")]
                                 if let Some(path) = std::env::var_os("MIXEL_QA_VIDEO_LOG") {
                                     qa_video.0 += 1;
@@ -1775,7 +1882,8 @@ async fn viewer_media(
                             received,
                             timestamp,
                             &decoded,
-                        )?)?;
+                        )?.from_transport(config.transport))?;
+                        hand_over(config, control, &mut recording)?;
                         // Lab builds only: decode and hand-over time, and how many pictures the window fetched.
                         #[cfg(feature = "qa-session")]
                         if let Some(path) = std::env::var_os("MIXEL_QA_VIDEO_LOG") {
@@ -1855,5 +1963,109 @@ mod display_fit_tests {
         assert_eq!(&out[0..4], &[255, 0, 0, 255]);
         assert_eq!(&out[3 * 32 + 7 * 4..3 * 32 + 8 * 4], &[0, 0, 255, 255]);
         assert!(fit_frame(&source, (0, 4)).is_err());
+    }
+}
+
+#[cfg(all(test, any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+mod renewal_tests {
+    use super::*;
+
+    fn config(link: TransportLink, session_cancel: Arc<AtomicBool>, commands: mpsc::Sender<Command>) -> Config {
+        let (_, signals) = mpsc::channel(1);
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        Config {
+            state: RemoteSession::default(),
+            generation: 0,
+            session: Uuid::from_u128(1),
+            transport: Uuid::from_u128(2),
+            link,
+            previous: None,
+            nonce: [1; 32],
+            host: false,
+            login_window: false,
+            remote_key: ed25519_dalek::SigningKey::from_bytes(&[7; 32]).verifying_key(),
+            identity: Arc::new(IdentityState::test_identity(ed25519_dalek::SigningKey::from_bytes(&[8; 32]))),
+            source: String::new(),
+            #[cfg(target_os = "linux")]
+            portal: None,
+            confirm: false,
+            control: false,
+            clipboard: false,
+            files: false,
+            chat: false,
+            recording: false,
+            consent_id: Uuid::from_u128(3),
+            consent_cancel: Arc::new(AtomicBool::new(false)),
+            consent_started: Instant::now(),
+            session_cancel,
+            account_cancel: Arc::new(AtomicBool::new(false)),
+            signals,
+            commands,
+            video: Arc::new(VideoMailbox::default()),
+            relay_only: true,
+            ice_servers: Vec::new(),
+            authorization: Arc::new(std::sync::Mutex::new((now + 600, Instant::now() + Duration::from_secs(60)))),
+            peer_expires: Arc::new(AtomicU64::new(now + 600)),
+            mirror: false,
+        }
+    }
+
+    #[test]
+    fn a_replaced_transport_stops_alone_and_its_grants_end_with_it() {
+        let session = Arc::new(AtomicBool::new(false));
+        let (commands, _receiver) = mpsc::channel(4);
+        let before = config(TransportLink::default(), session.clone(), commands.clone());
+        let renewed = config(TransportLink::default(), session.clone(), commands);
+        let (input, files) = (before.input_authorization(), before.file_authorization());
+        assert!(!before.stopped() && input() && files());
+        before.link.retire();
+        assert!(before.stopped(), "the replaced transport stops");
+        assert!(!input() && !files(), "its input, file and recording grants end with it");
+        assert!(!session.load(Ordering::Acquire), "the session goes on");
+        assert!(!renewed.stopped() && renewed.input_authorization()());
+        // Ending the session still stops every transport of it.
+        session.store(true, Ordering::Release);
+        assert!(renewed.stopped());
+    }
+
+    #[tokio::test]
+    async fn the_end_of_a_replaced_transport_does_not_end_the_session() {
+        let (commands, mut finished) = mpsc::channel(4);
+        let session = Arc::new(AtomicBool::new(false));
+        let replaced = TransportLink::default();
+        replaced.retire();
+        start(config(replaced.clone(), session.clone(), commands.clone())).unwrap();
+        let Some(Command::Finished { session: transport, result }) = tokio::time::timeout(Duration::from_secs(5), finished.recv()).await.unwrap() else {
+            panic!("the transport reports its end")
+        };
+        assert_eq!(transport, Uuid::from_u128(2), "it reports with the service's transport ID");
+        assert!(result.is_ok());
+        assert!(!session.load(Ordering::Acquire), "the session goes on");
+        assert!(replaced.released.load(Ordering::Acquire));
+        // Any other end of a transport ends the session, as before.
+        let ending = config(TransportLink::default(), session.clone(), commands);
+        ending.consent_cancel.store(true, Ordering::Release);
+        start(ending).unwrap();
+        assert!(matches!(tokio::time::timeout(Duration::from_secs(5), finished.recv()).await.unwrap(), Some(Command::Finished { .. })));
+        assert!(session.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn the_renewed_host_transport_waits_for_the_capture_of_the_one_before() {
+        let before = TransportLink::default();
+        let released = before.released.clone();
+        let closing = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            released.store(true, Ordering::Release);
+        });
+        let started = Instant::now();
+        assert!(before.take_over(Duration::from_secs(2)).await);
+        assert!(started.elapsed() >= Duration::from_millis(25));
+        assert!(before.retire.load(Ordering::Acquire) && before.superseded.load(Ordering::Acquire));
+        closing.await.unwrap();
+        // One that does not stop in time is not waited for longer than the limit.
+        let stuck = TransportLink::default();
+        assert!(!stuck.take_over(Duration::from_millis(40)).await);
+        assert!(stuck.retire.load(Ordering::Acquire));
     }
 }

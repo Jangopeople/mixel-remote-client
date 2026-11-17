@@ -4,7 +4,7 @@
 //! Nothing is captured twice, and a joined colleague never changes what is captured.
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -20,6 +20,8 @@ struct Hub {
     pictures: broadcast::Sender<Arc<Picture>>,
     keyframe: AtomicBool,
     closed: AtomicBool,
+    /// Media tasks publishing: two while a renewed transport takes over from the one before.
+    owners: AtomicUsize,
 }
 
 static CURRENT: Mutex<Option<Arc<Hub>>> = Mutex::new(None);
@@ -30,13 +32,27 @@ pub struct Publisher(Arc<Hub>);
 /// Starts mirroring the pictures of the session that is shared now.
 pub fn publish() -> Publisher {
     let (pictures, _) = broadcast::channel(8);
-    let hub = Arc::new(Hub { pictures, keyframe: AtomicBool::new(false), closed: AtomicBool::new(false) });
+    let hub = Arc::new(Hub { pictures, keyframe: AtomicBool::new(false), closed: AtomicBool::new(false), owners: AtomicUsize::new(1) });
     if let Ok(mut current) = CURRENT.lock()
         && let Some(previous) = current.replace(hub.clone())
     {
         previous.closed.store(true, Ordering::Release);
     }
     Publisher(hub)
+}
+
+/// The same session's renewed transport goes on publishing to the colleagues who joined (they
+/// keep their view); a fresh mirror when nothing is shared now.
+pub fn publish_continuing() -> Publisher {
+    let current = CURRENT.lock().ok().and_then(|current| current.clone()).filter(|hub| !hub.closed.load(Ordering::Acquire));
+    match current {
+        Some(hub) => {
+            hub.owners.fetch_add(1, Ordering::AcqRel);
+            hub.keyframe.store(true, Ordering::Release);
+            Publisher(hub)
+        }
+        None => publish(),
+    }
 }
 
 impl Publisher {
@@ -56,6 +72,9 @@ impl Publisher {
 
 impl Drop for Publisher {
     fn drop(&mut self) {
+        if self.0.owners.fetch_sub(1, Ordering::AcqRel) > 1 {
+            return;
+        }
         self.0.closed.store(true, Ordering::Release);
         if let Ok(mut current) = CURRENT.lock()
             && current.as_ref().is_some_and(|hub| Arc::ptr_eq(hub, &self.0))
@@ -162,8 +181,35 @@ mod tests {
         assert!(!is_keyframe(&[0, 0, 1]));
     }
 
+    /// The mirror is one per process: its tests run one at a time.
+    static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    #[tokio::test]
+    async fn a_renewed_transport_keeps_the_colleagues_view() {
+        let _serial = SERIAL.lock().await;
+        let before = publish();
+        let mut viewer = watch().expect("a shared session can be watched");
+        assert!(before.take_keyframe_request());
+        let renewed = publish_continuing();
+        // The renewed transport starts with a complete picture for the colleagues.
+        assert!(renewed.take_keyframe_request());
+        drop(before);
+        renewed.send(IDR, Duration::from_millis(30));
+        let Next::Picture(first) = viewer.next(Duration::from_millis(50)).await else { panic!("the view goes on") };
+        assert!(first.keyframe);
+        drop(renewed);
+        assert!(matches!(viewer.next(Duration::from_millis(50)).await, Next::Ended));
+        // Nothing shared: a continuing publisher is a fresh one, and a fresh one ends the one before.
+        let fresh = publish_continuing();
+        let mut second = watch().unwrap();
+        let other = publish();
+        assert!(matches!(second.next(Duration::from_millis(50)).await, Next::Ended));
+        drop((fresh, other));
+    }
+
     #[tokio::test]
     async fn a_joined_viewer_starts_at_a_key_picture_and_ends_with_the_first_session() {
+        let _serial = SERIAL.lock().await;
         let publisher = publish();
         // Nobody watches: nothing is copied and no picture is asked for.
         publisher.send(DELTA, Duration::from_millis(30));

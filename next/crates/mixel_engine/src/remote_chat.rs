@@ -38,11 +38,14 @@ struct Outgoing {
 
 struct Conversation {
     session: Uuid,
+    /// The transport that carries the chat now (a session keeps its ID when its transport is renewed).
+    owner: u64,
     live: Authorization,
     output: mpsc::Sender<Outgoing>,
     messages: VecDeque<ChatMessage>,
     next_id: u64,
 }
+static NEXT_OWNER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 #[derive(Clone, Default)]
 pub struct ChatHub(Arc<Mutex<Option<Conversation>>>);
@@ -55,19 +58,36 @@ impl ChatHub {
         output: mpsc::Sender<Outgoing>,
     ) -> Result<Attachment, String> {
         let mut state = self.0.lock().map_err(|_| "Chat state is unavailable")?;
-        if !live() || state.as_ref().is_some_and(|current| (current.live)()) {
+        if !live() {
             return Err("A chat transport is already active or this session has ended".into());
         }
-        *state = Some(Conversation {
-            session,
-            live,
-            output,
-            messages: VecDeque::new(),
-            next_id: 1,
-        });
+        let owner = NEXT_OWNER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        match state.as_mut() {
+            // The same session's renewed transport carries the chat on, with its history.
+            Some(current) if current.session == session => {
+                current.owner = owner;
+                current.live = live.clone();
+                current.output = output;
+            }
+            Some(current) if (current.live)() => {
+                return Err("A chat transport is already active or this session has ended".into());
+            }
+            _ => {
+                *state = Some(Conversation {
+                    session,
+                    owner,
+                    live: live.clone(),
+                    output,
+                    messages: VecDeque::new(),
+                    next_id: 1,
+                });
+            }
+        }
         Ok(Attachment {
             hub: self.clone(),
             session,
+            owner,
+            live,
         })
     }
 
@@ -107,6 +127,10 @@ impl ChatHub {
 struct Attachment {
     hub: ChatHub,
     session: Uuid,
+    owner: u64,
+    /// This transport's authorization: the transport before a renewal still delivers what
+    /// arrives on it until it stops.
+    live: Authorization,
 }
 
 impl Attachment {
@@ -114,7 +138,7 @@ impl Attachment {
         let mut state = self.hub.0.lock().map_err(|_| "Chat state is unavailable")?;
         let conversation = state
             .as_mut()
-            .filter(|current| current.session == self.session && (current.live)())
+            .filter(|current| current.session == self.session && (self.live)())
             .ok_or("The chat session ended")?;
         if conversation.messages.len() == MAX_HISTORY {
             conversation.messages.pop_front();
@@ -133,7 +157,7 @@ impl Drop for Attachment {
         if let Ok(mut state) = self.hub.0.lock()
             && state
                 .as_ref()
-                .is_some_and(|current| current.session == self.session)
+                .is_some_and(|current| current.owner == self.owner)
         {
             *state = None;
         }
@@ -339,6 +363,49 @@ async fn run(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod renewal_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[tokio::test]
+    async fn a_renewed_transport_carries_the_chat_on_with_its_history() {
+        let hub = ChatHub::default();
+        let session = Uuid::new_v4();
+        let before_live = Arc::new(AtomicBool::new(true));
+        let flag = before_live.clone();
+        let (before_output, mut before_pending) = mpsc::channel(4);
+        let before = hub.attach(session, Arc::new(move || flag.load(Ordering::Acquire)), before_output).unwrap();
+        before.append(false, "hello".into()).unwrap();
+        // The renewed transport attaches while the one before still runs: same session, same history.
+        let (renewed_output, mut renewed_pending) = mpsc::channel(4);
+        let renewed = hub.attach(session, Arc::new(|| true), renewed_output).unwrap();
+        before.append(false, "still on the way".into()).unwrap();
+        assert_eq!(hub.messages(session).unwrap().iter().map(|message| message.text.as_str()).collect::<Vec<_>>(), ["hello", "still on the way"]);
+        // What this side sends goes over the renewed transport.
+        let sending = tokio::spawn({
+            let hub = hub.clone();
+            async move { hub.send(session, "over the new one".into()).await }
+        });
+        let outgoing = tokio::time::timeout(Duration::from_secs(2), renewed_pending.recv()).await.unwrap().unwrap();
+        assert_eq!(outgoing.text, "over the new one");
+        let _ = outgoing.reply.send(Ok(()));
+        sending.await.unwrap().unwrap();
+        assert!(before_pending.try_recv().is_err());
+        // The transport before stops: it can no longer add, and its end leaves the chat alone.
+        before_live.store(false, Ordering::Release);
+        assert!(before.append(false, "late".into()).is_err());
+        drop(before);
+        renewed.append(true, "over the new one".into()).unwrap();
+        assert_eq!(hub.messages(session).unwrap().len(), 3);
+        // Another session's chat cannot take over a live one.
+        let (other, _pending) = mpsc::channel(1);
+        assert!(hub.attach(Uuid::new_v4(), Arc::new(|| true), other).is_err());
+        drop(renewed);
+        assert!(hub.messages(session).is_none());
+    }
 }
 
 #[cfg(test)]
