@@ -125,6 +125,7 @@ pub fn own_features() -> Vec<&'static str> {
         crate::host_print::FEATURE,
         core_protocol::sound::FEATURE,
         FULL_HD,
+        crate::video_rate::FEATURE,
         crate::remote_session::JOIN,
         crate::remote_session::SWITCH,
     ];
@@ -151,6 +152,10 @@ pub struct ControlPipe {
     pub last_video_idle: Instant,
     last_keyframe_request: Option<Instant>,
     force_keyframe: bool,
+    /// Technician: the host uses receive reports (`video_rate::FEATURE`).
+    report_video: bool,
+    /// Host: reports from the technician that the picture loop has not taken yet.
+    video_reports: Vec<crate::video_rate::Report>,
     clipboard: crate::remote_clipboard::ClipboardPipe,
     /// Host: capture sources a controlling technician may switch between.
     displays: Vec<String>,
@@ -331,6 +336,8 @@ impl ControlPipe {
             last_video_idle: Instant::now(),
             last_keyframe_request: None,
             force_keyframe: false,
+            report_video: !config.host && features.iter().any(|name| name == crate::video_rate::FEATURE),
+            video_reports: Vec::new(),
             clipboard: {
                 let mut pipe = crate::remote_clipboard::ClipboardPipe::new(clipboard_rx, clipboard);
                 pipe.rich = features.iter().any(|name| name == core_protocol::clipboard::FEATURE);
@@ -375,6 +382,8 @@ impl ControlPipe {
             last_video_idle: Instant::now(),
             last_keyframe_request: None,
             force_keyframe: false,
+            report_video: false,
+            video_reports: Vec::new(),
             clipboard: crate::remote_clipboard::ClipboardPipe::new(clipboard, true),
             displays: Vec::new(),
             pending_display: None,
@@ -698,6 +707,26 @@ impl ControlPipe {
     pub(crate) const fn keyframe_request_spacing() -> Duration {
         KEYFRAME_REQUEST_SPACING
     }
+    /// Host: receive reports from the technician since the last call.
+    pub fn take_video_reports(&mut self) -> Vec<crate::video_rate::Report> {
+        std::mem::take(&mut self.video_reports)
+    }
+    /// Technician: tell the host what arrived (only when the host announced it uses the reports).
+    pub async fn send_video_report(
+        &mut self,
+        channel: &Arc<dyn NativeDataChannel>,
+        report: &crate::video_rate::Report,
+    ) -> Result<(), String> {
+        if self.host || !self.report_video {
+            return Ok(());
+        }
+        let record = self.crypto.seal(&report.encode()).map_err(|error| error.to_string())?;
+        tokio::time::timeout(Duration::from_secs(2), channel.send(record.as_slice().into()))
+            .await
+            .map_err(|_| "Receive report timed out")?
+            .map_err(|_| "Receive report failed")?;
+        Ok(())
+    }
     pub fn take_keyframe_request(&mut self) -> bool {
         std::mem::take(&mut self.force_keyframe)
     }
@@ -857,6 +886,12 @@ impl ControlPipe {
                     }
                     _ => return Err("Invalid display selection".into()),
                 }
+            }
+            if let Some(report) = crate::video_rate::Report::decode(plain.as_slice()) {
+                if self.host && self.video_reports.len() < 64 {
+                    self.video_reports.push(report);
+                }
+                continue;
             }
             if plain.as_slice() == b"mixel-video-keyframe-v1" {
                 if self

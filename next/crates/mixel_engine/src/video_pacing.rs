@@ -53,6 +53,8 @@ pub const PROBE_AFTER: Duration = Duration::from_secs(20);
 
 pub struct Pacer {
     rate: f64,
+    /// What the line delivers (`video_rate`): the pace never exceeds it.
+    cap: f64,
     ceiling: f64,
     /// The rate of the picture being sent: `rate`, or more for a picture that would otherwise
     /// take longer than [`PICTURE_LIMIT`].
@@ -72,6 +74,7 @@ impl Pacer {
     pub fn new(now: Instant) -> Self {
         Self {
             rate: START_RATE,
+            cap: MAX_RATE,
             ceiling: MAX_RATE,
             picture_rate: START_RATE,
             credit: burst(START_RATE),
@@ -84,7 +87,11 @@ impl Pacer {
     }
     /// Bytes a second at the moment.
     pub fn rate(&self) -> f64 {
-        self.rate
+        self.rate.min(self.cap)
+    }
+    /// The most the line delivers, bytes a second (from the technician's receive reports).
+    pub fn set_cap(&mut self, cap: f64) {
+        self.cap = cap.clamp(MIN_RATE, MAX_RATE);
     }
     /// A picture of `bytes` is about to be sent.
     pub fn begin(&mut self, now: Instant, bytes: usize) {
@@ -104,7 +111,7 @@ impl Pacer {
             }
         }
         self.refill(now);
-        self.picture_rate = self.rate.max(bytes as f64 / PICTURE_LIMIT.as_secs_f64());
+        self.picture_rate = self.rate().max(bytes as f64 / PICTURE_LIMIT.as_secs_f64());
         self.credit = self.credit.min(burst(self.picture_rate));
     }
     /// May a packet of `size` bytes leave now? `Err`: not before this much time has passed.
@@ -445,5 +452,17 @@ mod tests {
         assert!(!sent);
         assert!(written <= 3, "{written} packets after the stop");
         assert!(pacer.complete_sent.is_none() && pacer.latest_complete.is_none(), "a picture cut short is not waited for");
+    }
+
+    #[test]
+    fn the_line_cap_limits_the_pace_and_lifts_again() {
+        let mut pacer = Pacer::new(Instant::now());
+        assert_eq!(pacer.rate(), START_RATE);
+        pacer.set_cap(400_000.0);
+        assert_eq!(pacer.rate(), 400_000.0);
+        pacer.set_cap(1.0);
+        assert_eq!(pacer.rate(), MIN_RATE);
+        pacer.set_cap(MAX_RATE);
+        assert_eq!(pacer.rate(), START_RATE, "lifting the cap does not raise the pace by itself");
     }
 }

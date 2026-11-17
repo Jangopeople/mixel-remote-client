@@ -1170,6 +1170,9 @@ async fn host_media(
         let mut sound: Option<crate::remote_sound::Capture> = None;
         let mut sound_failed = false;
         let mut pacer = crate::video_pacing::Pacer::new(Instant::now());
+        let mut rate = crate::video_rate::RateControl::new(Instant::now());
+        #[cfg(feature = "qa-session")]
+        let mut qa_rate_logged = Instant::now();
         while !config.stopped() {
             if control.sound_wanted() {
                 if sound.is_none() && !sound_failed {
@@ -1240,6 +1243,25 @@ async fn host_media(
                 sequence = 0;
                 recent = None;
                 retry_encode = true;
+            }
+            // What the line delivers (the technician's receive reports): the pace and the encoder
+            // follow it, and while more is on its way than the line holds nothing new is encoded
+            // (the newest screen is captured when it goes on: stale pictures are never queued).
+            for report in control.take_video_reports() {
+                rate.report(Instant::now(), report);
+            }
+            rate.tick(Instant::now());
+            pacer.set_cap(rate.limit());
+            #[cfg(feature = "qa-session")]
+            if qa_rate_logged.elapsed() >= Duration::from_secs(5) {
+                eprintln!("QA line limit {:.0} kB/s, in flight {} kB, base delay {} ms, pace {:.0} kB/s", rate.limit() / 1000.0, rate.in_flight() / 1000, rate.base_delay().as_millis(), pacer.rate() / 1000.0);
+                qa_rate_logged = Instant::now();
+            }
+            if rate.backlogged(Instant::now()) {
+                pump_ice(config, transport).await?;
+                control.poll(config, channel).await?;
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                continue;
             }
             let requested = control.take_keyframe_request();
             if requested {
@@ -1343,7 +1365,7 @@ async fn host_media(
                 .elapsed()
                 .clamp(Duration::from_micros(1), Duration::from_secs(2));
             last = Instant::now();
-            if !send_picture(&sender, &mut pacer, consent, &encoded.annex_b, duration, config, transport, control, channel).await? {
+            if !send_picture(&sender, &mut pacer, Some(&mut rate), consent, &encoded.annex_b, duration, config, transport, control, channel).await? {
                 break;
             }
             // Lab builds only: a picture whose capture, encoding or sending took long (input waits meanwhile).
@@ -1359,7 +1381,7 @@ async fn host_media(
                 let wanted = next_bitrate(bitrate, encoder_bitrate(size, pacer.rate()));
                 if wanted != bitrate {
                     #[cfg(feature = "qa-session")]
-                    eprintln!("QA encoder bit rate {} -> {} kbit/s (pace {:.0} kB/s)", bitrate / 1000, wanted / 1000, pacer.rate() / 1000.0);
+                    eprintln!("QA encoder bit rate {} -> {} kbit/s (pace {:.0} kB/s, line limit {:.0} kB/s)", bitrate / 1000, wanted / 1000, pacer.rate() / 1000.0, rate.limit() / 1000.0);
                     encoder = start_encoder(size, wanted)?;
                     bitrate = wanted;
                     retry_encode = true;
@@ -1435,6 +1457,7 @@ async fn host_media(
 async fn send_picture(
     sender: &H264VideoSender,
     pacer: &mut crate::video_pacing::Pacer,
+    mut rate: Option<&mut crate::video_rate::RateControl>,
     consent: &Session,
     annex_b: &[u8],
     duration: Duration,
@@ -1456,7 +1479,14 @@ async fn send_picture(
         packets,
         complete,
         core_protocol::media::PicturePacket::size,
-        async |packet| sender.write(consent, packet).await.map_err(|error| error.to_string()),
+        async |packet| {
+            let (seq, size) = (packet.sequence(), packet.size());
+            sender.write(consent, packet).await.map_err(|error| error.to_string())?;
+            if let Some(rate) = rate.as_deref_mut() {
+                rate.sent(Instant::now(), seq, size);
+            }
+            Ok(())
+        },
         async || {
             if config.stopped() {
                 return Ok(false);
@@ -1503,7 +1533,7 @@ async fn mirror_media(
             }
             match pictures.next(Duration::from_millis(25)).await {
                 crate::session_mirror::Next::Picture(picture) => {
-                    if !send_picture(&sender, &mut pacer, consent, &picture.annex_b, picture.duration, config, transport, control, channel).await? {
+                    if !send_picture(&sender, &mut pacer, None, consent, &picture.annex_b, picture.duration, config, transport, control, channel).await? {
                         break;
                     }
                     sent += 1;
@@ -1594,6 +1624,8 @@ async fn viewer_media(
     // picture is given up and a complete one is requested.
     let mut reorder = core_protocol::media::PacketReorder::new(REPEAT_WAIT);
     let mut in_order = std::collections::VecDeque::new();
+    // What arrives is reported to the host five times a second (`video_rate`).
+    let mut report_rx = crate::video_rate::Receiver::new(Instant::now());
     let mut decoder =
         session_platform::H264Decoder::new(1920, 1920).map_err(|error| error.to_string())?;
     let mut previous_rtp: Option<u32> = None;
@@ -1630,6 +1662,9 @@ async fn viewer_media(
         #[cfg(feature = "qa-session")]
         let qa_ice = qa_turn.elapsed();
         control.poll(config, channel).await?;
+        if let Some(report) = report_rx.due(Instant::now()) {
+            control.send_video_report(channel, &report).await?;
+        }
         #[cfg(feature = "qa-session")]
         if qa_turn.elapsed() > Duration::from_millis(300) {
             eprintln!("QA technician loop at clock {}: signalling {} ms, control channel {} ms", crate::remote_control::qa_wall_clock(), qa_ice.as_millis(), (qa_turn.elapsed() - qa_ice).as_millis());
@@ -1708,6 +1743,7 @@ async fn viewer_media(
             };
             match event {
                 Ok(Some(TrackRemoteEvent::OnRtpPacket(packet))) => {
+                    report_rx.packet(Instant::now(), packet.header.sequence_number, 12 + packet.payload.len());
                     #[cfg(feature = "qa-session")]
                     {
                         qa_rtp.0 += 1;

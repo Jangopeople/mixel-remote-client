@@ -196,6 +196,10 @@ impl H264VideoSender {
 /// One RTP packet of a picture, between [`H264VideoSender::packets`] and [`H264VideoSender::write`].
 pub struct PicturePacket(rtc::rtp::Packet);
 impl PicturePacket {
+    /// The RTP sequence number.
+    pub fn sequence(&self) -> u16 {
+        self.0.header.sequence_number
+    }
     /// Bytes on the wire that count for pacing: the RTP header and the payload.
     pub fn size(&self) -> usize {
         12 + self.0.payload.len()
