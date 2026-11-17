@@ -831,6 +831,7 @@ impl RemoteSession {
         cancel: &AtomicBool,
         colleague: bool,
         slot: Uuid,
+        renewal: bool,
         run: impl FnOnce() + Send + 'static,
     ) -> Result<(), String> {
         let mut workers = self
@@ -852,7 +853,10 @@ impl RemoteSession {
                 index += 1;
             }
         }
-        if !colleague && workers.iter().any(|(kind, key, _)| !*kind && *key == slot) {
+        // One transport per session: its replacement (a renewal) starts while the one before still shares, and
+        // takes the capture over from it; a plain new transport waits until the old one is gone.
+        let same_session = workers.iter().filter(|(kind, key, _)| !*kind && *key == slot).count();
+        if !colleague && same_session >= if renewal { 2 } else { 1 } {
             return Err("A prior media owner is still stopping".into());
         }
         let running = workers.iter().filter(|(kind, _, _)| *kind == colleague).count();
@@ -4035,6 +4039,24 @@ mod registration_tests {
 
     fn go_online(remote: &RemoteSession) -> impl Future<Output = Result<(), String>> + '_ {
         remote.connect(AccountAuth::default(), Arc::new(IdentityState::default()))
+    }
+
+    /// A transport renewal starts the new media owner while the one before (same session) still shares: that must
+    /// be accepted (found in the 30-minute hold: the session ended at the first renewal), a second new transport
+    /// for the same session while one runs must not, and a plain new one must wait.
+    #[test]
+    fn a_renewal_may_start_beside_the_media_owner_it_replaces() {
+        let remote = RemoteSession::default();
+        let cancel = AtomicBool::new(false);
+        let slot = Uuid::new_v4();
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        remote.spawn_media(&cancel, false, slot, false, move || { let _ = held.recv(); }).unwrap();
+        assert!(remote.spawn_media(&cancel, false, slot, false, || {}).is_err(), "a plain second transport waits");
+        let (release2, held2) = std::sync::mpsc::channel::<()>();
+        remote.spawn_media(&cancel, false, slot, true, move || { let _ = held2.recv(); }).expect("the renewal starts beside the old one");
+        assert!(remote.spawn_media(&cancel, false, slot, true, || {}).is_err(), "not a third one");
+        remote.spawn_media(&cancel, false, Uuid::new_v4(), false, || {}).expect("another session is not affected");
+        let _ = (release.send(()), release2.send(()));
     }
 
     /// "Add this computer" and the app's own going online both ask to register. The second request

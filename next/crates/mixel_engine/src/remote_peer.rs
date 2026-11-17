@@ -221,7 +221,8 @@ pub fn start(mut config: Config) -> Result<(), String> {
     let cancel = config.account_cancel.clone();
     let mirror = config.mirror;
     let slot = config.slot;
-    state.spawn_media(&cancel, mirror, slot, move || {
+    let renewal = config.previous.is_some();
+    state.spawn_media(&cancel, mirror, slot, renewal, move || {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
