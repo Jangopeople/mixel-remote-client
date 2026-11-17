@@ -150,7 +150,7 @@ public struct DeviceConsoleView: View {
                 Label(L("Connect"), systemImage: "bolt.fill").font(.system(size: 13, weight: .semibold))
             }
             .buttonStyle(PrimaryButtonStyle())
-            .disabled(!app.signedIn || Format.parseRemoteId(byId) == nil || app.remote.inSession || workspace.attempt?.failure.isEmpty == true)
+            .disabled(!app.signedIn || Format.parseRemoteId(byId) == nil || app.remote.connectBlockedBySession || workspace.attempt?.failure.isEmpty == true)
         }
         .padding(4)
         .background(Theme.page, in: RoundedRectangle(cornerRadius: 10, style: .continuous))

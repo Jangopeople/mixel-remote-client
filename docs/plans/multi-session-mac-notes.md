@@ -1,0 +1,37 @@
+# Multi-session: Mac app notes (Mixel Remote 2.1.0)
+
+Engine API: `multi-session-engine-api.md`. App code: `next/apps/mixel-remote-apple`.
+
+## What changed
+- `RemoteStatus` decodes `sessions[]` (`RemoteSessionItem`, tolerant: every field optional) and `max_sessions`.
+  `viewerSessions` returns the list, or, for an engine that sends no `sessions`, one item synthesized from the
+  single-session fields (id = connection session id), so old engines still work with one session.
+- `SessionModel` is now one model per session (`AppModel.sessionModels`, keyed by the computer's Remote ID, bound to
+  the session's stable `id`). Every engine call (input, clipboard, chat, files, record, draw, close, ...) carries
+  that stable id. `AppModel.session` is the focused session's model (else the oldest, else `idleSession`, which
+  stands for "none" and ends a session this computer *shares*, by consent).
+- Focus (`WorkspaceModel.isFocused`): selected tab, or the key session window; with one session that session.
+  Input, clipboard, files, chat, record, draw, ctrl-alt-del, monitors, invite, switch-sides only go to the focused
+  session. A session nobody focused sends nothing (a `releaseAll` still goes out, so keys never stay down).
+- Pictures: each session model fetches `next_video(stable id)` for its own mailbox; hidden tabs keep fetching
+  (needed so an H.264 stream never waits for a key frame when a tab comes to the front).
+- Closing a tab / "End session" on a tab: `remote_close {session: id}` for that session only.
+- Connect is not gated on `phase == "ready"`: `RemoteStatus.connectBlockedBySession` (old engine: any session;
+  2.1: only while this computer is being helped). A request over the limit reaches the engine and its typed error
+  `{"hint":"too_many_sessions","max":4,...}` is shown as a sentence (`EngineFailure.typed`; de/fr/it in
+  `scripts/make-strings.py` NATIVE). `already_connected` has its own sentence.
+- Transport renewal: same `id`, new `session`: tab, model, picture and selection stay.
+- A window's red button still docks it back into its tab (does not end the session; End does).
+- `scripts/build-core.sh`: `ARM_ONLY=1` builds Apple silicon only (lab builds).
+
+## Tests
+`swift test` (new `MultiSessionTests`: 2-4 tabs, focus routing, unfocused sends nothing, close ends one,
+session end removes one tab, 5th request error, old engine fallback, renewal, per-session pictures, decoding).
+Mock engine: `queue(frame:session:)`, `sentInputSessions`, `videoFetches`.
+
+## Not verified
+- No live two-session run in this task (needs the lab hosts; the lab core with `qa-session` is built for it).
+- Hidden tabs decode pictures too (CPU with four sessions not measured).
+- Drawing, the AI assistant and session reports follow the focused session only; per-session reports/notes
+  for several sessions ending at once are not specially handled.
+- iPhone/iPad app builds not rebuilt here (phone shows one session; `isFocused` is always true there).

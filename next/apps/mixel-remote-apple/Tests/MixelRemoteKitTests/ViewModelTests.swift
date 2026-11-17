@@ -268,7 +268,7 @@ final class ViewModelTests: XCTestCase {
         XCTAssertTrue(app.session.canSwitchSides)
     }
 
-    func testEndSessionUsesTheConsentAndStopsThePicture() async throws {
+    func testEndSessionClosesThatSessionByItsIdAndStopsThePicture() async throws {
         let engine = MockEngine()
         Fixtures.viewing(engine)
         engine.queue(frame: VideoFrame.sample())
@@ -276,8 +276,8 @@ final class ViewModelTests: XCTestCase {
         try await waitFor { app.session.frame != nil }
         app.session.end()
         XCTAssertNil(app.session.frame)
-        try await waitFor { !engine.calls("remote_stop_session").isEmpty }
-        XCTAssertEqual(engine.calls("remote_stop_session").last?.object["consent"] as? String, Fixtures.consent)
+        try await waitFor { !engine.calls("remote_close").isEmpty }
+        XCTAssertEqual(engine.calls("remote_close").last?.object["session"] as? String, Fixtures.session)
     }
 
     func testPointerMovesCoalesce() async throws {

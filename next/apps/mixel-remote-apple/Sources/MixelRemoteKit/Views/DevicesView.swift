@@ -57,15 +57,15 @@ public struct DevicesView: View {
                 if app.signedIn, !app.remote.connected, app.remote.phase != "closing", !app.enrollment.needsSetup { connectionBanner }
                 MessageLine(model.error)
                 MessageLine(app.error)
-                if app.busy || app.remote.phase == "outgoing" || (app.remote.phase == "negotiating" && !app.remote.sharing) {
+                if app.busy || app.remote.requesting {
                     let statusText = !app.progress.isEmpty ? app.progress : app.connectionMessage
                     if !statusText.isEmpty {
                         HStack(spacing: 10) {
                             ProgressView().controlSize(.small)
                             Text(verbatim: statusText).font(.callout).foregroundStyle(.secondary)
                             Spacer()
-                            if app.remote.phase == "outgoing" || app.remote.phase == "negotiating" {
-                                Button(L("Cancel")) { app.session.end() }
+                            if app.remote.requesting {
+                                Button(L("Cancel")) { app.cancelRequests() }
                             }
                         }
                     }
@@ -238,7 +238,7 @@ struct DeviceRow: View {
             } else if model.managesIsmDevices, ["macos", "windows", "linux"].contains(device.os) {
                 Button(L("Edit device")) { edit(device) }
             }
-            let connectingHere = (app.remote.phase == "outgoing" || (app.remote.phase == "negotiating" && !app.remote.sharing)) && app.remote.peer == device.connectionId
+            let connectingHere = app.remote.viewerSessions.contains { $0.peer == device.connectionId && ["outgoing", "negotiating"].contains($0.phase) }
             Button(connectingHere ? L("Connecting…") : L("Connect")) { model.connect(device, unattended: true) }
                 .buttonStyle(PrimaryButtonStyle())
                 .disabled(!blocked.isEmpty || connectingHere)

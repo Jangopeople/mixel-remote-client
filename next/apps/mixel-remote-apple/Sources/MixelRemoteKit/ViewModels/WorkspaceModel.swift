@@ -4,9 +4,14 @@ import Foundation
 /// is in front, which sessions are in their own window, the connection being prepared, and the two
 /// remembered choices ("when a session is ready" and "open sessions in").
 ///
-/// Sessions are keyed by the other computer's Remote ID, not by the engine's session id: the session
-/// id changes when the connection is renewed, the computer does not. Everything is a list so several
-/// sessions at once only need `sessionTabs` to read more than one session from the engine.
+/// Sessions are keyed by the other computer's Remote ID (one session per computer); each tab carries
+/// the session's stable engine id (`SessionTab.sessionId`), which every engine call uses and which
+/// survives a transport renewal. The engine holds up to four sessions: `sessionTabs` makes one tab per
+/// session it lists.
+///
+/// Focus: input, clipboard and toolbar actions go only to the focused session: the selected tab, or the
+/// session window that is key. A session nobody has focused (a background tab or window) sends nothing.
+/// With a single session the focus is that session, so a session shown nowhere in particular still works.
 @MainActor
 public final class WorkspaceModel: ObservableObject {
     let app: AppModel
@@ -39,6 +44,8 @@ public final class WorkspaceModel: ObservableObject {
         public var os: String
         /// `connecting`, `starting` (video not there yet), `ready`, `ending`.
         public var state: String
+        /// The session's stable engine id.
+        public var sessionId: String = ""
         public var id: UInt32 { peer }
     }
 
@@ -76,6 +83,9 @@ public final class WorkspaceModel: ObservableObject {
     public var focusWindow: (UInt32) -> Void = { _ in }
     public var closeWindow: (UInt32) -> Void = { _ in }
 
+    /// The session window that is in front (set by the Mac app), nil when none is.
+    @Published public private(set) var windowFocus: UInt32?
+
     private let defaults: UserDefaults
 
     init(app: AppModel, defaults: UserDefaults = .standard) {
@@ -87,21 +97,41 @@ public final class WorkspaceModel: ObservableObject {
 
     // MARK: Reading the engine
 
-    /// The sessions this app views as technician. Today the engine runs one session at a time; when it
-    /// reports several (`remote_status.sessions`, see docs/mixel-remote-ui-engine-requests.md), this is
-    /// the only place that reads them.
-    func sessionTabs(_ status: RemoteStatus, frameShown: Bool) -> [SessionTab] {
-        guard let peer = status.peer, !status.sharing, status.session != nil else { return [] }
-        let state: String
-        switch status.phase {
-        case "active": state = frameShown ? "ready" : "starting"
-        case "closing": state = "ending"
-        case "outgoing", "negotiating": state = "connecting"
-        default: return []
+    /// The sessions this app views as technician: one tab per session the engine lists (an older engine lists
+    /// one, see `RemoteStatus.viewerSessions`). A tab exists once the other side accepted.
+    func sessionTabs(_ status: RemoteStatus) -> [SessionTab] {
+        status.viewerSessions.compactMap { item in
+            guard let peer = item.peer else { return nil }
+            let shown = app.sessionModels[peer]?.frame != nil
+            let state: String
+            switch item.phase {
+            case "active": state = shown ? "ready" : "starting"
+            case "closing": state = "ending"
+            default: return nil
+            }
+            return SessionTab(peer: peer, name: app.devices.name(of: peer), os: app.devices.os(of: peer), state: state, sessionId: item.id)
         }
-        // A session tab exists once the other side accepted (the picture is coming).
-        guard state != "connecting" else { return [] }
-        return [SessionTab(peer: peer, name: app.devices.name(of: peer), os: app.devices.os(of: peer), state: state)]
+    }
+
+    // MARK: Focus
+
+    /// The session keyboard, mouse, clipboard and toolbar actions go to.
+    public var focusedPeer: UInt32? {
+        if case .session(let peer) = selected, tabs.contains(where: { $0.peer == peer }), !windows.contains(peer) { return peer }
+        if let peer = windowFocus, windows.contains(peer) { return peer }
+        if tabs.count == 1, let only = tabs.first { return only.peer }
+        return nil
+    }
+
+    public func isFocused(_ peer: UInt32) -> Bool {
+        // The phone shows its one session full screen; only the Mac has several to tell apart.
+        if app.isPhone { return true }
+        return focusedPeer == peer
+    }
+
+    /// A session window became or stopped being the key window.
+    public func windowFocusChanged(_ peer: UInt32, focused: Bool) {
+        if focused { windowFocus = peer } else if windowFocus == peer { windowFocus = nil }
     }
 
     func statusChanged(from previous: RemoteStatus, to next: RemoteStatus) {
@@ -111,13 +141,14 @@ public final class WorkspaceModel: ObservableObject {
     /// Called when the remote status or the first picture changes.
     func refresh(_ status: RemoteStatus? = nil) {
         let status = status ?? app.remote
-        let next = sessionTabs(status, frameShown: app.session.frame != nil)
+        let next = sessionTabs(status)
         let before = Dictionary(uniqueKeysWithValues: tabs.map { ($0.peer, $0) })
         if next != tabs { tabs = next }
         let open = Set(next.map(\.peer))
         // Ended sessions: their tab, window and notice go away; the Devices list comes back.
         for peer in before.keys where !open.contains(peer) {
             if windows.contains(peer) { windows.remove(peer); closeWindow(peer) }
+            if windowFocus == peer { windowFocus = nil }
             readyNotices.removeAll { $0 == peer }
             if selected == .session(peer) { selected = .console }
         }
@@ -129,13 +160,13 @@ public final class WorkspaceModel: ObservableObject {
 
     private func updateAttempt(_ status: RemoteStatus) {
         guard var current = attempt else { return }
-        let matches = status.peer == current.peer
+        let item = status.viewerSessions.first { $0.peer == current.peer }
         var step = current.step
-        if matches {
-            switch status.phase {
+        if let item {
+            switch item.phase {
             case "outgoing": step = max(step, 1)
             case "negotiating": step = max(step, 2)
-            case "active": step = max(step, app.session.frame == nil ? 3 : 4)
+            case "active": step = max(step, app.sessionModels[current.peer]?.frame == nil ? 3 : 4)
             default: break
             }
         }
@@ -144,15 +175,16 @@ public final class WorkspaceModel: ObservableObject {
             attempt = nil
             return
         }
-        let running = matches && status.inSession
+        let running = item != nil
         if current.failure.isEmpty, !app.busy, !running {
             if !app.error.isEmpty {
                 current.failure = app.error
             } else if step >= 1 {
                 // The request was sent and the session is gone again: declined, timed out or refused.
-                current.failure = status.message.isEmpty || status.phase == "ready"
+                let sentence = status.viewerSessions.isEmpty && status.phase != "ready" ? status.message : ""
+                current.failure = sentence.isEmpty
                     ? L("The connection was not established. The other side declined, did not answer, or unattended access is not allowed.")
-                    : Translator.shared.translate(status.message)
+                    : Translator.shared.translate(sentence)
             }
         }
         current.step = step
@@ -201,7 +233,7 @@ public final class WorkspaceModel: ObservableObject {
         guard let current = attempt else { return }
         attempt = nil
         attemptWindow.remove(current.peer)
-        if app.remote.peer == current.peer, app.remote.inSession { app.session.end() }
+        if let item = app.remote.viewerSessions.first(where: { $0.peer == current.peer }) { app.closeSession(item.id) }
     }
 
     public func dismissNotice(_ peer: UInt32) { readyNotices.removeAll { $0 == peer } }
@@ -242,9 +274,9 @@ public final class WorkspaceModel: ObservableObject {
     public func tab(_ peer: UInt32) -> SessionTab? { tabs.first { $0.peer == peer } }
     public func isInWindow(_ peer: UInt32) -> Bool { windows.contains(peer) }
 
-    /// The session model of a tab. One today; one per session once the engine runs several.
+    /// The session model of a tab (one per session).
     public func session(for peer: UInt32) -> SessionModel? {
-        app.remote.peer == peer ? app.session : nil
+        app.sessionModels[peer]?.item != nil ? app.sessionModels[peer] : nil
     }
 
     /// Ends one session.

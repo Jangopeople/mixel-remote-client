@@ -32,7 +32,36 @@ public struct EngineInfo: Equatable, Sendable {
 public struct EngineFailure: Error, LocalizedError, Equatable, Sendable {
     public var message: String
     public init(_ message: String) { self.message = message }
-    public var errorDescription: String? { Translator.shared.translate(message) }
+    public var errorDescription: String? {
+        if let typed { return typed.sentence }
+        return Translator.shared.translate(message)
+    }
+
+    /// A typed refusal: the engine's error text is then JSON `{"hint":"too_many_sessions","max":4,"message":"..."}`.
+    public struct Typed: Equatable, Sendable {
+        public var hint: String
+        public var max: Int?
+        public var message: String
+        /// The friendly sentence for the person.
+        public var sentence: String {
+            switch hint {
+            case "too_many_sessions":
+                return max.map { L("You already have %d sessions open, the most this app can hold. End one to connect to another computer.", $0) }
+                    ?? L("You already have the most sessions open this app can hold. End one to connect to another computer.")
+            case "already_connected":
+                return L("You are already connected to this computer. Switch to its tab.")
+            default:
+                return Translator.shared.translate(message)
+            }
+        }
+    }
+
+    public var typed: Typed? {
+        guard message.hasPrefix("{"), let object = (try? JSONSerialization.jsonObject(with: Data(message.utf8))) as? [String: Any],
+              let hint = object["hint"] as? String else { return nil }
+        return Typed(hint: hint, max: object["max"] as? Int, message: object["message"] as? String ?? "")
+    }
+    public var hint: String? { typed?.hint }
 }
 
 /// Arguments without fields.

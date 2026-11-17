@@ -344,8 +344,10 @@ public final class DevicesModel: ObservableObject {
     }
 
     func statusChanged(from previous: RemoteStatus, to next: RemoteStatus) {
-        if next.phase == "active", !next.sharing, let peer = next.peer, !next.hostMacs.isEmpty, next.hostMacs != previous.hostMacs || previous.phase != "active" {
-            remember(macs: next.hostMacs, of: peer)
+        let before = Dictionary(previous.viewerSessions.compactMap { item in item.peer.map { ($0, item) } }, uniquingKeysWith: { first, _ in first })
+        for item in next.viewerSessions where item.phase == "active" && !item.hostMacs.isEmpty {
+            guard let peer = item.peer else { continue }
+            if before[peer]?.hostMacs != item.hostMacs || before[peer]?.phase != "active" { remember(macs: item.hostMacs, of: peer) }
         }
         if next.connected, !previous.connected { lastPresence = .distantPast }
         if next.connected { Task { await checkPresence() } }
@@ -391,8 +393,11 @@ public final class DevicesModel: ObservableObject {
     /// Why Connect is not possible ("" when it is).
     public func connectBlocked(_ device: Device) -> String {
         if device.connectionId == app.remote.host { return L("This is the computer you are using.") }
-        if app.remote.inSession {
-            // Several sessions at once need the engine's multi-session support (one today).
+        if let session = app.remote.viewerSessions.first(where: { $0.peer == device.connectionId }) {
+            return session.phase == "active" ? L("You are already connected to this computer.") : L("Connecting…")
+        }
+        if app.remote.connectBlockedBySession {
+            // An older engine runs one session; a 2.1 engine several (it refuses a request over the limit itself).
             return L("End the current session first.")
         }
         if presence(of: device) == .offline { return L("This device is offline.") }

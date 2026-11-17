@@ -112,10 +112,17 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
     /// The session was opened with a one-time support password (docs/mixel-remote-ui-engine-requests.md,
     /// item 3). Absent until the engine reports it; the app then relies on what it sent itself.
     public var passwordSession: PasswordSessionView?
+    /// Every technician session this app holds, oldest first (engine 2.1+). `nil` from an older engine,
+    /// which describes one session in the fields above: `viewerSessions` covers both.
+    public var sessions: [RemoteSessionItem]?
+    /// How many technician sessions the engine allows at once (4); `nil` from an older engine (one).
+    public var maxSessions: Int?
 
     public static let offline = RemoteStatus(phase: "offline")
 
-    public init(phase: String, message: String = "", controllerOnly: Bool = false, platform: String = "macos", host: UInt32? = nil, session: String? = nil, consent: String? = nil, peer: UInt32? = nil, received: UInt64 = 0, sharing: Bool = false, control: Bool = false, clipboard: Bool = false, files: Bool = false, recordingPermitted: Bool = false, recording: RecordingView? = nil, inputAccess: Bool = true, online: [UInt32] = [], displays: UInt16 = 0, display: UInt16 = 0, displayAll: Bool = false, hostActions: [String] = [], colleagues: [Colleague] = [], joinRequest: JoinRequest? = nil, invitations: [Invitation] = [], peerFeatures: [String] = [], unattendedSession: Bool = false, switched: Bool = false, printJobs: [String] = []) {
+    public init(phase: String, message: String = "", controllerOnly: Bool = false, platform: String = "macos", host: UInt32? = nil, session: String? = nil, consent: String? = nil, peer: UInt32? = nil, received: UInt64 = 0, sharing: Bool = false, control: Bool = false, clipboard: Bool = false, files: Bool = false, recordingPermitted: Bool = false, recording: RecordingView? = nil, inputAccess: Bool = true, online: [UInt32] = [], displays: UInt16 = 0, display: UInt16 = 0, displayAll: Bool = false, hostActions: [String] = [], colleagues: [Colleague] = [], joinRequest: JoinRequest? = nil, invitations: [Invitation] = [], peerFeatures: [String] = [], unattendedSession: Bool = false, switched: Bool = false, printJobs: [String] = [], sessions: [RemoteSessionItem]? = nil, maxSessions: Int? = nil) {
+        self.sessions = sessions
+        self.maxSessions = maxSessions
         self.controllerOnly = controllerOnly
         self.platform = platform
         self.phase = phase
@@ -167,6 +174,188 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
     /// This app views and (maybe) controls another computer right now.
     public var viewing: Bool { phase == "active" && !sharing && session != nil }
     public func offers(_ action: String) -> Bool { hostActions.contains(action) }
+
+    /// The technician sessions: the engine's list, or (older engine without `sessions`) the one session the
+    /// single-session fields describe. The `id` of that one is the connection's session id.
+    public var viewerSessions: [RemoteSessionItem] {
+        if let sessions { return sessions }
+        guard !sharing, let peer, let session, ["outgoing", "negotiating", "active", "closing"].contains(phase) else { return [] }
+        return [RemoteSessionItem(id: session, session: session, peer: peer, phase: phase, message: message, consent: consent, received: received,
+                                  control: control, clipboard: clipboard, files: files, recordingPermitted: recordingPermitted, recording: recording,
+                                  displays: displays, display: display, displayAll: displayAll, printJobs: printJobs, hostActions: hostActions,
+                                  signinId: signinId, hostMacs: hostMacs, meetingOffer: meetingOffer, peerFeatures: peerFeatures,
+                                  joinedSession: joinedSession, switched: switched)]
+    }
+
+    /// Sessions the engine lets this app hold (1 for an older engine).
+    public var sessionLimit: Int { max(1, maxSessions ?? 1) }
+
+    /// Another technician session may be requested now: below the limit, and this computer is not
+    /// being helped. An older engine (no `sessions`) runs one session and needs `ready`.
+    public var canRequestSession: Bool {
+        if sessions == nil { return phase == "ready" }
+        return connected && !sharing && !["incoming", "deciding"].contains(phase) && viewerSessions.count < sessionLimit
+    }
+
+    /// A session of another computer is running, so Connect is off: an older engine runs one session;
+    /// a 2.1 engine allows several (at the limit it answers a request with `too_many_sessions`), but not
+    /// while this computer is being helped.
+    public var connectBlockedBySession: Bool {
+        sessions == nil ? inSession : sharing || ["incoming", "deciding"].contains(phase)
+    }
+
+    /// A technician session is being requested (waiting for Accept, or negotiating).
+    public var requesting: Bool { viewerSessions.contains { ["outgoing", "negotiating"].contains($0.phase) } }
+
+    /// This status with the single-session fields (`phase`, `session`, `control`, ...) describing `item`:
+    /// what a session's model and screens read as "the session".
+    public func describing(_ item: RemoteSessionItem) -> RemoteStatus {
+        var copy = self
+        copy.sharing = false
+        copy.phase = item.phase
+        copy.message = item.message
+        copy.session = item.session
+        copy.consent = item.consent
+        copy.peer = item.peer
+        copy.received = item.received
+        copy.control = item.control
+        copy.clipboard = item.clipboard
+        copy.files = item.files
+        copy.recordingPermitted = item.recordingPermitted
+        copy.recording = item.recording
+        copy.displays = item.displays
+        copy.display = item.display
+        copy.displayAll = item.displayAll
+        copy.printJobs = item.printJobs
+        copy.hostActions = item.hostActions
+        copy.signinId = item.signinId
+        copy.hostMacs = item.hostMacs
+        copy.meetingOffer = item.meetingOffer
+        copy.peerFeatures = item.peerFeatures
+        copy.joinedSession = item.joinedSession
+        copy.switched = item.switched
+        return copy
+    }
+}
+
+/// One technician session of `remote_status.sessions` (docs/plans/multi-session-engine-api.md). Decoding is
+/// tolerant: a missing field takes its neutral value.
+public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
+    /// The stable id of the session, chosen when it is requested; every command carries it.
+    public var id: String
+    /// The connection service's id of the current transport (`nil` until it answered); changes at a renewal.
+    public var session: String?
+    public var peer: UInt32?
+    /// `outgoing`, `negotiating`, `active`, `closing`.
+    public var phase: String
+    public var message: String
+    public var consent: String?
+    public var received: UInt64
+    public var control: Bool
+    public var clipboard: Bool
+    public var files: Bool
+    public var recordingPermitted: Bool
+    public var recording: RecordingView?
+    public var displays: UInt16
+    public var display: UInt16
+    public var displayAll: Bool
+    public var printJobs: [String]
+    public var hostActions: [String]
+    public var signinId: UInt32?
+    public var hostMacs: [String]
+    public var meetingOffer: [String]?
+    public var peerFeatures: [String]
+    public var joinedSession: Bool
+    public var switched: Bool
+    public var quality: SessionQuality?
+    public var startedAt: Double?
+
+    public init(id: String, session: String? = nil, peer: UInt32? = nil, phase: String = "active", message: String = "", consent: String? = nil,
+                received: UInt64 = 0, control: Bool = false, clipboard: Bool = false, files: Bool = false, recordingPermitted: Bool = false,
+                recording: RecordingView? = nil, displays: UInt16 = 0, display: UInt16 = 0, displayAll: Bool = false, printJobs: [String] = [],
+                hostActions: [String] = [], signinId: UInt32? = nil, hostMacs: [String] = [], meetingOffer: [String]? = nil,
+                peerFeatures: [String] = [], joinedSession: Bool = false, switched: Bool = false, quality: SessionQuality? = nil, startedAt: Double? = nil) {
+        self.id = id; self.session = session; self.peer = peer; self.phase = phase; self.message = message; self.consent = consent
+        self.received = received; self.control = control; self.clipboard = clipboard; self.files = files
+        self.recordingPermitted = recordingPermitted; self.recording = recording; self.displays = displays; self.display = display
+        self.displayAll = displayAll; self.printJobs = printJobs; self.hostActions = hostActions; self.signinId = signinId
+        self.hostMacs = hostMacs; self.meetingOffer = meetingOffer; self.peerFeatures = peerFeatures
+        self.joinedSession = joinedSession; self.switched = switched; self.quality = quality; self.startedAt = startedAt
+    }
+
+    private enum Key: String, CodingKey {
+        case id, session, peer, device, phase, message, consent, received, control, clipboard, files, recordingPermitted, recording, displays, display
+        case displayAll, printJobs, hostActions, signinId, hostMacs, meetingOffer, peerFeatures, joinedSession, switched, quality, startedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Key.self)
+        id = try c.decode(String.self, forKey: .id)
+        session = try? c.decodeIfPresent(String.self, forKey: .session)
+        peer = (try? c.decodeIfPresent(UInt32.self, forKey: .peer)) ?? (try? c.decodeIfPresent(UInt32.self, forKey: .device))
+        phase = (try? c.decodeIfPresent(String.self, forKey: .phase)) ?? "active"
+        message = (try? c.decodeIfPresent(String.self, forKey: .message)) ?? ""
+        consent = try? c.decodeIfPresent(String.self, forKey: .consent)
+        received = (try? c.decodeIfPresent(UInt64.self, forKey: .received)) ?? 0
+        control = (try? c.decodeIfPresent(Bool.self, forKey: .control)) ?? false
+        clipboard = (try? c.decodeIfPresent(Bool.self, forKey: .clipboard)) ?? false
+        files = (try? c.decodeIfPresent(Bool.self, forKey: .files)) ?? false
+        recordingPermitted = (try? c.decodeIfPresent(Bool.self, forKey: .recordingPermitted)) ?? false
+        recording = try? c.decodeIfPresent(RecordingView.self, forKey: .recording)
+        displays = (try? c.decodeIfPresent(UInt16.self, forKey: .displays)) ?? 0
+        display = (try? c.decodeIfPresent(UInt16.self, forKey: .display)) ?? 0
+        displayAll = (try? c.decodeIfPresent(Bool.self, forKey: .displayAll)) ?? false
+        printJobs = (try? c.decodeIfPresent([String].self, forKey: .printJobs)) ?? []
+        hostActions = (try? c.decodeIfPresent([String].self, forKey: .hostActions)) ?? []
+        signinId = try? c.decodeIfPresent(UInt32.self, forKey: .signinId)
+        hostMacs = (try? c.decodeIfPresent([String].self, forKey: .hostMacs)) ?? []
+        meetingOffer = try? c.decodeIfPresent([String].self, forKey: .meetingOffer)
+        peerFeatures = (try? c.decodeIfPresent([String].self, forKey: .peerFeatures)) ?? []
+        joinedSession = (try? c.decodeIfPresent(Bool.self, forKey: .joinedSession)) ?? false
+        switched = (try? c.decodeIfPresent(Bool.self, forKey: .switched)) ?? false
+        quality = try? c.decodeIfPresent(SessionQuality.self, forKey: .quality)
+        startedAt = try? c.decodeIfPresent(Double.self, forKey: .startedAt)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: Key.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(session, forKey: .session)
+        try c.encode(peer, forKey: .peer)
+        try c.encode(peer, forKey: .device)
+        try c.encode(phase, forKey: .phase)
+        try c.encode(message, forKey: .message)
+        try c.encode(consent, forKey: .consent)
+        try c.encode(received, forKey: .received)
+        try c.encode(control, forKey: .control)
+        try c.encode(clipboard, forKey: .clipboard)
+        try c.encode(files, forKey: .files)
+        try c.encode(recordingPermitted, forKey: .recordingPermitted)
+        try c.encode(recording, forKey: .recording)
+        try c.encode(displays, forKey: .displays)
+        try c.encode(display, forKey: .display)
+        try c.encode(displayAll, forKey: .displayAll)
+        try c.encode(printJobs, forKey: .printJobs)
+        try c.encode(hostActions, forKey: .hostActions)
+        try c.encode(signinId, forKey: .signinId)
+        try c.encode(hostMacs, forKey: .hostMacs)
+        try c.encode(meetingOffer, forKey: .meetingOffer)
+        try c.encode(peerFeatures, forKey: .peerFeatures)
+        try c.encode(joinedSession, forKey: .joinedSession)
+        try c.encode(switched, forKey: .switched)
+        try c.encode(quality, forKey: .quality)
+        try c.encode(startedAt, forKey: .startedAt)
+    }
+}
+
+/// Picture figures of one session.
+public struct SessionQuality: Codable, Equatable, Sendable {
+    public var pictures: UInt64
+    public var picturesPerSecond: Double
+    public var pictureAgeMs: UInt64?
+    public init(pictures: UInt64 = 0, picturesPerSecond: Double = 0, pictureAgeMs: UInt64? = nil) {
+        self.pictures = pictures; self.picturesPerSecond = picturesPerSecond; self.pictureAgeMs = pictureAgeMs
+    }
 }
 
 public struct PairingPrompt: Codable, Equatable, Sendable {

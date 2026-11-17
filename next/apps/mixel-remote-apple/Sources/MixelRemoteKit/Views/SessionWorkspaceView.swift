@@ -34,7 +34,7 @@ public struct SessionWorkspaceView: View {
         session = app.session
     }
 
-    var remote: RemoteStatus { app.remote }
+    var remote: RemoteStatus { session.remote }
 
     public var body: some View {
         VStack(spacing: 0) {
@@ -97,7 +97,7 @@ struct SessionToolbar: View {
     @Binding var tools: SessionWorkspaceView.Tool?
     @Binding var inviting: Bool
 
-    var remote: RemoteStatus { app.remote }
+    var remote: RemoteStatus { session.remote }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -267,7 +267,7 @@ struct ToolPanel: View {
     }
 
     @ViewBuilder private var files: some View {
-        if !app.remote.files {
+        if !session.remote.files {
             Text(verbatim: L("File transfer was not allowed for this session.")).foregroundStyle(.secondary)
         } else {
             Button(L("Send a file…")) {
@@ -313,14 +313,14 @@ struct ToolPanel: View {
     }
 
     @ViewBuilder private var clipboard: some View {
-        if app.remote.clipboard {
+        if session.remote.clipboard {
             Button(L("Send my clipboard")) { session.clipboard(push: true) }
             Button(L("Get remote clipboard")) { session.clipboard(push: false) }
             MessageLine(session.clipboardResult, error: false)
         } else {
             Text(verbatim: L("The clipboard was not allowed for this session.")).foregroundStyle(.secondary)
         }
-        if app.remote.control {
+        if session.remote.control {
             Divider()
             Text(verbatim: L("Send text")).font(.headline)
             TextField(text: $session.textToSend, prompt: Text(verbatim: L("Text to type on the remote computer"))) { Text(verbatim: L("Send text")) }
@@ -328,10 +328,10 @@ struct ToolPanel: View {
                 .onSubmit { session.typeText() }
             Button(L("Send")) { session.typeText() }.disabled(session.textToSend.isEmpty)
         }
-        if !app.remote.printJobs.isEmpty {
+        if !session.remote.printJobs.isEmpty {
             Divider()
             Text(verbatim: L("Print jobs")).font(.headline)
-            ForEach(app.remote.printJobs, id: \.self) { path in
+            ForEach(session.remote.printJobs, id: \.self) { path in
                 HStack {
                     Text(verbatim: URL(fileURLWithPath: path).lastPathComponent).lineLimit(1)
                     Spacer()
@@ -355,11 +355,11 @@ struct InviteColleagueSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(verbatim: L("Invite a colleague")).font(.title2.weight(.semibold))
-            if app.remote.peerFeatures.contains("join") {
+            if session.remote.peerFeatures.contains("join") {
                 Text(verbatim: L("Your colleague gets the invitation in Mixel Remote and joins this session. The person at the computer is asked first, unless unattended access is set up.")).foregroundStyle(.secondary)
                 FieldRow(L("Or the Remote ID of their computer")) { RemoteIdField(text: $device) }
                 Toggle(isOn: $control) { Text(verbatim: L("Allow viewing and control")) }
-                if let message = app.remote.inviteMessage { MessageLine(Translator.shared.translate(message), error: false) }
+                if let message = session.remote.inviteMessage { MessageLine(Translator.shared.translate(message), error: false) }
             } else {
                 Text(verbatim: L("The other computer cannot take a second technician directly. Use a meeting link instead.")).foregroundStyle(.secondary)
             }
@@ -376,7 +376,7 @@ struct InviteColleagueSheet: View {
                 Button(L("Use a meeting link instead")) { Task { link = await session.meetingLink() } }.linkButton()
                 Spacer()
                 Button(L("Close")) { dismiss() }.keyboardShortcut(.cancelAction)
-                if app.remote.peerFeatures.contains("join") {
+                if session.remote.peerFeatures.contains("join") {
                     Button(L("Send invitation")) {
                         guard let id = Format.parseRemoteId(device) else { session.error = L("Enter a nine-digit connection ID"); return }
                         session.invite(colleague: nil, device: id, control: control)

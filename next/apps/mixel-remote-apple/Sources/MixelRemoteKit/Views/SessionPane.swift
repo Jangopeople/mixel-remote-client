@@ -42,7 +42,7 @@ struct SessionStage: View {
     @State private var tool: SessionWorkspaceView.Tool?
     @State private var inviting = false
 
-    var remote: RemoteStatus { app.remote }
+    var remote: RemoteStatus { session.remote }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -82,7 +82,7 @@ struct SessionStage: View {
         ZStack {
             Theme.stage
             RemoteScreen(session: session)
-            if session.frame != nil { DrawingOverlay(drawing: drawing, pictureSize: session.size) }
+            if session.frame != nil, session.focused { DrawingOverlay(drawing: drawing, pictureSize: session.size) }
             if session.frame == nil {
                 VStack(spacing: 12) {
                     ProgressView().controlSize(.large).tint(.white)
@@ -129,7 +129,7 @@ struct SessionNoticeBanner: View {
     @ObservedObject var session: SessionModel
 
     var body: some View {
-        let status = app.remote
+        let status = session.remote
         if status.passwordSession != nil || session.lastRequestPassword || status.unattendedSession {
             TimelineView(.periodic(from: Date(), by: 1)) { context in
                 let ends = status.passwordSession?.endsAt.flatMap(Format.parseDate)
@@ -213,7 +213,7 @@ struct SessionBar: View {
     @Binding var inviting: Bool
     @State private var quality = false
 
-    var remote: RemoteStatus { app.remote }
+    var remote: RemoteStatus { session.remote }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -444,7 +444,13 @@ public struct SessionWindowView: View {
             .tint(Theme.brand)
             .onChange(of: workspace.tab(peer) == nil) { ended in if ended { window?.close() } }
             .onChange(of: workspace.isInWindow(peer)) { inWindow in if !inWindow { window?.close() } }
-            .onDisappear { workspace.windowClosed(peer) }
+            .onDisappear { workspace.windowFocusChanged(peer, focused: false); workspace.windowClosed(peer) }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
+                if let window, (note.object as? NSWindow) === window { workspace.windowFocusChanged(peer, focused: true) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { note in
+                if let window, (note.object as? NSWindow) === window { workspace.windowFocusChanged(peer, focused: false) }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .mixelFocusSessionWindow)) { note in
                 if (note.object as? UInt32) == peer { window?.makeKeyAndOrderFront(nil) }
             }

@@ -47,7 +47,19 @@ public final class AppModel: ObservableObject {
     @Published public var verificationCode = ""
 
     public lazy var devices = DevicesModel(app: self)
-    public lazy var session = SessionModel(app: self)
+    /// The model of no session: stands in for `session` while none is open, and ends the session this
+    /// computer shares.
+    public lazy var idleSession = SessionModel(app: self)
+    /// One model per computer this app views, keyed by its Remote ID (several sessions at once).
+    @Published public private(set) var sessionModels: [UInt32: SessionModel] = [:]
+    /// The models in the engine's order (oldest first).
+    public private(set) var sessionOrder: [UInt32] = []
+    /// The session the person works in: the focused one, else the oldest, else the idle model.
+    public var session: SessionModel {
+        if let peer = workspace.focusedPeer, let model = sessionModels[peer] { return model }
+        for peer in sessionOrder { if let model = sessionModels[peer], model.item != nil { return model } }
+        return idleSession
+    }
     public lazy var host = HostModel(app: self)
     public lazy var company = CompanyModel(app: self)
     public lazy var settings = SettingsModel(app: self)
@@ -71,6 +83,14 @@ public final class AppModel: ObservableObject {
     var wentOffline = false
     private var autoTries = 0
     private var nextAutoTry = Date.distantPast
+    struct RequestFlags: Equatable { var unattended = false; var password = false }
+    private var requests: [UInt32: RequestFlags] = [:]
+    private var lastRequest = RequestFlags()
+    func requestFlags(for peer: UInt32?) -> RequestFlags { peer.flatMap { requests[$0] } ?? lastRequest }
+    func setRequestFlags(for peer: UInt32?, _ change: (inout RequestFlags) -> Void) {
+        if let peer { var flags = requests[peer] ?? lastRequest; change(&flags); requests[peer] = flags; lastRequest = flags }
+        else { change(&lastRequest) }
+    }
     private var loop: Task<Void, Never>?
     private var lastAccountRead = Date.distantPast
     private var accountKey = ""
@@ -130,13 +150,61 @@ public final class AppModel: ObservableObject {
         let previous = remote
         if next != previous { remote = next }
         if next.phase == "ready" { autoTries = 0; nextAutoTry = .distantPast }
-        session.statusChanged(from: previous, to: next)
-        drawing.sessionChanged(next.phase == "active" && !next.sharing ? next.session : nil)
+        syncSessions(next)
+        idleSession.statusChanged(from: previous, to: next)
+        let focused = session
+        assistant.sessionChanged(focused.item != nil ? focused.sessionId : next.session)
+        drawing.sessionChanged(focused.item?.phase == "active" ? focused.sessionId : nil)
         reports.statusChanged(from: previous, to: next)
         host.statusChanged(from: previous, to: next)
         devices.statusChanged(from: previous, to: next)
         workspace.statusChanged(from: previous, to: next)
         await goOnlineIfNeeded()
+    }
+
+    /// One model per listed technician session: created when it appears, fed the engine's word on it,
+    /// dropped when it ends (a model waiting for its computer to restart stays).
+    func syncSessions(_ status: RemoteStatus) {
+        let items = status.viewerSessions
+        var listed = Set<UInt32>()
+        var order: [UInt32] = []
+        for item in items {
+            guard let peer = item.peer else { continue }
+            listed.insert(peer)
+            order.append(peer)
+            let model = sessionModels[peer] ?? makeSessionModel(peer)
+            model.update(item, status: status)
+        }
+        for (peer, model) in sessionModels where !listed.contains(peer) {
+            model.ended(status: status)
+            if !model.keepsAlive { sessionModels[peer] = nil }
+        }
+        sessionOrder = order
+    }
+
+    private func makeSessionModel(_ peer: UInt32) -> SessionModel {
+        let model = SessionModel(app: self, peer: peer)
+        sessionModels[peer] = model
+        return model
+    }
+
+    /// Stops every session picture (going offline, quitting).
+    func clearSessions() {
+        for model in sessionModels.values { model.clear() }
+        idleSession.clear()
+    }
+
+    /// Ends the technician session with this stable id (and only that one).
+    public func closeSession(_ id: String) {
+        Task {
+            try? await engine.perform("remote_close", ["session": id])
+            await refreshRemote()
+        }
+    }
+
+    /// Cancels every request still waiting for the other side (outgoing or negotiating).
+    public func cancelRequests() {
+        for item in remote.viewerSessions where ["outgoing", "negotiating"].contains(item.phase) { closeSession(item.id) }
     }
 
     /// A set-up computer goes online by itself once someone is signed in, so the person who needs
@@ -262,7 +330,7 @@ public final class AppModel: ObservableObject {
 
     public func goOffline() {
         wentOffline = true
-        session.clear()
+        clearSessions()
         act { try await self.engine.perform("remote_disconnect") }
     }
 
@@ -329,16 +397,18 @@ public final class AppModel: ObservableObject {
             }
             progress = L("Connecting… The person allows the session on their phone.")
         }
-        if let state = await status(), state.phase != "ready" {
+        // Connect stays possible while fewer than `max_sessions` are open: the engine is the judge of the
+        // limit (typed error `too_many_sessions`); an older engine (one session) needs `ready`.
+        if let state = await status(), !state.canRequestSession, state.sessions == nil || state.sharing || state.viewerSessions.count < state.sessionLimit {
             throw EngineFailure(["active", "incoming", "outgoing"].contains(state.phase)
                 ? "End the current session first, then connect again."
                 : "This computer is not ready to connect yet. Please try again in a moment.")
         }
         struct Request: Encodable { var host: UInt32; var password: String?; var unattended: Bool }
-        try await engine.perform("remote_request", Request(host: id, password: password?.isEmpty == false ? password : nil, unattended: phone ? false : unattended))
-        session.lastRequestUnattended = unattended && !phone
-        session.lastRequestPassword = password?.isEmpty == false
-        progress = session.lastRequestUnattended
+        // 2.1 engines answer with the new session's stable id; older ones with null.
+        _ = try await engine.run("remote_request", Request(host: id, password: password?.isEmpty == false ? password : nil, unattended: phone ? false : unattended), as: JSONValue.self)
+        setRequestFlags(for: id) { $0.unattended = unattended && !phone; $0.password = password?.isEmpty == false }
+        progress = requestFlags(for: id).unattended
             ? L("Requesting unattended access…")
             : L("Waiting for the other person to accept your request.")
     }
@@ -346,6 +416,11 @@ public final class AppModel: ObservableObject {
     /// The status line of the connection, as the desktop app words it.
     public var connectionMessage: String {
         if session.stopping { return L("Ending the session…") }
+        if remote.requesting, let item = remote.viewerSessions.last(where: { ["outgoing", "negotiating"].contains($0.phase) }) {
+            return item.phase == "outgoing" && requestFlags(for: item.peer).unattended
+                ? L("Requesting unattended access…")
+                : item.phase == "outgoing" ? L("Waiting for the other person to accept your request.") : L("Connecting securely…")
+        }
         switch remote.phase {
         case "offline":
             if remote.controllerOnly {
@@ -372,7 +447,7 @@ public final class AppModel: ObservableObject {
     /// The installer starts the new version about a second later, so this waits at most 0.7 s.
     func quitForUpdate() async {
         stop()
-        session.clear()
+        clearSessions()
         let engine = self.engine
         final class Done: @unchecked Sendable { var value = false }
         let done = Done()
@@ -387,7 +462,7 @@ public final class AppModel: ObservableObject {
     /// Before the app quits: end sessions, go offline.
     public func shutdown() async {
         stop()
-        session.clear()
+        clearSessions()
         try? await engine.shutdown()
     }
 }

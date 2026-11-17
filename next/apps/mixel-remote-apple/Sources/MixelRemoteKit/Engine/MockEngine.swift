@@ -19,6 +19,9 @@ public final class MockEngine: EngineAPI, @unchecked Sendable {
     private var recorded: [Call] = []
     private var frames: [Data] = []
     private var inputs: [String] = []
+    private var inputSessions: [(session: String, json: String)] = []
+    private var sessionFrames: [String: [Data]] = [:]
+    private var fetched: [String] = []
     public var info: EngineInfo
 
     public init(platform: String = "macos", controllerOnly: Bool = false) {
@@ -44,10 +47,16 @@ public final class MockEngine: EngineAPI, @unchecked Sendable {
         lock.withLock { handlers[command] = handler }
     }
     public func queue(frame: Data) { lock.withLock { frames.append(frame) } }
+    /// A picture only this session's mailbox hands out (several sessions at once: one mailbox each).
+    public func queue(frame: Data, session: String) { lock.withLock { sessionFrames[session, default: []].append(frame) } }
 
     public var calls: [Call] { lock.withLock { recorded } }
     public func calls(_ command: String) -> [Call] { calls.filter { $0.command == command } }
     public var sentInput: [String] { lock.withLock { inputs } }
+    /// Every input event with the session id it was sent to.
+    public var sentInputSessions: [(session: String, json: String)] { lock.withLock { inputSessions } }
+    /// The session id of every picture fetch (`next_video`).
+    public var videoFetches: [String] { lock.withLock { fetched } }
 
     public func call(_ command: String, json args: String) async throws -> String {
         let (reply, handler): (Result<String, EngineFailure>?, (@Sendable (String) -> Result<String, EngineFailure>)?) = lock.withLock {
@@ -60,6 +69,13 @@ public final class MockEngine: EngineAPI, @unchecked Sendable {
 
     public func nextVideo(session: String, compressed: Bool) async throws -> Data {
         lock.withLock {
+            fetched.append(session)
+            if var own = sessionFrames[session], !own.isEmpty {
+                compressedRequests.append(compressed)
+                let frame = own.removeFirst()
+                sessionFrames[session] = own
+                return frame
+            }
             if !frames.isEmpty { compressedRequests.append(compressed) }
             return frames.isEmpty ? Data() : frames.removeFirst()
         }
@@ -69,7 +85,7 @@ public final class MockEngine: EngineAPI, @unchecked Sendable {
     public var videoRequestsCompressed: [Bool] { lock.withLock { compressedRequests } }
 
     public func input(session: String, json event: String) async throws -> Bool {
-        lock.withLock { inputs.append(event) }
+        lock.withLock { inputs.append(event); inputSessions.append((session, event)) }
         return true
     }
 

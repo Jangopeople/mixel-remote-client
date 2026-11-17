@@ -1,7 +1,7 @@
 #!/bin/bash
 # build-core.sh [macos] [ios]: builds the Rust engine (crates/mixel_core_ffi) as static libraries,
 # generates its Swift interface and packs Core/MixelCoreFFI.xcframework.
-#   macos: Apple silicon + Intel (one universal library)
+#   macos: Apple silicon + Intel (one universal library; ARM_ONLY=1 builds Apple silicon only, for lab runs)
 #   ios:   iPhone/iPad devices + Apple-silicon simulator (the controller engine)
 # One build at a time and 4 compile jobs, so the Mac stays usable. Version: MIXEL_ENGINE_APP_VERSION.
 set -euo pipefail
@@ -21,9 +21,14 @@ ARGS=()
 for platform in "${PLATFORMS[@]}"; do
   case $platform in
     macos)
-      build aarch64-apple-darwin; build x86_64-apple-darwin
       mkdir -p "$OUT/macos"
-      lipo -create "$(lib aarch64-apple-darwin)" "$(lib x86_64-apple-darwin)" -output "$OUT/macos/libmixel_core_ffi.a"
+      if [ -n "${ARM_ONLY:-}" ]; then   # lab builds: Apple silicon only (much faster)
+        build aarch64-apple-darwin
+        cp "$(lib aarch64-apple-darwin)" "$OUT/macos/libmixel_core_ffi.a"
+      else
+        build aarch64-apple-darwin; build x86_64-apple-darwin
+        lipo -create "$(lib aarch64-apple-darwin)" "$(lib x86_64-apple-darwin)" -output "$OUT/macos/libmixel_core_ffi.a"
+      fi
       ARGS+=(-library "$OUT/macos/libmixel_core_ffi.a" -headers "$OUT/headers")
       BINDINGS_FROM=$(lib aarch64-apple-darwin)
       ;;

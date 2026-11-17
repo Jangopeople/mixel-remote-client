@@ -1,9 +1,15 @@
 import CoreGraphics
 import Foundation
 
-/// The session on the technician's side: the remote picture, keyboard and mouse (or touch), and the
+/// One session on the technician's side: the remote picture, keyboard and mouse (or touch), and the
 /// toolbar (displays, privacy screen, block input, pointer, lock, Ctrl+Alt+Del, restart, sound,
 /// clipboard, files, chat, recording, invite a colleague, switch sides, end).
+///
+/// The app holds one model per computer it views (`AppModel.sessionModels`, keyed by the computer's
+/// Remote ID); each is bound to its session's stable id (`sessionId`), which every engine call carries.
+/// Input, clipboard and toolbar actions only go out while this session is the focused one
+/// (`WorkspaceModel.isFocused`). The model without a computer (`peer == nil`, `AppModel.idleSession`)
+/// stands for "no session" and for the session this computer shares (it ends that one by consent).
 @MainActor
 public final class SessionModel: ObservableObject {
     // The app model lives as long as the app; its parts keep it (no reference cycle matters there).
@@ -39,9 +45,6 @@ public final class SessionModel: ObservableObject {
     /// Decode H.264 on this device (tests and screenshots may turn it off).
     public var useHardwareDecoding = true
 
-    var lastRequestUnattended = false
-    /// The request this app sent carried a one-time password (the engine may not report it itself yet).
-    var lastRequestPassword = false
     private var video: Task<Void, Never>?
     private var tools: Task<Void, Never>?
     private var viewingSession: String?
@@ -64,35 +67,102 @@ public final class SessionModel: ObservableObject {
         var session: String
     }
 
-    init(app: AppModel) { self.app = app }
+    /// The Remote ID of the computer this session views (`nil`: the model of no session).
+    public let peer: UInt32?
+    /// The session's stable id (what every engine call carries).
+    public private(set) var sessionId: String?
+    /// The engine's last word on this session.
+    public private(set) var item: RemoteSessionItem?
+    private var lastStatus: RemoteStatus?
 
-    public var remote: RemoteStatus { app.remote }
-    public var session: String? { remote.session }
+    init(app: AppModel, peer: UInt32? = nil) {
+        self.app = app
+        self.peer = peer
+    }
+
+    /// The status as this session sees it: the single-session fields describe this session.
+    public var remote: RemoteStatus {
+        guard peer != nil else { return app.remote }
+        if let item { return app.remote.describing(item) }
+        return lastStatus ?? app.remote
+    }
+    /// The id engine calls carry: the stable session id (the shared session's id for the idle model).
+    public var session: String? { peer == nil ? remote.session : sessionId }
+    /// This session is the one keyboard, mouse, clipboard and toolbar actions go to.
+    public var focused: Bool {
+        guard let peer else { return true }
+        return app.workspace.isFocused(peer)
+    }
     /// The picture is shown and keyboard and mouse go to the other computer.
     public var controllable: Bool {
         !stopping && remote.viewing && remote.control && frame != nil && !locallyStopped
     }
+
+    var lastRequestUnattended: Bool {
+        get { app.requestFlags(for: peer).unattended }
+        set { app.setRequestFlags(for: peer) { $0.unattended = newValue } }
+    }
+    /// The request this app sent carried a one-time password (the engine may not report it itself yet).
+    var lastRequestPassword: Bool {
+        get { app.requestFlags(for: peer).password }
+        set { app.setRequestFlags(for: peer) { $0.password = newValue } }
+    }
     var locallyStopped: Bool { remote.consent != nil && remote.consent == stoppedConsent }
 
+    /// The model of no session follows the shared session (this computer is helped) and nothing else.
     func statusChanged(from previous: RemoteStatus, to next: RemoteStatus) {
+        guard peer == nil else { return }
         if next.session != toggleSession {
             toggleSession = next.session
-            app.assistant.sessionChanged(next.session)
             privacy = false; blockInput = false; lockWhenDone = false; pointerMode = false; sound = true
             chat = []; files = nil; clipboardResult = ""
         }
-        if next.viewing, !stopping, !locallyStopped, let session = next.session {
-            if viewingSession != session { startVideo(session) }
+        if viewingSession != nil { clear() }
+        if !next.inSession { stoppedConsent = nil }
+    }
+
+    /// The engine listed this session: bind to its stable id and follow it.
+    func update(_ item: RemoteSessionItem, status: RemoteStatus) {
+        guard peer != nil else { return }
+        self.item = item
+        let next = status.describing(item)
+        lastStatus = next
+        if item.id != toggleSession {
+            toggleSession = item.id
+            sessionId = item.id
+            privacy = false; blockInput = false; lockWhenDone = false; pointerMode = false; sound = true
+            chat = []; files = nil; clipboardResult = ""; stoppedConsent = nil
+            if viewingSession != nil { clear() }
+        }
+        // Several sessions run side by side: each keeps fetching its own pictures, so a tab that comes
+        // to the front shows a current picture at once (the engine keeps only the newest per session).
+        if next.viewing, !stopping, !locallyStopped {
+            if viewingSession != item.id { startVideo(item.id) }
         } else if viewingSession != nil {
             clear()
         }
         let recording = next.recording?.running == true
         if recording, recordingSince == nil { recordingSince = Date() } else if !recording, recordingSince != nil { recordingSince = nil }
-        if next.phase == "active" || ["incoming", "outgoing"].contains(next.phase) { startTools() }
+        if next.phase == "active" || next.phase == "outgoing" { startTools() }
         else { tools?.cancel(); tools = nil }
-        if !next.inSession { stoppedConsent = nil }
-        continueReconnect(next)
+        continueReconnect(status)
     }
+
+    /// The engine no longer lists this session (it ended, or the other side left).
+    func ended(status: RemoteStatus) {
+        let was = item != nil
+        item = nil
+        sessionId = nil
+        toggleSession = nil
+        tools?.cancel(); tools = nil
+        clear()
+        stoppedConsent = nil
+        stopping = false
+        if was || reconnect != nil { continueReconnect(status) }
+    }
+
+    /// An ended session's model is kept while it still waits for its computer to restart.
+    var keepsAlive: Bool { reconnect != nil }
 
     /// Stops the picture and forgets it.
     public func clear() {
@@ -183,7 +253,7 @@ public final class SessionModel: ObservableObject {
     /// Queues an input event; pointer moves and wheel scrolls coalesce with the previous unsent one.
     public func send(_ event: InputEvent) {
         guard let session else { return }
-        if case .releaseAll = event {} else if !controllable { return }
+        if case .releaseAll = event {} else if !controllable || !focused { return }
         if case .pointer = event, case .pointer = inputQueue.last {
             inputQueue[inputQueue.count - 1] = event
         } else if case let .wheel(h1, v1) = event, case let .wheel(h0, v0) = inputQueue.last {
@@ -259,7 +329,7 @@ public final class SessionModel: ObservableObject {
     // MARK: Toolbar
 
     func action(_ name: String, quiet: Bool = false) {
-        guard let session else { return }
+        guard let session, focused else { return }
         Task {
             do { _ = try await app.engine.send(input: .action(name), session: session) }
             catch { if !quiet { self.error = AppModel.message(error) } }
@@ -277,14 +347,14 @@ public final class SessionModel: ObservableObject {
     public func lockNow() { action("lock") }
     public func ctrlAltDel() { action("sas") }
     public func selectDisplay(_ index: UInt16) {
-        guard let session else { return }
+        guard let session, focused else { return }
         Task { _ = try? await app.engine.send(input: .selectDisplay(index), session: session) }
     }
 
     /// The first click arms, the second (within 5 s) restarts the remote computer; the app reconnects
     /// when it is back (up to 10 minutes).
     public func restartComputer() {
-        guard let session, let peer = remote.peer else { return }
+        guard let session, focused, let peer = remote.peer else { return }
         if !restartArmed {
             restartArmed = true
             Task { try? await Task.sleep(nanoseconds: 5_000_000_000); self.restartArmed = false }
@@ -296,10 +366,18 @@ public final class SessionModel: ObservableObject {
         action("restart")
     }
 
+    /// `status` is the whole engine status: the restart plan follows this computer's session in it.
     private func continueReconnect(_ status: RemoteStatus) {
         guard var plan = reconnect else { return }
-        if status.phase == "active" { if status.session != plan.session { reconnect = nil; notice = "" }; return }
-        guard !["negotiating", "outgoing", "deciding"].contains(status.phase) else { return }
+        if let item {
+            // The session of this computer is listed: the same one is still going down; a new one is the reconnect.
+            if item.id != plan.session { reconnect = nil; notice = "" }
+            return
+        }
+        if let other = status.viewerSessions.first(where: { $0.peer == plan.host }) {
+            if other.phase == "active", other.id != plan.session { reconnect = nil; notice = "" }
+            if other.phase != "closing" { return }
+        }
         let now = Date()
         if now > plan.until { reconnect = nil; error = L("The remote computer did not come back within 10 minutes."); return }
         if now.timeIntervalSince(plan.lastPresence) > 5 {
@@ -316,12 +394,12 @@ public final class SessionModel: ObservableObject {
             else if plan.unattended, now.timeIntervalSince(plan.since) > 60 { target = plan.host }
         }
         notice = L("The remote computer is restarting. Mixel Remote reconnects when it is back…")
-        if let target, status.phase == "ready", !app.busy, now.timeIntervalSince(plan.lastTry) > 15 {
+        if let target, status.canRequestSession, !app.busy, now.timeIntervalSince(plan.lastTry) > 15 {
             plan.lastTry = now
             let unattended = plan.unattended || target == plan.signin
             app.act {
                 struct Request: Encodable { var host: UInt32; var password: String?; var unattended: Bool }
-                try await self.app.engine.perform("remote_request", Request(host: target, password: nil, unattended: unattended))
+                _ = try await self.app.engine.run("remote_request", Request(host: target, password: nil, unattended: unattended), as: JSONValue.self)
             }
         }
         reconnect = plan
@@ -329,19 +407,36 @@ public final class SessionModel: ObservableObject {
 
     /// Renew the connection (new keys, same session).
     public func renew() {
-        guard let session else { return }
+        guard let session, focused else { return }
         app.act { try await self.app.engine.perform("remote_restart", ["session": session]) }
     }
 
     /// Ends the session for both sides.
     public func end() {
-        guard let consent = remote.consent, !stopping else { return }
-        stoppedConsent = consent
+        guard !stopping else { return }
+        if peer == nil {
+            // The session this computer shares: ended by its consent.
+            guard let consent = remote.consent else { return }
+            stoppedConsent = consent
+            stopping = true
+            clear()
+            error = ""
+            Task {
+                do { try await app.engine.perform("remote_stop_session", ["consent": consent]) }
+                catch { self.error = L("Could not confirm that the session ended. Try End session again.") + " " + AppModel.message(error) }
+                stopping = false
+                await app.refreshRemote()
+            }
+            return
+        }
+        // A technician session: only this one ends (the others keep running).
+        guard let id = sessionId else { return }
+        stoppedConsent = remote.consent
         stopping = true
         clear()
         error = ""
         Task {
-            do { try await app.engine.perform("remote_stop_session", ["consent": consent]) }
+            do { try await app.engine.perform("remote_close", ["session": id]) }
             catch { self.error = L("Could not confirm that the session ended. Try End session again.") + " " + AppModel.message(error) }
             stopping = false
             await app.refreshRemote()
@@ -351,7 +446,7 @@ public final class SessionModel: ObservableObject {
     // MARK: Clipboard, chat, files
 
     public func clipboard(push: Bool) {
-        guard let session else { return }
+        guard let session, focused else { return }
         clipboardResult = L("Transferring…")
         Task {
             do {
@@ -374,7 +469,7 @@ public final class SessionModel: ObservableObject {
 
     func readTools() async {
         let status = remote
-        if let session = status.session, status.phase == "active" {
+        if let session, status.phase == "active" {
             if let messages = try? await app.engine.run("remote_chat_messages", ["session": session], as: [ChatMessage]?.self) ?? nil, messages != chat { chat = messages }
         }
         if let consent = status.consent, status.files, status.phase == "active" {
@@ -385,7 +480,7 @@ public final class SessionModel: ObservableObject {
 
     public func sendChat() {
         let text = chatDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let session, !text.isEmpty else { return }
+        guard let session, focused, !text.isEmpty else { return }
         chatDraft = ""
         Task {
             do { try await app.engine.perform("remote_chat_send", ["session": session, "text": text]); await readTools() }
@@ -395,7 +490,7 @@ public final class SessionModel: ObservableObject {
 
     /// Sends the file at `path` (chosen in the app's Open panel).
     public func sendFile(path: String) {
-        guard let consent = remote.consent else { return }
+        guard let consent = remote.consent, focused else { return }
         Task {
             do { try await app.engine.perform("remote_file_send", ["consent": consent, "path": path]); await readTools() }
             catch { self.error = AppModel.message(error) }
@@ -409,7 +504,7 @@ public final class SessionModel: ObservableObject {
     }
 
     public func acceptFile(_ id: String, path: String) {
-        guard let consent = remote.consent else { return }
+        guard let consent = remote.consent, focused else { return }
         Task {
             do { try await app.engine.perform("remote_file_accept", ["consent": consent, "id": id, "path": path]); await readTools() }
             catch { self.error = AppModel.message(error) }
@@ -417,7 +512,7 @@ public final class SessionModel: ObservableObject {
     }
 
     public func cancelFile(_ id: String) {
-        guard let consent = remote.consent else { return }
+        guard let consent = remote.consent, focused else { return }
         Task { try? await app.engine.perform("remote_file_cancel", ["consent": consent, "id": id]); await readTools() }
     }
 
@@ -436,12 +531,12 @@ public final class SessionModel: ObservableObject {
     }
 
     public func mayRecord() async -> Bool {
-        guard let session else { return false }
+        guard let session, focused else { return false }
         return (try? await app.engine.run("remote_record_may_start", ["session": session], as: Bool.self)) ?? false
     }
 
     public func startRecording(path: String) {
-        guard let session else { return }
+        guard let session, focused else { return }
         recordingPending = true
         Task {
             do { try await app.engine.perform("remote_record_start", ["session": session, "path": path]) }
@@ -452,7 +547,7 @@ public final class SessionModel: ObservableObject {
     }
 
     public func stopRecording() {
-        guard let session else { return }
+        guard let session, focused else { return }
         recordingPending = true
         Task {
             do { try await app.engine.perform("remote_record_stop", ["session": session]) }
@@ -465,7 +560,7 @@ public final class SessionModel: ObservableObject {
     // MARK: Colleagues, switching sides, meetings
 
     public func invite(colleague user: String?, device: UInt32?, control: Bool) {
-        guard let session else { return }
+        guard let session, focused else { return }
         app.act {
             struct Args: Encodable { var session: String; var user: String?; var device: UInt32?; var control: Bool }
             try await self.app.engine.perform("remote_invite", Args(session: session, user: user, device: device, control: control))
@@ -481,18 +576,18 @@ public final class SessionModel: ObservableObject {
     }
 
     public var canSwitchSides: Bool {
-        remote.phase == "active" && remote.peerFeatures.contains("switch")
+        remote.phase == "active" && remote.peerFeatures.contains("switch") && (peer == nil || app.remote.viewerSessions.count <= 1)
     }
 
     public func switchSides() {
-        guard let session else { return }
+        guard let session, focused else { return }
         app.act { try await self.app.engine.perform("remote_switch_sides", ["session": session]) }
     }
 
     /// Show my screen (older computers without switching sides): a Mixel Meet room the other side is
     /// asked to watch.
     public func showMyScreen() {
-        guard let session else { return }
+        guard let session, focused else { return }
         app.act {
             let room: MeetingRoom = try await self.app.engine.run("meeting_create")
             if let url = URL(string: room.host) { self.app.openURL(url) }

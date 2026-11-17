@@ -44,10 +44,12 @@ public final class DrawingModel: ObservableObject {
 
     /// The other computer shows drawings (it announced `draw`), and this side is the technician.
     public var available: Bool {
-        let remote = app.remote
-        return remote.phase == "active" && !remote.sharing && remote.session != nil && remote.peerFeatures.contains("draw")
+        // Drawing goes to the focused session.
+        let focused = app.session
+        guard focused.item != nil, focused.focused else { return false }
+        return focused.remote.phase == "active" && focused.remote.peerFeatures.contains("draw")
     }
-    var inPicture: Bool { app.remote.peerFeatures.contains("drawpic") }
+    var inPicture: Bool { app.session.remote.peerFeatures.contains("drawpic") }
 
     func sessionChanged(_ next: String?) {
         guard next != session else { return }
@@ -157,7 +159,8 @@ public final class DrawingModel: ObservableObject {
     struct DrawArgs: Encodable { var session: String; var message: Message }
 
     private func send(_ message: Message) {
-        guard let session = app.remote.session else { return }
+        let focused = app.session
+        guard focused.focused, let session = focused.sessionId else { return }
         Task { _ = try? await app.engine.run("remote_draw", DrawArgs(session: session, message: message), as: Bool.self) }
     }
 

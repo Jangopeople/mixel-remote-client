@@ -14257,6 +14257,94 @@
         }
       }
     },
+    "You already have %d sessions open, the most this app can hold. End one to connect to another computer.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sie haben bereits %d Sitzungen offen, mehr kann diese App nicht halten. Beenden Sie eine, um sich mit einem weiteren Computer zu verbinden."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vous avez déjà %d sessions ouvertes, le maximum que cette application peut gérer. Terminez-en une pour vous connecter à un autre ordinateur."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ha già %d sessioni aperte, il massimo che questa app può gestire. Ne termini una per collegarsi a un altro computer."
+          }
+        }
+      }
+    },
+    "You already have the most sessions open this app can hold. End one to connect to another computer.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sie haben bereits die höchste Zahl an Sitzungen offen, die diese App halten kann. Beenden Sie eine, um sich mit einem weiteren Computer zu verbinden."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vous avez déjà le nombre maximal de sessions que cette application peut gérer. Terminez-en une pour vous connecter à un autre ordinateur."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ha già aperto il numero massimo di sessioni che questa app può gestire. Ne termini una per collegarsi a un altro computer."
+          }
+        }
+      }
+    },
+    "You are already connected to this computer.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sie sind mit diesem Computer bereits verbunden."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vous êtes déjà connecté à cet ordinateur."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "È già collegato a questo computer."
+          }
+        }
+      }
+    },
+    "You are already connected to this computer. Switch to its tab.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sie sind mit diesem Computer bereits verbunden. Wechseln Sie zu seinem Tab."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vous êtes déjà connecté à cet ordinateur. Passez à son onglet."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "È già collegato a questo computer. Passi alla sua scheda."
+          }
+        }
+      }
+    },
     "You are using this device.": {
       "localizations": {
         "de": {
