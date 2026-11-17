@@ -124,6 +124,41 @@ public static class DemoFixtures
         engine.Reply("remote_record_may_start", "true");
     }
 
+    /// <summary>Remote IDs of the computers of <see cref="Multi"/>.</summary>
+    public static readonly uint[] Peers = [731_204_118, 268_455_901, 519_003_442, 604_118_273, 377_905_620];
+
+    /// <summary>The stable id of session <paramref name="index"/> (0 based) of <see cref="Multi"/>.</summary>
+    public static string StableId(int index) => $"5e55{index:0000}-0000-4000-8000-00000000000{index}";
+
+    /// <summary>
+    /// The status of an engine that runs several technician sessions (engine 2.1): <paramref name="count"/> sessions, all active,
+    /// to <see cref="Peers"/>, each with its own stable id, and the single-session fields of the oldest one.
+    /// </summary>
+    public static RemoteStatus Multi(int count, string phase = "active", int limit = 4)
+    {
+        var sessions = Enumerable.Range(0, count).Select(index => new SessionStatus
+        {
+            Id = StableId(index), Session = $"7a00{index:0000}-0000-4000-8000-000000000000", Peer = Peers[index], Device = Peers[index], Phase = phase,
+            Consent = $"c0c0c0c0-0000-4000-8000-00000000000{index}", Control = true, Clipboard = true, Files = true,
+            Recording = new RecordingView { Phase = "ready" }, Displays = 1,
+            HostActions = ["privacy", "block", "pointer", "lock", "lockend", "sas", "restart", "sound"], PeerFeatures = ["join", "switch", "draw"],
+            Quality = new SessionQuality { Pictures = 120, PicturesPerSecond = 24, PictureAgeMs = 30 }, StartedAt = 1_800_000_000UL + (ulong)index,
+        }).ToList();
+        var oldest = sessions.Count > 0 ? sessions[0] : null;
+        return new RemoteStatus
+        {
+            Phase = oldest?.Phase ?? "ready", Host = ThisComputer, Online = [.. Peers], Sessions = sessions, MaxSessions = limit,
+            Session = oldest?.Session, Peer = oldest?.Peer, Consent = oldest?.Consent, Control = oldest?.Control ?? false,
+        };
+    }
+
+    /// <summary>An engine with <paramref name="count"/> sessions running (<see cref="Multi"/>).</summary>
+    public static void Viewing(MockEngine engine, int count)
+    {
+        Viewing(engine);
+        engine.ReplyValue("remote_status", Multi(count));
+    }
+
     public static void Hosted(MockEngine engine)
     {
         Company(engine);

@@ -20,6 +20,9 @@ public sealed class MockEngine : IEngine
     private readonly List<Call> recorded = [];
     private readonly Queue<byte[]> frames = new();
     private readonly List<string> inputs = [];
+    private readonly List<(string Session, string Json)> sessionInputs = [];
+    private readonly Dictionary<string, Queue<byte[]>> sessionFrames = [];
+    private readonly List<string> videoRequests = [];
 
     public MockEngine(string platform = "windows", bool controllerOnly = false)
     {
@@ -51,6 +54,28 @@ public sealed class MockEngine : IEngine
     public void QueueFrame(byte[] frame)
     {
         lock (gate) { frames.Enqueue(frame); }
+    }
+
+    /// <summary>A picture for one session only (<c>next_video(session)</c>); sessions without their own queue use <see cref="QueueFrame(byte[])"/>.</summary>
+    public void QueueFrame(string session, byte[] frame)
+    {
+        lock (gate)
+        {
+            if (!sessionFrames.TryGetValue(session, out var queue)) sessionFrames[session] = queue = new Queue<byte[]>();
+            queue.Enqueue(frame);
+        }
+    }
+
+    /// <summary>The session of every picture request, in order (tests check which sessions are fetched).</summary>
+    public IReadOnlyList<string> VideoRequests
+    {
+        get { lock (gate) { return [.. videoRequests]; } }
+    }
+
+    /// <summary>Every input event with the session it was sent to.</summary>
+    public IReadOnlyList<(string Session, string Json)> SentInputs
+    {
+        get { lock (gate) { return [.. sessionInputs]; } }
     }
 
     public IReadOnlyList<Call> Calls
@@ -86,12 +111,21 @@ public sealed class MockEngine : IEngine
 
     public Task<byte[]> NextVideoAsync(string session, bool compressed)
     {
-        lock (gate) { return Task.FromResult(frames.Count > 0 ? frames.Dequeue() : []); }
+        lock (gate)
+        {
+            videoRequests.Add(session);
+            if (sessionFrames.TryGetValue(session, out var own)) return Task.FromResult(own.Count > 0 ? own.Dequeue() : []);
+            return Task.FromResult(frames.Count > 0 ? frames.Dequeue() : []);
+        }
     }
 
     public Task<bool> InputAsync(string session, string json)
     {
-        lock (gate) { inputs.Add(json); }
+        lock (gate)
+        {
+            inputs.Add(json);
+            sessionInputs.Add((session, json));
+        }
         return Task.FromResult(true);
     }
 

@@ -273,6 +273,9 @@ public sealed class ViewModelTests
         }
     }
 
+    /// <summary>The session's tab is in front: it is the focused session that gets input and toolbar actions.</summary>
+    private static void Focus(AppModel app) => app.Workspace.Selected = WorkspaceTab.Session(app.Remote.Peer!.Value);
+
     [TestMethod]
     public async Task Session_reads_pictures_and_sends_input_only_while_controllable()
     {
@@ -281,12 +284,15 @@ public sealed class ViewModelTests
         engine.QueueFrame(VideoFrame.Sample(64, 40, 1));
         engine.QueueFrame(VideoFrame.Sample(64, 40, 2));
         var app = new AppModel(engine);
-        app.Session.IdleDelay = 1;
+        app.PictureIdleDelay = 1;
+        // The tab is in front, so the picture keeps coming (a session in a background tab stops after its first picture).
+        app.Workspace.Selected = WorkspaceTab.Session(731_204_118);
         await app.RefreshAccount();
         await app.RefreshRemote();
         for (var round = 0; round < 50 && app.Session.Frame?.Sequence != 2; round++) await Task.Delay(10);
         Assert.AreEqual(2ul, app.Session.Frame?.Sequence);
         Assert.IsTrue(app.Session.Controllable);
+        Focus(app);
         app.Session.MoveTo(0.5, 1.2);
         app.Session.Press(KeyMap.Usage(0x2E, false)!.Value, KeyMap.Control);
         await app.Session.Flushing;
@@ -305,6 +311,7 @@ public sealed class ViewModelTests
         DemoFixtures.Viewing(engine);
         var app = await DemoFixtures.App(engine);
         app.Session.ShowSample(VideoFrame.Sample(64, 40, 1));
+        Focus(app);
         app.Session.TogglePrivacy();
         app.Session.ToggleBlockInput();
         app.Session.ToggleLockWhenDone();
@@ -324,6 +331,7 @@ public sealed class ViewModelTests
         var engine = new MockEngine();
         DemoFixtures.Viewing(engine);
         var app = await DemoFixtures.App(engine);
+        Focus(app);
         app.Session.RestartComputer();
         Assert.IsTrue(app.Session.RestartArmed);
         await Task.Delay(10);
@@ -335,14 +343,15 @@ public sealed class ViewModelTests
     }
 
     [TestMethod]
-    public async Task End_session_uses_the_consent_and_stops_the_picture()
+    public async Task End_session_closes_that_session_by_its_id_and_stops_the_picture()
     {
         var engine = new MockEngine();
         DemoFixtures.Viewing(engine);
         var app = await DemoFixtures.App(engine);
         app.Session.ShowSample(VideoFrame.Sample(64, 40, 1));
         await app.Session.End();
-        Assert.AreEqual(DemoFixtures.ConsentId, engine.CallsOf("remote_stop_session").Single().Object["consent"]!.GetValue<string>());
+        Assert.AreEqual(DemoFixtures.SessionId, engine.CallsOf("remote_close").Single().Object["session"]!.GetValue<string>());
+        Assert.AreEqual(0, engine.CallsOf("remote_stop_session").Count);
         Assert.IsNull(app.Session.Frame);
         Assert.IsFalse(app.Session.Stopping);
     }
@@ -353,6 +362,7 @@ public sealed class ViewModelTests
         var engine = new MockEngine();
         DemoFixtures.Viewing(engine);
         var app = await DemoFixtures.App(engine);
+        Focus(app);
         await app.Session.ReadTools();
         Assert.AreEqual(2, app.Session.Chat.Count);
         Assert.AreEqual("driver-setup.exe", app.Session.Files?.Outgoing?.Name);
@@ -374,6 +384,7 @@ public sealed class ViewModelTests
         DemoFixtures.Viewing(engine);
         var app = await DemoFixtures.App(engine);
         app.ChooseSaveLocation = name => Task.FromResult<string?>(@"C:\Temp\" + name);
+        Focus(app);
         await app.Session.Record();
         Assert.AreEqual(@"C:\Temp\Mixel Remote recording.mp4", engine.CallsOf("remote_record_start").Single().Object["path"]!.GetValue<string>());
         engine.Reply("remote_record_may_start", "false");
@@ -661,6 +672,7 @@ public sealed class ViewModelTests
         engine.Reply("remote_draw", "true");
         var app = await DemoFixtures.App(engine);
         Assert.IsTrue(app.Session.CanDraw);
+        Focus(app);
         app.Session.Drawing = true;
         app.Session.DrawColor = 3;
         app.Session.BeginStroke(0.1, 0.1);

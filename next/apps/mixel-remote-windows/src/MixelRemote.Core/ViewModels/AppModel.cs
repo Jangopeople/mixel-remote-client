@@ -36,7 +36,7 @@ public sealed class AppModel : Observable
         Engine = engine;
         Preferences = preferences ?? new MemoryPreferences();
         Devices = new DevicesModel(this);
-        Session = new SessionModel(this);
+        idle = new SessionModel(this);
         Host = new HostModel(this);
         Company = new CompanyModel(this);
         Settings = new SettingsModel(this);
@@ -49,7 +49,24 @@ public sealed class AppModel : Observable
     public IEngine Engine { get; }
     public IPreferences Preferences { get; }
     public DevicesModel Devices { get; }
-    public SessionModel Session { get; }
+    private readonly SessionModel idle;
+    private readonly List<SessionModel> models = [];
+    private readonly Dictionary<uint, bool> requestedUnattended = [];
+    private RemoteStatus idleStatus = RemoteStatus.Offline;
+    private string sessionKeys = "";
+
+    /// <summary>The technician sessions the engine reports, oldest first: one model each (engine 2.1 runs up to four at once).</summary>
+    public IReadOnlyList<SessionModel> Sessions => [.. models.Where(model => model.Item is not null)];
+    /// <summary>The session of a device (by its Remote ID), or null.</summary>
+    public SessionModel? SessionFor(uint peer) => models.FirstOrDefault(model => model.Item is not null && model.Key == peer);
+    /// <summary>
+    /// The session that is in front (the focused one), else the oldest; the model without a session when none is viewed
+    /// (it also carries the hosted side). Screens of one session use <see cref="SessionFor"/>.
+    /// </summary>
+    public SessionModel Session => (Workspace.Focused is { } focused ? SessionFor(focused) : null) ?? Sessions.FirstOrDefault() ?? idle;
+    /// <summary>After a session to a company computer: the computer the technician may add a note to (Remote ID).</summary>
+    public uint? NoteFor { get; internal set; }
+    public void NoteTaken() => NoteFor = null;
     public HostModel Host { get; }
     public CompanyModel Company { get; }
     public SettingsModel Settings { get; }
@@ -162,12 +179,83 @@ public sealed class AppModel : Observable
             autoTries = 0;
             nextAutoTry = DateTimeOffset.MinValue;
         }
-        Session.StatusChanged(previous, now);
+        SyncSessions(now);
+        var idleNext = now.TechnicianSessions.Count == 0 ? now : RemoteStatus.Offline;
+        idle.StatusChanged(idleStatus, idleNext);
+        idleStatus = idleNext;
         Host.StatusChanged(previous, now);
         Devices.StatusChanged(previous, now);
         Workspace.Refresh(now);
         await GoOnlineIfNeeded();
     }
+
+    /// <summary>One model per technician session the engine lists; a session that is gone loses its model (unless a restart reconnects).</summary>
+    private void SyncSessions(RemoteStatus now)
+    {
+        var items = now.TechnicianSessions;
+        var changed = false;
+        foreach (var item in items)
+        {
+            var model = models.FirstOrDefault(candidate => candidate.Key == item.Peer);
+            if (model is null)
+            {
+                model = new SessionModel(this) { IdleDelay = idleDelay };
+                if (requestedUnattended.TryGetValue(item.Peer, out var unattended)) model.LastRequestUnattended = unattended;
+                models.Add(model);
+                changed = true;
+            }
+            else if (model.Item is null) changed = true;
+            model.Update(item, now);
+        }
+        foreach (var model in models.Where(model => model.Item is not null && !items.Any(item => item.Peer == model.Key)).ToList())
+        {
+            model.Ended();
+            changed = true;
+        }
+        foreach (var model in models.Where(model => model.Item is null).ToList())
+        {
+            if (!model.Reconnecting)
+            {
+                models.Remove(model);
+                requestedUnattended.Remove(model.Key);
+                model.Dispose();
+                continue;
+            }
+            model.ContinueReconnect(now, null, model.Key);
+        }
+        var keys = string.Join(',', models.Where(model => model.Item is not null).Select(model => model.Key));
+        if (changed || keys != sessionKeys)
+        {
+            sessionKeys = keys;
+            Raise(nameof(Sessions));
+        }
+    }
+
+    private int idleDelay = 4;
+    /// <summary>Milliseconds a session waits when no picture is ready (tests make it 1).</summary>
+    internal int PictureIdleDelay
+    {
+        get => idleDelay;
+        set
+        {
+            idleDelay = value;
+            idle.IdleDelay = value;
+            foreach (var model in models) model.IdleDelay = value;
+        }
+    }
+
+    /// <summary>
+    /// A new technician session may be requested now: this computer is ready, or it holds technician sessions and the
+    /// engine's limit (4) is not reached. Never while this computer is shared.
+    /// </summary>
+    public bool CanRequestSession(RemoteStatus status) =>
+        status.Phase == "ready" || (status.Sessions is { Count: > 0 } open && !status.Sharing && open.Count < status.SessionLimit);
+
+    /// <summary>The Connect button may be used: nothing runs, or another session fits.</summary>
+    public bool CanStartConnection => !Remote.InSession || CanRequestSession(Remote);
+
+    /// <summary>Cancels every request that still waits for the other side to accept.</summary>
+    public Task CancelRequests() => Task.WhenAll(Sessions.Where(model => model.Item is { Phase: "outgoing" }).Select(model => model.End()));
 
     /// <summary>
     /// A set-up computer goes online by itself once someone is signed in, so the person who needs help
@@ -212,6 +300,13 @@ public sealed class AppModel : Observable
             Busy = false;
             await RefreshRemote();
         }
+    }
+
+    /// <summary>Stops every session's picture and forgets it.</summary>
+    public void ClearSessions()
+    {
+        idle.Clear();
+        foreach (var model in models) model.Clear();
     }
 
     public static string Message(Exception error) => error is EngineFailure failure ? failure.Translated : error.Message;
@@ -337,7 +432,7 @@ public sealed class AppModel : Observable
     public Task GoOffline()
     {
         WentOffline = true;
-        Session.Clear();
+        ClearSessions();
         return Act(() => Engine.PerformAsync("remote_disconnect"));
     }
 
@@ -432,14 +527,18 @@ public sealed class AppModel : Observable
             }
             Progress = L("Connecting… The person allows the session on their phone.");
         }
-        if (await Status() is { } current && current.Phase != "ready")
+        // An engine that lists sessions allows several at once: it answers a request beyond its limit with a typed error,
+        // so only an older engine (one session) and a shared computer are turned back here.
+        if (await Status() is { } current && current.Phase != "ready" && !(current.Sessions is not null && !current.Sharing && current.Phase is "active" or "outgoing" or "negotiating" or "closing"))
         {
             throw new EngineFailure(current.Phase is "active" or "incoming" or "outgoing"
                 ? "End the current session first, then connect again."
                 : "This computer is not ready to connect yet. Please try again in a moment.");
         }
+        requestedUnattended[id] = unattended && !phone;
+        // The reply is the new session's stable id (an older engine answers null).
         await Engine.PerformAsync("remote_request", ("host", id), ("password", string.IsNullOrEmpty(password) ? null : password), ("unattended", !phone && unattended));
-        Session.LastRequestUnattended = unattended && !phone;
+        if (SessionFor(id) is { } started) started.LastRequestUnattended = unattended && !phone;
         Progress = L("Waiting for the other person to accept your request.");
     }
 
@@ -467,7 +566,7 @@ public sealed class AppModel : Observable
     public async Task Shutdown()
     {
         Stop();
-        Session.Clear();
+        ClearSessions();
         try { await Engine.ShutdownAsync(); } catch (EngineFailure) { }
     }
 }

@@ -94,8 +94,39 @@ public sealed record RemoteStatus
     public List<string> PeerFeatures { get; init; } = [];
     /// <summary>The session was started with a support password: when it ends (docs/mixel-remote-ui-engine-requests.md item 3; null until the engine reports it).</summary>
     public PasswordSession? PasswordSession { get; init; }
+    /// <summary>Technician sessions, oldest first (engine 2.1: several at once). null: an older engine that reports one session in the fields above.</summary>
+    public List<SessionStatus>? Sessions { get; init; }
+    /// <summary>How many technician sessions the engine allows at once (4); null from an older engine.</summary>
+    public int? MaxSessions { get; init; }
 
     public static readonly RemoteStatus Offline = new();
+
+    /// <summary>How many sessions an engine allows when it reports <c>sessions</c> without a limit.</summary>
+    public const int DefaultSessionLimit = 4;
+    /// <summary>The most technician sessions at once: what the engine says, 1 for an engine that has only the single-session fields.</summary>
+    public int SessionLimit => Sessions is null ? 1 : MaxSessions is > 0 ? MaxSessions.Value : DefaultSessionLimit;
+
+    /// <summary>
+    /// The sessions this app views as technician: <c>sessions</c>, or, for an older engine that does not send it,
+    /// the one session of the single-session fields (never one while this computer is shared).
+    /// </summary>
+    public IReadOnlyList<SessionStatus> TechnicianSessions => Sessions ?? LegacySession();
+
+    private List<SessionStatus> LegacySession()
+    {
+        if (Sharing || Peer is not { } peer || Phase is not ("outgoing" or "negotiating" or "active" or "closing")) return [];
+        return
+        [
+            new SessionStatus
+            {
+                Id = Session ?? "", Session = Session, Peer = peer, Device = peer, Phase = Phase, Message = Message, Consent = Consent,
+                Received = Received, Control = Control, Clipboard = Clipboard, Files = Files, RecordingPermitted = RecordingPermitted,
+                Recording = Recording, Displays = Displays, Display = Display, DisplayAll = DisplayAll, PrintJobs = PrintJobs,
+                HostActions = HostActions, SigninId = SigninId, HostMacs = HostMacs, MeetingOffer = MeetingOffer, PeerFeatures = PeerFeatures,
+                JoinedSession = JoinedSession, Switched = Switched,
+            },
+        ];
+    }
 
     /// <summary>Connected to Mixel (this computer can be reached and can connect).</summary>
     public bool Connected => Phase is "ready" or "active" or "incoming" or "outgoing" or "deciding" or "negotiating";
@@ -104,6 +135,67 @@ public sealed record RemoteStatus
     /// <summary>This app views and (maybe) controls another computer right now.</summary>
     public bool Viewing => Phase == "active" && !Sharing && Session is not null;
     public bool Offers(string action) => HostActions.Contains(action);
+}
+
+/// <summary>The picture facts of one session (remote_status.sessions[].quality).</summary>
+public sealed record SessionQuality
+{
+    public ulong Pictures { get; init; }
+    /// <summary>0 when no picture came for 3 seconds.</summary>
+    public double PicturesPerSecond { get; init; }
+    public ulong? PictureAgeMs { get; init; }
+}
+
+/// <summary>
+/// One technician session of the engine (remote_status.sessions[]). <see cref="Id"/> is stable for the whole
+/// session; <see cref="Session"/> is the connection service's id of the current transport and changes at every
+/// renewal (about every 8.5 minutes). Every engine call for the session carries <see cref="Id"/>.
+/// </summary>
+public sealed record SessionStatus
+{
+    public string Id { get; init; } = "";
+    public string? Session { get; init; }
+    public uint Peer { get; init; }
+    public uint? Device { get; init; }
+    /// <summary>outgoing (asked, waiting for Accept), negotiating, active, closing.</summary>
+    public string Phase { get; init; } = "outgoing";
+    public string Message { get; init; } = "";
+    public string? Consent { get; init; }
+    public ulong Received { get; init; }
+    public bool Control { get; init; }
+    public bool Clipboard { get; init; }
+    public bool Files { get; init; }
+    public bool RecordingPermitted { get; init; }
+    public RecordingView? Recording { get; init; }
+    public ushort Displays { get; init; }
+    public ushort Display { get; init; }
+    public bool DisplayAll { get; init; }
+    public List<string> PrintJobs { get; init; } = [];
+    public List<string> HostActions { get; init; } = [];
+    public uint? SigninId { get; init; }
+    public List<string> HostMacs { get; init; } = [];
+    public List<string>? MeetingOffer { get; init; }
+    public List<string> PeerFeatures { get; init; } = [];
+    public bool JoinedSession { get; init; }
+    public bool Switched { get; init; }
+    public SessionQuality Quality { get; init; } = new();
+    public ulong StartedAt { get; init; }
+
+    /// <summary>The session is shown or being set up (not ended).</summary>
+    public bool Running => Phase is "outgoing" or "negotiating" or "active" or "closing";
+
+    /// <summary>
+    /// This session in the shape of the single-session status, on top of the connection-wide fields: the screens and
+    /// the session model read one session through it. <c>Session</c> is the stable id.
+    /// </summary>
+    public RemoteStatus Project(RemoteStatus top) => top with
+    {
+        Phase = Phase, Message = Message, Session = Id.Length == 0 ? Session : Id, Consent = Consent, Peer = Peer, Sharing = false,
+        Received = Received, Control = Control, Clipboard = Clipboard, Files = Files, RecordingPermitted = RecordingPermitted,
+        Recording = Recording, Displays = Displays, Display = Display, DisplayAll = DisplayAll, PrintJobs = PrintJobs,
+        HostActions = HostActions, SigninId = SigninId, HostMacs = HostMacs, MeetingOffer = MeetingOffer, PeerFeatures = PeerFeatures,
+        JoinedSession = JoinedSession, Switched = Switched,
+    };
 }
 
 public sealed record PasswordSession

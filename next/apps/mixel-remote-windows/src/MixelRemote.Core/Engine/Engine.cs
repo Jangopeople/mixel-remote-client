@@ -24,14 +24,50 @@ public interface IEngine
 
 public sealed record EngineInfo(string Version, string Platform, bool ControllerOnly);
 
-/// <summary>A command that failed; the message comes from the engine (English) and is shown translated.</summary>
+/// <summary>
+/// A command that failed; the message comes from the engine (English) and is shown translated. A request the
+/// engine refuses for a reason the app knows has a JSON message <c>{"hint":"too_many_sessions","max":4,"message":"…"}</c>
+/// (<see cref="Hint"/>): it is shown as a friendly sentence.
+/// </summary>
 public sealed class EngineFailure : Exception
 {
-    public EngineFailure(string message) : base(message) { }
+    public const string TooManySessions = "too_many_sessions";
+    public const string AlreadyConnected = "already_connected";
+
+    public EngineFailure(string message) : base(message) => ReadHint(message);
     public EngineFailure() : base("The engine failed") { }
-    public EngineFailure(string message, Exception inner) : base(message, inner) { }
+    public EngineFailure(string message, Exception inner) : base(message, inner) => ReadHint(message);
+
+    /// <summary>The engine's machine-readable reason (too_many_sessions, already_connected), or null for a plain message.</summary>
+    public string? Hint { get; private set; }
+    /// <summary>With too_many_sessions: how many sessions are allowed at once.</summary>
+    public int? Max { get; private set; }
+    private string? plain;
+
+    private void ReadHint(string message)
+    {
+        if (!message.StartsWith('{')) return;
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(message);
+            var root = document.RootElement;
+            if (root.ValueKind != System.Text.Json.JsonValueKind.Object) return;
+            if (root.TryGetProperty("hint", out var hint) && hint.ValueKind == System.Text.Json.JsonValueKind.String) Hint = hint.GetString();
+            if (root.TryGetProperty("max", out var max) && max.TryGetInt32(out var count)) Max = count;
+            if (root.TryGetProperty("message", out var text) && text.ValueKind == System.Text.Json.JsonValueKind.String) plain = text.GetString();
+        }
+        catch (System.Text.Json.JsonException) { }
+    }
+
     /// <summary>The message in the shown language.</summary>
-    public string Translated => Support.Translator.Shared.Translate(Message);
+    public string Translated => Hint switch
+    {
+        TooManySessions => Support.T.L("You already have %d sessions open, the most Mixel Remote allows. Close one to start another.", Max ?? RemoteStatusLimit),
+        AlreadyConnected => Support.T.L("You are already connected to this computer."),
+        _ => Support.Translator.Shared.Translate(plain ?? Message),
+    };
+
+    private static int RemoteStatusLimit => Models.RemoteStatus.DefaultSessionLimit;
 }
 
 /// <summary>JSON as the engine writes it: snake_case keys.</summary>

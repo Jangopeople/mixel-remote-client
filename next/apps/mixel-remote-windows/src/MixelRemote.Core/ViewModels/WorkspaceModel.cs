@@ -18,8 +18,8 @@ public readonly record struct WorkspaceTab(uint? Peer)
     public bool IsConsole => Peer is null;
 }
 
-/// <summary>One session tab.</summary>
-public sealed record SessionTab(uint Peer, string Name, string Os, string State);
+/// <summary>One session tab: the device's Remote ID, the session's stable engine id (the tab never changes it), name, system and state (starting, ready, ending).</summary>
+public sealed record SessionTab(uint Peer, string Name, string Os, string State, string Id = "");
 
 /// <summary>A connection being prepared from the Devices list or "Connect by ID".</summary>
 public sealed record ConnectAttempt
@@ -41,9 +41,11 @@ public sealed record ConnectAttempt
 /// front, which sessions are in their own window, the connection being prepared, and the two remembered
 /// choices ("when a session is ready" and "open sessions in"). Same rules as the Mac app's WorkspaceModel.
 ///
-/// Sessions are keyed by the other computer's Remote ID, not by the engine's session id: the session id
-/// changes when the connection is renewed, the computer does not. Everything is a list so several sessions
-/// at once only need <see cref="SessionTabs"/> to read more than one session from the engine.
+/// Sessions are keyed by the other computer's Remote ID (one session per device) and bound to the engine's stable
+/// session id (<see cref="SessionTab.Id"/>): a transport renewal changes the connection service's session id, not
+/// these. The engine lists up to four sessions (remote_status.sessions); there is one tab (or window) for each, and
+/// <see cref="SessionModel"/> per session. <see cref="Focused"/> is the one session that gets keyboard, mouse,
+/// clipboard and toolbar actions; <see cref="IsVisible"/> says which pictures are fetched.
 /// </summary>
 public sealed class WorkspaceModel : Observable
 {
@@ -85,7 +87,56 @@ public sealed class WorkspaceModel : Observable
         }
     }
 
-    public WorkspaceTab Selected { get => selected; set => Set(ref selected, value); }
+    public WorkspaceTab Selected
+    {
+        get => selected;
+        set
+        {
+            if (Set(ref selected, value)) Raise(nameof(Focused));
+        }
+    }
+
+    private uint? focusedWindow;
+
+    /// <summary>
+    /// The one session that receives input, clipboard and toolbar actions: the session of the active pop-out window, else
+    /// the session of the tab in front while the main window is active. null: none (Devices is in front, or the app is not active).
+    /// </summary>
+    public uint? Focused
+    {
+        get
+        {
+            if (focusedWindow is { } window && windows.Contains(window)) return window;
+            return selected.Peer is { } peer && !windows.Contains(peer) && tabs.Any(tab => tab.Peer == peer) ? peer : null;
+        }
+    }
+
+    /// <summary>A session's pop-out window became the active window.</summary>
+    public void WindowActivated(uint peer)
+    {
+        if (focusedWindow == peer) return;
+        focusedWindow = peer;
+        Raise(nameof(Focused));
+    }
+
+    /// <summary>A pop-out window lost the focus (another window or another app is active now).</summary>
+    public void WindowDeactivated(uint peer)
+    {
+        if (focusedWindow != peer) return;
+        focusedWindow = null;
+        Raise(nameof(Focused));
+    }
+
+    /// <summary>The main window became the active window: the tab in front is the focused session.</summary>
+    public void MainActivated()
+    {
+        if (focusedWindow is null) return;
+        focusedWindow = null;
+        Raise(nameof(Focused));
+    }
+
+    /// <summary>The session's picture is on screen (its tab is in front, or it has its own window): hidden sessions stop fetching pictures.</summary>
+    public bool IsVisible(uint peer) => windows.Contains(peer) || selected.Peer == peer;
     public IReadOnlyList<SessionTab> Tabs => tabs;
     /// <summary>Sessions shown in their own window.</summary>
     public IReadOnlyCollection<uint> Windows => windows;
@@ -102,33 +153,39 @@ public sealed class WorkspaceModel : Observable
     // ---- Reading the engine ----
 
     /// <summary>
-    /// The sessions this app views as technician. Today the engine runs one session at a time; when it reports
-    /// several (remote_status.sessions, see docs/mixel-remote-ui-engine-requests.md) this is the only place
-    /// that reads them.
+    /// One tab for each technician session the engine lists (remote_status.sessions, or the one session of the
+    /// single-session fields of an older engine). A session shows as a tab once it runs (starting until its first
+    /// picture arrived, ready, ending); while it is only asked for, the connect panel shows it.
     /// </summary>
-    internal List<SessionTab> SessionTabs(RemoteStatus status, bool frameShown)
+    internal List<SessionTab> SessionTabs(RemoteStatus status)
     {
-        if (status.Peer is not { } peer || status.Sharing || status.Session is null) return [];
-        string state;
-        switch (status.Phase)
+        List<SessionTab> result = [];
+        foreach (var item in status.TechnicianSessions)
         {
-            case "active": state = frameShown ? "ready" : "starting"; break;
-            case "closing": state = "ending"; break;
-            default: return [];
+            if (item.Id.Length == 0) continue;
+            var state = item.Phase switch
+            {
+                "active" => app.SessionFor(item.Peer)?.Frame is not null ? "ready" : "starting",
+                "closing" => "ending",
+                _ => "",
+            };
+            if (state.Length == 0) continue;
+            result.Add(new SessionTab(item.Peer, app.Devices.NameOf(item.Peer), app.Devices.OsOf(item.Peer), state, item.Id));
         }
-        return [new SessionTab(peer, app.Devices.NameOf(peer), app.Devices.OsOf(peer), state)];
+        return result;
     }
 
     /// <summary>Called when the remote status or the first picture changes.</summary>
     internal void Refresh(RemoteStatus? status = null)
     {
         status ??= app.Remote;
-        var next = SessionTabs(status, app.Session.Frame is not null);
+        var next = SessionTabs(status);
         var before = tabs.ToDictionary(tab => tab.Peer);
         if (!next.SequenceEqual(tabs))
         {
             tabs = next;
             Raise(nameof(Tabs));
+            Raise(nameof(Focused));
         }
         var open = next.Select(tab => tab.Peer).ToHashSet();
         // Ended sessions: their tab, window and notice go away; the Devices list comes back.
@@ -136,6 +193,7 @@ public sealed class WorkspaceModel : Observable
         {
             if (windows.Remove(peer))
             {
+                if (focusedWindow == peer) focusedWindow = null;
                 Raise(nameof(Windows));
                 CloseWindow(peer);
             }
@@ -152,15 +210,16 @@ public sealed class WorkspaceModel : Observable
     private void UpdateAttempt(RemoteStatus status)
     {
         if (attempt is not { } current) return;
-        var matches = status.Peer == current.Peer;
+        var mine = status.TechnicianSessions.FirstOrDefault(item => item.Peer == current.Peer);
+        var matches = mine is not null;
         var step = current.Step;
-        if (matches)
+        if (mine is not null)
         {
-            switch (status.Phase)
+            switch (mine.Phase)
             {
                 case "outgoing": step = Math.Max(step, 1); break;
                 case "negotiating": step = Math.Max(step, 2); break;
-                case "active": step = Math.Max(step, app.Session.Frame is null ? 3 : 4); break;
+                case "active": step = Math.Max(step, app.SessionFor(current.Peer)?.Frame is null ? 3 : 4); break;
             }
         }
         if (step == 4)
@@ -169,7 +228,7 @@ public sealed class WorkspaceModel : Observable
             Attempt = null;
             return;
         }
-        var running = matches && status.InSession;
+        var running = mine?.Running == true;
         var failure = current.Failure;
         if (failure.Length == 0 && !app.Busy && !running)
         {
@@ -177,7 +236,8 @@ public sealed class WorkspaceModel : Observable
             else if (step >= 1)
             {
                 // The request was sent and the session is gone again: declined, timed out or refused.
-                failure = status.Message.Length == 0 || status.Phase == "ready"
+                // With other sessions open the connection's own message is theirs, so only a lone connection has a sentence to give.
+                failure = status.Message.Length == 0 || status.Phase == "ready" || status.TechnicianSessions.Count > 0
                     ? L("The connection was not established. The other side declined, did not answer, or unattended access is not allowed.")
                     : Translator.Shared.Translate(status.Message);
             }
@@ -230,7 +290,7 @@ public sealed class WorkspaceModel : Observable
         if (attempt is not { } current) return Task.CompletedTask;
         Attempt = null;
         attemptWindow.Remove(current.Peer);
-        return app.Remote.Peer == current.Peer && app.Remote.InSession ? app.Session.End() : Task.CompletedTask;
+        return app.SessionFor(current.Peer)?.End() ?? Task.CompletedTask;
     }
 
     public void DismissNotice(uint peer)
@@ -286,10 +346,10 @@ public sealed class WorkspaceModel : Observable
     public SessionTab? Tab(uint peer) => tabs.FirstOrDefault(tab => tab.Peer == peer);
     public bool IsInWindow(uint peer) => windows.Contains(peer);
 
-    /// <summary>The session model of a tab. One today; one per session once the engine runs several.</summary>
-    public SessionModel? SessionFor(uint peer) => app.Remote.Peer == peer ? app.Session : null;
+    /// <summary>The session model of a tab: one per session the engine lists.</summary>
+    public SessionModel? SessionFor(uint peer) => app.SessionFor(peer);
 
-    /// <summary>Ends one session.</summary>
+    /// <summary>Ends one session; the others go on (remote_close with its stable id).</summary>
     public Task End(uint peer) => SessionFor(peer)?.End() ?? Task.CompletedTask;
 
     /// <summary>The device of a Remote ID is in a session with this app, or being connected.</summary>

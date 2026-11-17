@@ -30,7 +30,7 @@ public sealed class WorkspaceTests
         DemoFixtures.Viewing(engine);
         engine.QueueFrame(VideoFrame.Sample(320, 200, 1));
         var app = new AppModel(engine, preferences);
-        app.Session.IdleDelay = 1;
+        app.PictureIdleDelay = 1;
         await app.RefreshAccount();
         await app.Company.Load();
         await app.RefreshRemote();

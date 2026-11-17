@@ -6,9 +6,14 @@ using static MixelRemote.Support.T;
 namespace MixelRemote.ViewModels;
 
 /// <summary>
-/// The session on the technician's side: the remote picture, keyboard and mouse, and the toolbar
+/// One session on the technician's side: the remote picture, keyboard and mouse, and the toolbar
 /// (displays, privacy screen, block input, pointer, lock, Ctrl+Alt+Del, restart, sound, clipboard, files,
-/// chat, recording, invite a colleague, switch sides, end).
+/// chat, recording, invite a colleague, switch sides, end). There is one model per session the engine reports
+/// (<see cref="AppModel.Sessions"/>, keyed by the device's Remote ID); it is bound to the session's stable id, so
+/// a transport renewal does not touch it. Input, clipboard and toolbar actions are sent only while the session is
+/// the focused one of the workspace (<see cref="WorkspaceModel.Focused"/>). The model without a session
+/// (<see cref="AppModel.Session"/> when nothing is viewed) reads the connection's own status, which is what the
+/// hosted side uses.
 /// </summary>
 public sealed class SessionModel : Observable
 {
@@ -35,6 +40,9 @@ public sealed class SessionModel : Observable
     private readonly List<InputEvent> inputQueue = [];
     private bool sending;
     private Reconnect? reconnect;
+    private SessionStatus? item;
+    private RemoteStatus? projected;
+    private bool inputSent;
 
     private sealed class Reconnect
     {
@@ -49,7 +57,26 @@ public sealed class SessionModel : Observable
         public string Session = "";
     }
 
-    internal SessionModel(AppModel app) => this.app = app;
+    internal SessionModel(AppModel app, SessionStatus? item = null)
+    {
+        this.app = app;
+        this.item = item;
+    }
+
+    /// <summary>The engine's item of this session; null for the model without a session and for a session that ended while a restart reconnects.</summary>
+    public SessionStatus? Item => item;
+    /// <summary>The other computer's Remote ID.</summary>
+    public uint? Peer => item?.Peer;
+    /// <summary>The Remote ID this model belongs to; kept while a restart of the remote computer is waited for.</summary>
+    internal uint Key { get; private set; }
+    /// <summary>A restart of the remote computer is being waited for.</summary>
+    internal bool Reconnecting => reconnect is not null;
+    /// <summary>The session is the one that gets keyboard, mouse, clipboard and toolbar actions (its tab is in front, or its window is active).</summary>
+    public bool Focused => item is { } mine && app.Workspace.Focused == mine.Peer;
+    /// <summary>Actions may go to this session: it is focused (the model without a session is the hosted side and always may).</summary>
+    private bool MayAct => item is null || Focused;
+    /// <summary>The picture facts of the engine (pictures per second, age of the last picture).</summary>
+    public SessionQuality? Quality => item?.Quality;
 
     /// <summary>The newest picture (the screen draws it).</summary>
     public VideoFrame? Frame { get => frame; private set => Set(ref frame, value); }
@@ -80,24 +107,55 @@ public sealed class SessionModel : Observable
     public event EventHandler<VideoFrame>? FrameArrived;
 
     internal bool LastRequestUnattended { get; set; }
+    /// <summary>Stops this model for good (its session is gone).</summary>
+    internal void Dispose()
+    {
+        Clear();
+        StopTools();
+    }
     /// <summary>This session was requested as unattended (without asking the person at the other computer).</summary>
     public bool RequestedUnattended => LastRequestUnattended;
     /// <summary>Milliseconds to wait when no picture is ready yet.</summary>
     internal int IdleDelay { get; set; } = 4;
 
-    public RemoteStatus Remote => app.Remote;
-    public string? SessionId => Remote.Session;
-    /// <summary>The picture is shown and keyboard and mouse go to the other computer.</summary>
+    /// <summary>This session in the shape of the single-session status (the connection-wide fields are the connection's).</summary>
+    public RemoteStatus Remote => item is null ? app.Remote : projected ?? item.Project(app.Remote);
+    /// <summary>The stable id every engine call of this session carries.</summary>
+    public string? SessionId => item is null ? app.Remote.Session : item.Id.Length > 0 ? item.Id : null;
+    /// <summary>The picture is shown and keyboard and mouse go to the other computer (whether they are sent is also up to focus).</summary>
     public bool Controllable => !Stopping && Remote.Viewing && Remote.Control && Frame is not null && !LocallyStopped;
     private bool LocallyStopped => Remote.Consent is not null && Remote.Consent == stoppedConsent;
     public bool CanSwitchSides => Remote.Phase == "active" && Remote.PeerFeatures.Contains("switch");
 
+    /// <summary>The engine reported this session (or, for the model without a session, the connection status) again.</summary>
+    internal void Update(SessionStatus mine, RemoteStatus top)
+    {
+        var previous = item is null ? RemoteStatus.Offline : projected ?? RemoteStatus.Offline;
+        item = mine;
+        Key = mine.Peer;
+        var next = mine.Project(top);
+        projected = next;
+        StatusChanged(previous, next);
+    }
+
+    /// <summary>The engine no longer lists this session: the picture stops, the person may add a note, a restart may reconnect.</summary>
+    internal void Ended()
+    {
+        if (item is not null && projected is { Viewing: true } && app.Company.Tenant is not null) app.NoteFor = item.Peer;
+        Clear();
+        StopTools();
+        stoppedConsent = null;
+        toggleSession = null;
+        viewingSession = null;
+        item = null;
+        projected = null;
+    }
+
+    /// <summary>The hosted side: the connection's own status changed (the model without a session).</summary>
     internal void StatusChanged(RemoteStatus previous, RemoteStatus next)
     {
         if (next.Session != toggleSession)
         {
-            // A session this computer viewed ended: offer a note on it (companies only).
-            if (toggleSession is not null && previous.Viewing && previous.Peer is { } helped && app.Company.Tenant is not null) NoteFor = helped;
             toggleSession = next.Session;
             strokes.Clear();
             current = null;
@@ -110,6 +168,7 @@ public sealed class SessionModel : Observable
             Chat = [];
             Files = null;
             ClipboardResult = "";
+            inputSent = false;
         }
         if (next.Viewing && !Stopping && !LocallyStopped && next.Session is { } session)
         {
@@ -127,7 +186,7 @@ public sealed class SessionModel : Observable
         if (!next.InSession) stoppedConsent = null;
         if (next.Peer is { } peer && next.HostMacs.Count > 0) app.Devices.RememberMacs(peer, next.HostMacs);
         if (next.PrintJobs.Count > previous.PrintJobs.Count && next.Viewing) PrintJobArrived?.Invoke(this, EventArgs.Empty);
-        ContinueReconnect(next);
+        if (item is { } mine) ContinueReconnect(app.Remote, mine, mine.Peer);
     }
 
     /// <summary>Stops the picture and forgets it.</summary>
@@ -159,6 +218,13 @@ public sealed class SessionModel : Observable
         {
             try
             {
+                // A session in a background tab keeps its last picture and stops fetching; its first picture is always fetched.
+                if (Frame is not null && item is { } mine && !app.Workspace.IsVisible(mine.Peer))
+                {
+                    if (Fps != 0) Fps = 0;
+                    await Task.Delay(100, token);
+                    continue;
+                }
                 var data = await app.Engine.NextVideoAsync(session, compressed: false);
                 if (token.IsCancellationRequested || viewingSession != session) return;
                 if (data.Length == 0)
@@ -227,7 +293,15 @@ public sealed class SessionModel : Observable
     public void Send(InputEvent input)
     {
         if (SessionId is not { } session) return;
-        if (input is not InputEvent.ReleaseAll && !Controllable) return;
+        // Only the focused session gets input. Letting go of keys and buttons is the one thing a session that lost focus still
+        // needs, and only if it was sent something before.
+        if (input is InputEvent.ReleaseAll)
+        {
+            if (!inputSent) return;
+            inputSent = false;
+        }
+        else if (!Controllable || !MayAct) return;
+        else inputSent = true;
         if (input is InputEvent.Pointer && inputQueue.Count > 0 && inputQueue[^1] is InputEvent.Pointer)
         {
             inputQueue[^1] = input;
@@ -400,7 +474,7 @@ public sealed class SessionModel : Observable
     /// <summary>The points not sent yet, in messages of at most 64 points (an arrow: always its two ends).</summary>
     private void SendStroke(bool done)
     {
-        if (current is not { } stroke || SessionId is not { } session) return;
+        if (current is not { } stroke || SessionId is not { } session || !MayAct) return;
         var points = stroke.Tool == "arrow"
             ? stroke.Points.Count > 1 ? [stroke.Points[0], stroke.Points[^1]] : [stroke.Points[0]]
             : stroke.Points.Skip(stroke.Sent).ToList();
@@ -434,7 +508,7 @@ public sealed class SessionModel : Observable
 
     public void UndoDrawing()
     {
-        if (SessionId is not { } session || strokes.Count == 0) return;
+        if (SessionId is not { } session || strokes.Count == 0 || !MayAct) return;
         strokes.RemoveAt(strokes.Count - 1);
         _ = SendDraw(session, new System.Text.Json.Nodes.JsonObject { ["kind"] = "undo" });
         DrawingChanged?.Invoke(this, EventArgs.Empty);
@@ -442,23 +516,18 @@ public sealed class SessionModel : Observable
 
     public void ClearDrawing()
     {
-        if (SessionId is not { } session) return;
+        if (SessionId is not { } session || !MayAct) return;
         strokes.Clear();
         current = null;
         _ = SendDraw(session, new System.Text.Json.Nodes.JsonObject { ["kind"] = "clear" });
         DrawingChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    /// <summary>After a session: the session the technician may add a note to (Remote ID of the other computer).</summary>
-    public uint? NoteFor { get; private set; }
-
-    public void NoteTaken() => NoteFor = null;
-
     // ---- Toolbar ----
 
     internal void Action(string name, bool quiet = false)
     {
-        if (SessionId is not { } session) return;
+        if (SessionId is not { } session || !MayAct) return;
         _ = Run();
 
         async Task Run()
@@ -470,30 +539,35 @@ public sealed class SessionModel : Observable
 
     public void TogglePrivacy()
     {
+        if (!MayAct) return;
         Privacy = !Privacy;
         Action($"privacy:{(Privacy ? "on" : "off")}");
     }
 
     public void ToggleBlockInput()
     {
+        if (!MayAct) return;
         BlockInput = !BlockInput;
         Action($"block:{(BlockInput ? "on" : "off")}");
     }
 
     public void ToggleLockWhenDone()
     {
+        if (!MayAct) return;
         LockWhenDone = !LockWhenDone;
         Action($"lockend:{(LockWhenDone ? "on" : "off")}");
     }
 
     public void TogglePointer()
     {
+        if (!MayAct) return;
         PointerMode = !PointerMode;
         if (!PointerMode) Action("pointer:off", quiet: true);
     }
 
     public void ToggleSound()
     {
+        if (!MayAct) return;
         Sound = !Sound;
         Action(Sound ? "sound:on" : "sound:off", quiet: true);
     }
@@ -503,7 +577,7 @@ public sealed class SessionModel : Observable
 
     public void SelectDisplay(ushort index)
     {
-        if (SessionId is not { } session) return;
+        if (SessionId is not { } session || !MayAct) return;
         _ = app.Engine.SendAsync(new InputEvent.SelectDisplay(index), session);
     }
 
@@ -513,7 +587,7 @@ public sealed class SessionModel : Observable
     /// </summary>
     public void RestartComputer()
     {
-        if (SessionId is not { } session || Remote.Peer is not { } peer) return;
+        if (SessionId is not { } session || Remote.Peer is not { } peer || !MayAct) return;
         if (!RestartArmed)
         {
             RestartArmed = true;
@@ -540,19 +614,20 @@ public sealed class SessionModel : Observable
         }
     }
 
-    private void ContinueReconnect(RemoteStatus status)
+    /// <summary>Called at every status while a restart of the remote computer is waited for (also after its session ended).</summary>
+    internal void ContinueReconnect(RemoteStatus status, SessionStatus? mine, uint peer)
     {
         if (reconnect is not { } plan) return;
-        if (status.Phase == "active")
+        if (mine is not null)
         {
-            if (status.Session != plan.Session)
+            // The old session is still listed: wait. A different one (stable id, or the transport id of an older engine): the computer is back.
+            if (mine.Id != plan.Session)
             {
                 reconnect = null;
                 Notice = "";
             }
             return;
         }
-        if (status.Phase is "negotiating" or "outgoing" or "deciding") return;
         var now = DateTimeOffset.UtcNow;
         if (now > plan.Until)
         {
@@ -577,7 +652,7 @@ public sealed class SessionModel : Observable
             else if (plan.Unattended && now - plan.Since > TimeSpan.FromSeconds(60)) target = plan.Host;
         }
         Notice = L("The remote computer is restarting. Mixel Remote reconnects when it is back…");
-        if (target is { } host && status.Phase == "ready" && !app.Busy && now - plan.LastTry > TimeSpan.FromSeconds(15))
+        if (target is { } host && app.CanRequestSession(status) && !app.Busy && now - plan.LastTry > TimeSpan.FromSeconds(15))
         {
             plan.LastTry = now;
             var unattended = plan.Unattended || host == plan.Signin;
@@ -590,15 +665,25 @@ public sealed class SessionModel : Observable
         ? app.Act(() => app.Engine.PerformAsync("remote_restart", ("session", session)))
         : Task.CompletedTask;
 
-    /// <summary>Ends the session for both sides.</summary>
+    /// <summary>
+    /// Ends this session for both sides (remote_close with its stable id; a session that is still being asked for is
+    /// cancelled the same way). Other sessions are not touched. The hosted side ends by its consent.
+    /// </summary>
     public async Task End()
     {
-        if (Remote.Consent is not { } consent || Stopping) return;
+        if (Stopping) return;
+        var consent = Remote.Consent;
+        var id = item is null ? null : SessionId;
+        if (id is null && consent is null) return;
         stoppedConsent = consent;
         Stopping = true;
         Clear();
         Error = "";
-        try { await app.Engine.PerformAsync("remote_stop_session", ("consent", consent)); }
+        try
+        {
+            if (id is not null) await app.Engine.PerformAsync("remote_close", ("session", id));
+            else await app.Engine.PerformAsync("remote_stop_session", ("consent", consent));
+        }
         catch (EngineFailure failure) { Error = L("Could not confirm that the session ended. Try End session again.") + " " + failure.Translated; }
         Stopping = false;
         await app.RefreshRemote();
@@ -608,7 +693,7 @@ public sealed class SessionModel : Observable
 
     public async Task Clipboard(bool push)
     {
-        if (SessionId is not { } session) return;
+        if (SessionId is not { } session || !MayAct) return;
         ClipboardResult = L("Transferring…");
         try
         {
@@ -667,7 +752,7 @@ public sealed class SessionModel : Observable
     public async Task SendChat()
     {
         var text = ChatDraft.Trim();
-        if (SessionId is not { } session || text.Length == 0) return;
+        if (SessionId is not { } session || text.Length == 0 || !MayAct) return;
         ChatDraft = "";
         try
         {
@@ -680,7 +765,7 @@ public sealed class SessionModel : Observable
     /// <summary>Sends the file at <paramref name="path"/> (chosen in the Open dialog).</summary>
     public async Task SendFile(string path)
     {
-        if (Remote.Consent is not { } consent) return;
+        if (Remote.Consent is not { } consent || !MayAct) return;
         try
         {
             await app.Engine.PerformAsync("remote_file_send", ("consent", consent), ("path", path));
@@ -699,7 +784,7 @@ public sealed class SessionModel : Observable
 
     public async Task AcceptFile(string id, string path)
     {
-        if (Remote.Consent is not { } consent) return;
+        if (Remote.Consent is not { } consent || !MayAct) return;
         try
         {
             await app.Engine.PerformAsync("remote_file_accept", ("consent", consent), ("id", id), ("path", path));
@@ -737,7 +822,7 @@ public sealed class SessionModel : Observable
 
     public async Task StartRecording(string path)
     {
-        if (SessionId is not { } session) return;
+        if (SessionId is not { } session || !MayAct) return;
         RecordingPending = true;
         try { await app.Engine.PerformAsync("remote_record_start", ("session", session), ("path", path)); }
         catch (EngineFailure failure) { Error = failure.Translated; }
@@ -747,7 +832,7 @@ public sealed class SessionModel : Observable
 
     public async Task StopRecording()
     {
-        if (SessionId is not { } session) return;
+        if (SessionId is not { } session || !MayAct) return;
         RecordingPending = true;
         try { await app.Engine.PerformAsync("remote_record_stop", ("session", session)); }
         catch (EngineFailure failure) { Error = failure.Translated; }
@@ -768,7 +853,7 @@ public sealed class SessionModel : Observable
 
     // ---- Colleagues, switching sides, meetings ----
 
-    public Task Invite(string? colleague, uint? device, bool control) => SessionId is { } session
+    public Task Invite(string? colleague, uint? device, bool control) => SessionId is { } session && MayAct
         ? app.Act(() => app.Engine.PerformAsync("remote_invite", ("session", session), ("user", colleague), ("device", device), ("control", control)))
         : Task.CompletedTask;
 
@@ -776,12 +861,12 @@ public sealed class SessionModel : Observable
 
     public Task Dismiss(Invitation invitation) => app.Act(() => app.Engine.PerformAsync("remote_dismiss_invitation", ("invitation", invitation.Id)));
 
-    public Task SwitchSides() => SessionId is { } session
+    public Task SwitchSides() => SessionId is { } session && MayAct
         ? app.Act(() => app.Engine.PerformAsync("remote_switch_sides", ("session", session)))
         : Task.CompletedTask;
 
     /// <summary>Show my screen (older computers without switching sides): a Mixel Meet room the other side is asked to watch.</summary>
-    public Task ShowMyScreen() => SessionId is { } session
+    public Task ShowMyScreen() => SessionId is { } session && MayAct
         ? app.Act(async () =>
         {
             var room = await app.Engine.RunAsync<MeetingRoom>("meeting_create");
