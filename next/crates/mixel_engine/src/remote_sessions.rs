@@ -77,6 +77,12 @@ pub struct SessionStatus {
     pub quality: Quality,
     /// Seconds since the Unix epoch.
     pub started_at: u64,
+    /// The computer went away or the connection service restarted: this session asks again by itself
+    /// (it stays in the list, `phase` `outgoing`, the other sessions are not touched).
+    pub reconnecting: bool,
+    /// The minute of asking again passed ("Could not reconnect"); `remote_reconnect` asks again for another minute,
+    /// `remote_close` removes the session.
+    pub reconnect_failed: bool,
 }
 
 /// One technician session. The fields the commands need are private to the engine.
@@ -213,6 +219,8 @@ impl Registry {
                 switched: false,
                 quality: Quality::default(),
                 started_at: SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |now| now.as_secs()),
+                reconnecting: false,
+                reconnect_failed: false,
             },
             video: Arc::new(VideoMailbox::default()),
             session_cancel: None,

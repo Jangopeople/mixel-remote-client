@@ -443,6 +443,8 @@ pub enum Command {
         recording: bool,
     },
     Close(Uuid),
+    /// Technician: ask the device of a session that says "Could not reconnect" again, for another minute.
+    Reconnect(Uuid),
     Restart(Uuid),
     Signal {
         session: Uuid,
@@ -1477,6 +1479,18 @@ impl RemoteSession {
             .try_send(Command::Close(target))
             .map_err(|_| "Sharing stopped locally; the connection service is busy".into())
     }
+    /// A session that says "Could not reconnect": ask its computer again for another minute.
+    pub async fn reconnect(&self, session: Uuid) -> Result<(), String> {
+        let mut inner = self.0.lock().await;
+        let slot = inner.slots.find_mut(session).ok_or("This session has already closed")?;
+        if slot.ended || !slot.view.reconnect_failed {
+            return Err("This session is not waiting to be asked again".into());
+        }
+        let commands = inner.commands.as_ref().ok_or("The connection service is disconnected")?;
+        commands
+            .try_send(Command::Reconnect(session))
+            .map_err(|_| "The connection service is busy; try again".into())
+    }
     pub async fn stop_session(&self, consent: Uuid) -> Result<(), String> {
         let mut inner = self.0.lock().await;
         if let Some(id) = inner.slots.by_consent(consent).map(|slot| slot.view.id) {
@@ -2227,6 +2241,10 @@ impl RemoteSession {
     }
     /// A technician session is over (it ended, failed or was refused): its state goes, the others stay.
     /// `message` is what a single-session caller reads from the top-level status afterwards.
+    /// The stable id and the device of a technician session (any id of it in).
+    async fn slot_device(&self, key: Uuid) -> Option<(Uuid, u32)> {
+        self.0.lock().await.slots.find(key).map(|slot| (slot.view.id, slot.view.peer))
+    }
     async fn slot_end(&self, generation: u64, key: Uuid, message: String) {
         let mut inner = self.0.lock().await;
         if inner.generation != generation {
@@ -2241,12 +2259,12 @@ impl RemoteSession {
     }
     /// Every technician session ends (the registration is lost or stopped).
     fn end_all_slots(inner: &mut Inner, message: &str) {
-        Self::end_slots_except(inner, None, message);
+        Self::end_slots_except(inner, &[], message);
     }
-    /// Every technician session ends except `keep` (the one carried over to the next registration).
-    fn end_slots_except(inner: &mut Inner, keep: Option<Uuid>, message: &str) {
+    /// Every technician session ends except those in `keep` (carried over to the next registration).
+    fn end_slots_except(inner: &mut Inner, keep: &[Uuid], message: &str) {
         for mut slot in inner.slots.drain() {
-            if keep.is_some_and(|id| slot.view.id == id || slot.view.session == Some(id)) {
+            if keep.iter().any(|id| slot.view.id == *id || slot.view.session == Some(*id)) {
                 inner.slots.restore(slot);
             } else {
                 slot.revoke(message);
@@ -2558,6 +2576,45 @@ impl Peer {
     }
 }
 /// A request sent to the connection service that it has not answered yet (answers come in order).
+/// A technician session whose computer went away: the same device is asked again for a minute.
+struct Reconnect {
+    host: u32,
+    /// The session's stable id in the registry (its tab stays while it asks again).
+    slot: Uuid,
+    retry: crate::reconnect::Retry,
+    gave_up: bool,
+}
+/// Starts asking the device of a technician session again, for a minute: when the computer went away, or when the
+/// person pressed Retry after "Could not reconnect". Nothing happens for access that needs somebody's answer.
+async fn begin_reconnect(
+    state: &RemoteSession,
+    generation: u64,
+    retries: &mut Vec<Reconnect>,
+    last_access: &std::collections::HashMap<u32, crate::reconnect::Access>,
+    key: Uuid,
+) -> bool {
+    let Some((slot, host)) = state.slot_device(key).await else { return false };
+    if retries.iter().any(|active| active.host == host) {
+        return false;
+    }
+    let Some(retry) = last_access.get(&host).cloned().and_then(|access| crate::reconnect::Retry::start(access, std::time::Instant::now())) else {
+        return false;
+    };
+    retries.push(Reconnect { host, slot, retry, gave_up: false });
+    state
+        .slot_change(generation, slot, |view| {
+            view.phase = "outgoing".into();
+            view.reconnecting = true;
+            view.reconnect_failed = false;
+            view.message = "Reconnecting… the computer went away; asking again".into();
+        })
+        .await;
+    state.change(generation, |status| {
+        status.reconnecting = true;
+        status.reconnect_failed = false;
+    }).await;
+    true
+}
 struct Out {
     /// The technician session's stable id in the registry.
     slot: Uuid,
@@ -2576,26 +2633,41 @@ fn find_peer<'a>(peer: &'a mut Option<Peer>, ctrl: &'a mut [Peer], id: Uuid) -> 
     }
     ctrl.iter_mut().find(|active| active.id == id || active.ui == id)
 }
-/// Whether a session (by transport id or by the session id the person sees) is the hosted one or one of the technician's.
-fn has_session(peer: &Option<Peer>, ctrl: &[Peer], id: Uuid) -> bool {
-    peer.as_ref().is_some_and(|active| active.id == id || active.ui == id) || ctrl.iter().any(|active| active.id == id || active.ui == id)
+/// Sessions waiting to be resumed: the transport id and when it was asked, oldest first.
+type Resuming = Vec<(Uuid, std::time::Instant)>;
+/// The transport id of the session (hosted or technician's) that `session` names, if it is waiting to be resumed.
+fn resuming_id(resuming: &Resuming, peer: &Option<Peer>, ctrl: &[Peer], session: Uuid) -> Option<Uuid> {
+    let id = peer.iter().chain(ctrl.iter()).find(|active| active.id == session || active.ui == session)?.id;
+    resuming.iter().any(|(waiting, _)| *waiting == id).then_some(id)
 }
-/// A session being resumed after the connection service restarted could not be: it ends here, alone.
+/// The session a command is about, if it is about one.
+fn command_session(command: &Command) -> Option<Uuid> {
+    match command {
+        Command::Close(session) | Command::Reconnect(session) | Command::Restart(session) | Command::SwitchSides(session) => Some(*session),
+        Command::Signal { session, .. } | Command::Finished { session, .. } | Command::Decide { session, .. }
+        | Command::Invite { session, .. } | Command::DecideJoin { session, .. } => Some(*session),
+        _ => None,
+    }
+}
+/// A session being resumed after the connection service restarted could not be: it ends here, alone. The other
+/// sessions that are being resumed, and those that were never lost, are not touched.
+#[allow(clippy::too_many_arguments)]
 async fn end_resumed(
     state: &RemoteSession,
     generation: u64,
     peer: &mut Option<Peer>,
     ctrl: &mut Vec<Peer>,
-    resuming: &mut Option<std::time::Instant>,
-    end_when_resumed: &mut bool,
+    resuming: &mut Resuming,
+    end_when_resumed: &mut Vec<Uuid>,
+    id: Uuid,
     message: &str,
 ) {
-    *resuming = None;
-    *end_when_resumed = false;
-    if peer.take().is_some() {
+    resuming.retain(|(waiting, _)| *waiting != id);
+    end_when_resumed.retain(|waiting| *waiting != id);
+    if peer.as_ref().is_some_and(|active| active.id == id) {
+        *peer = None;
         state
             .change(generation, |status| {
-                status.reconnecting = false;
                 status.phase = "ready".into();
                 status.session = None;
                 status.peer = None;
@@ -2603,11 +2675,12 @@ async fn end_resumed(
                 status.message = message.into();
             })
             .await;
-    }
-    for over in ctrl.drain(..) {
+    } else if let Some(index) = ctrl.iter().position(|active| active.id == id) {
+        let over = ctrl.remove(index);
         state.slot_end(generation, over.ui, message.into()).await;
     }
-    state.change(generation, |status| status.reconnecting = false).await;
+    let still = !resuming.is_empty();
+    state.change(generation, |status| status.reconnecting = still).await;
 }
 /// A session this registration ended a moment ago: the connection service may still send a message for it.
 fn recently_gone(gone: &std::collections::VecDeque<(Uuid, std::time::Instant)>, id: Uuid) -> bool {
@@ -2719,7 +2792,8 @@ impl Drop for AttemptGuard {
 const RESUME_WINDOW: Duration = Duration::from_secs(30);
 /// A session carried from one registration to the next while the connection service restarts.
 struct Carry {
-    peer: Peer,
+    /// Every session whose media connection was up (the hosted one, or the technician's, each on its own).
+    peers: Vec<Peer>,
     attempt: Arc<AtomicBool>,
     lease: BrokerLease,
     since: std::time::Instant,
@@ -2812,10 +2886,10 @@ async fn supervise(
         }
         let delay=backoff.next(error.registered_for).ok_or_else(||format!("{}; automatic reconnect attempts exhausted. Register this computer again when the network is available.",error.message))?;
         {
-            let carried = keep.as_ref().filter(|kept| !kept.peer.host).map(|kept| kept.peer.ui);
+            let carried: Vec<Uuid> = keep.as_ref().map(|kept| kept.peers.iter().filter(|peer| !peer.host).map(|peer| peer.ui).collect()).unwrap_or_default();
             let mut inner = state.0.lock().await;
             if inner.generation == generation {
-                RemoteSession::end_slots_except(&mut inner, carried, "Connection lost; sharing stopped");
+                RemoteSession::end_slots_except(&mut inner, &carried, "Connection lost; sharing stopped");
             }
         }
         if keep.is_some() {
@@ -2880,13 +2954,13 @@ async fn run(
     let mut peer: Option<Peer> = None;
     // The technician's sessions (up to four at once), each with its own peer. `peer` is the hosted one.
     let mut ctrl: Vec<Peer> = Vec::new();
-    let mut resuming: Option<std::time::Instant> = None;
-    let mut end_when_resumed = false;
+    let mut resuming: Resuming = Vec::new();
+    let mut end_when_resumed: Vec<Uuid> = Vec::new();
     let mut carried_lease: Option<BrokerLease> = None;
     if let Some(kept) = carried {
         carried_lease = Some(kept.lease);
-        // A session kept for resuming is the host's, or the technician's only one.
-        if kept.peer.host { peer = Some(kept.peer); } else { ctrl.push(kept.peer); }
+        // Each kept session is the hosted one or one of the technician's; every one is resumed on its own.
+        for kept in kept.peers { if kept.host { peer = Some(kept); } else { ctrl.push(kept); } }
     }
     let enrolled = auth.enrollment(&initial, &identity).await?;
     let device = enrolled.device;
@@ -2988,15 +3062,15 @@ async fn run(
         // An older connection service answers "invalid": then these features are simply not offered.
         let capabilities_sent=std::time::Instant::now();
         // The computer being helped went away: ask the same device again for a minute (reconnect.rs).
-        let mut last_access:Option<crate::reconnect::Access>=None;
-        let mut retry:Option<crate::reconnect::Retry>=None;
-        // The technician session a reconnect attempt belongs to (its tab stays while it asks again).
-        let mut retry_slot:Option<Uuid>=None;
-        if let Some(kept) = peer.as_ref().or(ctrl.first()) {
-            // The media connection of the running session is still up: ask the connection service to continue it.
-            let session = kept.id;
+        // Per device (a technician has one session per device): how it was asked for, and its asking again.
+        let mut last_access:std::collections::HashMap<u32,crate::reconnect::Access>=std::collections::HashMap::new();
+        let mut retries:Vec<Reconnect>=Vec::new();
+        // The media connections of the running sessions are still up: ask the connection service to continue
+        // each of them (answers come in the order asked; one that fails ends alone).
+        let kept_ids:Vec<Uuid>=peer.iter().chain(ctrl.iter()).map(|kept|kept.id).collect();
+        for session in kept_ids {
             send(&mut socket,ClientMessage::Resume{session}).await?;
-            resuming=Some(std::time::Instant::now());
+            resuming.push((session,std::time::Instant::now()));
         }
         // Host: colleagues of the technician who joined (or ask to join) the running session.
         let mut joined:Vec<Peer>=Vec::new();
@@ -3026,28 +3100,38 @@ async fn run(
                     let now=SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_|"System clock is unavailable")?.as_secs();
                     if now>=authorized_until || pending_renewal.is_some_and(|deadline|std::time::Instant::now()>=deadline) {return Err(Failure::network("Device authorization expired; reconnecting"));}
                     if last_activity.elapsed()>Duration::from_secs(150){return Err(Failure::network("Connection-service heartbeat expired"));}
-                    if let Some(active)=retry.as_mut(){
-                        if ctrl.iter().any(|session|session.signals.is_some()){
-                            retry=None;retry_slot=None;
-                            state.change(generation,|status|{status.reconnecting=false;status.reconnect_failed=false;}).await;
-                        } else {
-                            match active.step(std::time::Instant::now(),!outgoing.is_empty()||peer.is_some()||!ctrl.is_empty()){
-                                crate::reconnect::Step::Ask=>{
-                                    let access=active.access().clone();
-                                    if let Some(slot)=retry_slot{let _=tx.try_send(Command::Request(access.host,access.password,access.unattended,slot));}
-                                },
-                                crate::reconnect::Step::GiveUp=>{
-                                    retry=None;
-                                    state.change(generation,|status|{status.reconnecting=false;status.reconnect_failed=true;status.phase="ready".into();status.session=None;status.peer=None;status.message="Could not reconnect".into();}).await;
-                                    if let Some(slot)=retry_slot.take(){state.slot_end(generation,slot,"Could not reconnect".into()).await;}
-                                },
-                                crate::reconnect::Step::Wait=>{},
-                            }
+                    let mut finished_retry:Vec<usize>=Vec::new();
+                    for (position,active) in retries.iter_mut().enumerate(){
+                        if ctrl.iter().any(|session|session.remote==active.host && session.signals.is_some()){
+                            finished_retry.push(position);
+                            continue;
+                        }
+                        let asked=outgoing.iter().any(|out|out.host==active.host);
+                        match active.retry.step(std::time::Instant::now(),asked){
+                            crate::reconnect::Step::Ask=>{
+                                let access=active.retry.access().clone();
+                                let _=tx.try_send(Command::Request(access.host,access.password,access.unattended,active.slot));
+                            },
+                            crate::reconnect::Step::GiveUp=>{finished_retry.push(position);active.gave_up=true;},
+                            crate::reconnect::Step::Wait=>{},
                         }
                     }
-                    if resuming.is_some_and(|since|since.elapsed()>=Duration::from_secs(20)){
-                        // The connection service did not take the session back in time: end it here.
-                        end_resumed(state,generation,&mut peer,&mut ctrl,&mut resuming,&mut end_when_resumed,"The session ended while the connection service restarted").await;
+                    for position in finished_retry.into_iter().rev(){
+                        let done=retries.remove(position);
+                        let failed=done.gave_up;
+                        state.slot_change(generation,done.slot,|view|{view.reconnecting=false;view.reconnect_failed=failed;if failed{view.phase="outgoing".into();view.message="Could not reconnect".into();}}).await;
+                        let waiting=!retries.is_empty()||!resuming.is_empty();
+                        let alone=ctrl.is_empty()&&peer.is_none();
+                        state.change(generation,|status|{
+                            status.reconnecting=waiting;
+                            if failed{status.reconnect_failed=true;if alone&&!waiting{status.phase="ready".into();status.session=None;status.peer=None;status.message="Could not reconnect".into();}}
+                            else{status.reconnect_failed=false;}
+                        }).await;
+                    }
+                    let overdue:Vec<Uuid>=resuming.iter().filter(|(_,since)|since.elapsed()>=Duration::from_secs(20)).map(|(id,_)|*id).collect();
+                    for id in overdue{
+                        // The connection service did not take this session back in time: it ends here, alone.
+                        end_resumed(state,generation,&mut peer,&mut ctrl,&mut resuming,&mut end_when_resumed,id,"The session ended while the connection service restarted").await;
                     }
                     if let Some(active)=peer.as_mut(){
                         if !active.close_sent && active.cancel.load(Ordering::Acquire) && active.signals.is_none(){
@@ -3068,13 +3152,13 @@ async fn run(
                             state.change(generation,|status|status.message="Renewing relay credentials and transport keys for the accepted peer".into()).await;
                         }
                     }
-                    if !ctrl.is_empty() && resuming.is_none() {
+                    if !ctrl.is_empty() {
                         // Each technician session is looked after on its own: one that expires or fails ends
                         // alone, the others keep running.
                         let mut ended:Vec<(Uuid,String)>=Vec::new();
                         let mut renew:Vec<Uuid>=Vec::new();
                         for active in ctrl.iter() {
-                            if active.close_sent {continue;}
+                            if active.close_sent || resuming.iter().any(|(id,_)|*id==active.id) {continue;}
                             if active.cancel.load(Ordering::Acquire) && active.signals.is_none() {ended.push((active.id,"Invitation stopped locally; ready for a new connection".into()));continue;}
                             let invitation_expired=active.signals.is_none() && ((active.local_consent.is_none() && active.accepted_at.is_none() && active.started_at.elapsed()>=core_protocol::session::CONSENT_LIFETIME) || active.accepted_at.is_some_and(|accepted|accepted.elapsed()>=core_protocol::session::NEGOTIATION_LIFETIME));
                             if invitation_expired {ended.push((active.id,"The local invitation or acceptance deadline expired; request a fresh connection".into()));continue;}
@@ -3151,16 +3235,21 @@ async fn run(
                     #[cfg(feature = "qa-session")]
                     match &command{Command::Close(session)=>eprintln!("QA command close {session} at clock {}",crate::remote_control::qa_wall_clock()),Command::Restart(session)=>eprintln!("QA command restart {session} at clock {}",crate::remote_control::qa_wall_clock()),Command::Finished{session,result}=>eprintln!("QA command finished {session} {:?} at clock {}",result.as_ref().err(),crate::remote_control::qa_wall_clock()),_=>{}}
                     match command {
-                    // While the session is being resumed only ending it counts; everything else is dropped.
-                    Command::Close(session) if resuming.is_some() && has_session(&peer,&ctrl,session)=>{
-                        if let Some(active)=find_peer(&mut peer,&mut ctrl,session){active.take_close();}
-                        end_when_resumed=true;
-                        state.change(generation,|status|{status.message="Ending the session…".into();}).await;
+                    // While a session is being resumed only ending it counts; everything else about it is dropped.
+                    // Commands about other sessions go on.
+                    Command::Close(session) if resuming_id(&resuming,&peer,&ctrl,session).is_some()=>{
+                        if let Some(id)=resuming_id(&resuming,&peer,&ctrl,session){
+                            if let Some(active)=find_peer(&mut peer,&mut ctrl,session){active.take_close();}
+                            end_when_resumed.push(id);
+                            state.change(generation,|status|{status.message="Ending the session…".into();}).await;
+                        }
                     },
-                    Command::Finished{session,..} if resuming.is_some() && has_session(&peer,&ctrl,session)=>{
-                        end_resumed(state,generation,&mut peer,&mut ctrl,&mut resuming,&mut end_when_resumed,"The session ended while the connection service restarted").await;
+                    Command::Finished{session,..} if resuming_id(&resuming,&peer,&ctrl,session).is_some()=>{
+                        if let Some(id)=resuming_id(&resuming,&peer,&ctrl,session){
+                            end_resumed(state,generation,&mut peer,&mut ctrl,&mut resuming,&mut end_when_resumed,id,"The session ended while the connection service restarted").await;
+                        }
                     },
-                    _ if resuming.is_some()=>{},
+                    ref other if command_session(other).is_some_and(|session|resuming_id(&resuming,&peer,&ctrl,session).is_some())=>{},
                     Command::Request(host,code,unattended,slot)=>{
                         // This computer is hosting a session: it does not start one of its own.
                         if peer.is_some(){state.slot_end(generation,slot,"This computer is being helped right now; finish that first".into()).await;continue;}
@@ -3175,7 +3264,7 @@ async fn run(
                         if cancel.load(Ordering::Acquire){break;}
                         if !state.slot_open(slot).await{continue;}
                         let with_password=code.is_some();
-                        last_access=Some(crate::reconnect::Access{host,unattended,password:code.clone()});
+                        last_access.insert(host,crate::reconnect::Access{host,unattended,password:code.clone()});
                         let request=match code {
                             Some(code)=>ClientMessage::RequestWithCode{host,code},
                             None if unattended=>ClientMessage::RequestUnattended{host},
@@ -3223,12 +3312,23 @@ async fn run(
                         }
                         state.change(generation,|status|{status.phase=if accept{"negotiating"}else{"closing"}.into();status.message=if accept{"Accepted; authenticating the remote transport"}else{"Rejecting invitation"}.into();}).await;
                     },
+                    Command::Reconnect(session)=>{
+                        begin_reconnect(state,generation,&mut retries,&last_access,session).await;
+                    },
                     Command::Close(session)=>{
-                        // The person ended it (or stopped the retries): nothing is asked again.
-                        last_access=None;
-                        if retry.take().is_some(){
-                            state.change(generation,|status|{status.reconnecting=false;status.reconnect_failed=false;status.phase="ready".into();status.session=None;status.peer=None;status.message="Session ended".into();}).await;
-                            if let Some(slot)=retry_slot.take(){state.slot_end(generation,slot,"Session ended".into()).await;}
+                        // The person ended it (or stopped the retries): nothing is asked again for this session.
+                        if let Some((slot,host))=state.slot_device(session).await{
+                            last_access.remove(&host);
+                            let had_retry=retries.iter().position(|active|active.slot==slot).map(|index|retries.remove(index)).is_some();
+                            let failed=state.0.lock().await.slots.find(slot).is_some_and(|found|found.view.reconnect_failed);
+                            let in_peers=ctrl.iter().any(|active|active.id==session || active.ui==session);
+                            if had_retry || (failed && !in_peers){
+                                for out in outgoing.iter_mut().filter(|out|out.host==host){out.cancelled=true;}
+                                state.slot_end(generation,slot,"Session ended".into()).await;
+                                let waiting=!retries.is_empty()||!resuming.is_empty();
+                                let alone=ctrl.is_empty()&&peer.is_none();
+                                state.change(generation,|status|{status.reconnecting=waiting;status.reconnect_failed=false;if alone&&!waiting{status.phase="ready".into();status.session=None;status.peer=None;status.message="Session ended".into();}}).await;
+                            }
                         }
                         // The window names the session as it sees it; the service knows its current transport.
                         if let Some(active)=peer.as_mut().filter(|peer|peer.id==session || peer.ui==session) && active.take_close(){
@@ -3304,15 +3404,11 @@ async fn run(
                     }
                     if let Some(index)=ctrl.iter().position(|active|(active.id==session || active.ui==session) && !active.close_sent){
                         // This technician session's media ended (the peer left or failed): only this one ends.
-                        let again=retry.is_none() && result.is_err() && ctrl.len()==1 && !ctrl[index].joined && ctrl[index].signals.is_some() && last_access.as_ref().is_some_and(|access|access.host==ctrl[index].remote && crate::reconnect::Access::repeatable(access));
+                        let again=result.is_err() && !ctrl[index].joined && ctrl[index].signals.is_some() && !retries.iter().any(|active|active.host==ctrl[index].remote) && last_access.get(&ctrl[index].remote).is_some_and(crate::reconnect::Access::repeatable);
                         let mut over=ctrl.remove(index);over.take_close();remember_gone(&mut recent,over.id);remember_gone(&mut recent,session);
                         send(&mut socket,ClientMessage::Close{session:over.id}).await?;
-                        if again {
-                            retry=last_access.clone().and_then(|access|crate::reconnect::Retry::start(access,std::time::Instant::now()));
-                            retry_slot=Some(over.ui);
-                            state.change(generation,|status|{status.reconnecting=true;status.reconnect_failed=false;}).await;
-                            state.slot_change(generation,over.ui,|view|{view.phase="outgoing".into();view.message="Reconnecting… the computer went away; asking again".into();}).await;
-                        } else {
+                        let asking_again=again && begin_reconnect(state,generation,&mut retries,&last_access,over.ui).await;
+                        if !asking_again {
                             state.slot_end(generation,over.ui,result.err().unwrap_or_else(||"Session closed; ready for a new connection".into())).await;
                         }
                         continue;
@@ -3694,22 +3790,24 @@ async fn run(
                             if ended.host{state.change(generation,|status|{status.phase="ready".into();status.message="Switching sides".into();status.session=None;status.peer=Some(ended.remote);status.requester=None;}).await;}
                             else{state.slot_end(generation,ended.ui,"Switching sides".into()).await;}
                         },
-                        ServerMessage::Closed{session,reason:signaling_server::protocol::CloseReason::Disconnected} if retry.is_none() && ctrl.len()==1 && ctrl.iter().any(|active|(active.id==session || active.ui==session) && !active.joined && active.signals.is_some() && last_access.as_ref().is_some_and(|access|access.host==active.remote)) && last_access.as_ref().is_some_and(crate::reconnect::Access::repeatable)=>{
-                            let over=ctrl.remove(0);remember_gone(&mut recent,over.id);
-                            retry=last_access.clone().and_then(|access|crate::reconnect::Retry::start(access,std::time::Instant::now()));
-                            retry_slot=Some(over.ui);
-                            state.change(generation,|status|{status.reconnecting=true;status.reconnect_failed=false;}).await;
-                            state.slot_change(generation,over.ui,|view|{view.phase="outgoing".into();view.message="Reconnecting… the computer went away; asking again".into();}).await;
+                        ServerMessage::Closed{session,reason:signaling_server::protocol::CloseReason::Disconnected} if ctrl.iter().any(|active|(active.id==session || active.ui==session) && !active.joined && active.signals.is_some() && !retries.iter().any(|again|again.host==active.remote) && last_access.get(&active.remote).is_some_and(crate::reconnect::Access::repeatable))=>{
+                            // The computer this session views went away: only this session asks again.
+                            if let Some(index)=ctrl.iter().position(|active|active.id==session || active.ui==session){
+                                let over=ctrl.remove(index);remember_gone(&mut recent,over.id);
+                                begin_reconnect(state,generation,&mut retries,&last_access,over.ui).await;
+                            }
                         },
                         ServerMessage::Closed{session,reason}=>{
                             let text=if reason==signaling_server::protocol::CloseReason::Expired{"The support session reached its 2-hour limit.".to_owned()}else{format!("Session closed: {reason:?}")};
                             if peer.as_ref().is_some_and(|peer|peer.id==session || peer.ui==session){peer=None;state.change(generation,|status|{status.phase="ready".into();status.message=text;status.session=None;status.peer=None;status.requester=None;}).await;}
                             else if let Some(index)=ctrl.iter().position(|active|active.id==session || active.ui==session){let over=ctrl.remove(index);remember_gone(&mut recent,over.id);state.slot_end(generation,over.ui,text).await;}
                         },
-                        ServerMessage::Error{code} if resuming.is_some()=>{
-                            // Not known any more (older connection service, or the 90 seconds passed): the session ends here.
+                        ServerMessage::Error{code} if !resuming.is_empty()=>{
+                            // Not known any more (older connection service, or the 90 seconds passed): the session that was
+                            // asked first and not yet answered ends here, alone (answers come in the order asked).
                             let _=code;
-                            end_resumed(state,generation,&mut peer,&mut ctrl,&mut resuming,&mut end_when_resumed,"The session ended while the connection service restarted").await;
+                            let first=resuming[0].0;
+                            end_resumed(state,generation,&mut peer,&mut ctrl,&mut resuming,&mut end_when_resumed,first,"The session ended while the connection service restarted").await;
                         },
                         ServerMessage::Error{code}=>{
                             if let Some(Out{slot,host,key,unattended:was_unattended,joined,cancelled})=outgoing.pop_front(){
@@ -3720,7 +3818,7 @@ async fn run(
                                     send(&mut socket,ClientMessage::Request{host}).await?;
                                     outgoing.push_front(Out{slot,host,key,unattended:false,joined:false,cancelled:false});
                                     state.slot_change(generation,slot,|view|{view.phase="outgoing".into();view.message="Waiting for the remote host to Accept".into();}).await;
-                                } else if retry.is_some() {
+                                } else if retries.iter().any(|again|again.host==host) {
                                     // A retry of a lost session: the next ask follows, the window stays as it is.
                                 } else {
                                     state.slot_end(generation,slot,request_failure_message(code).into()).await;
@@ -3760,24 +3858,26 @@ async fn run(
                         ServerMessage::DevicePolicy{unattended_allowed,..}=>{
                             state.change(generation,|status|status.unattended_allowed=Some(unattended_allowed)).await;
                         },
-                        ServerMessage::Resumed{session} if resuming.is_some() && has_session(&peer,&ctrl,session)=>{
-                            resuming=None;
-                            let technician=ctrl.iter().find(|active|active.id==session || active.ui==session).map(|active|active.ui);
-                            if end_when_resumed {
-                                end_when_resumed=false;
+                        ServerMessage::Resumed{session} if resuming_id(&resuming,&peer,&ctrl,session).is_some()=>{
+                            let id=resuming_id(&resuming,&peer,&ctrl,session).unwrap_or(session);
+                            resuming.retain(|(waiting,_)|*waiting!=id);
+                            let technician=ctrl.iter().find(|active|active.id==id).map(|active|active.ui);
+                            let still=!resuming.is_empty()||!retries.is_empty();
+                            if end_when_resumed.contains(&id) {
+                                end_when_resumed.retain(|waiting|*waiting!=id);
                                 if let Some(ui)=technician{
                                     if let Some(index)=ctrl.iter().position(|active|active.ui==ui){let over=ctrl.remove(index);remember_gone(&mut recent,over.id);}
-                                    send(&mut socket,ClientMessage::Close{session}).await?;
-                                    state.change(generation,|status|status.reconnecting=false).await;
+                                    send(&mut socket,ClientMessage::Close{session:id}).await?;
+                                    state.change(generation,|status|status.reconnecting=still).await;
                                     state.slot_end(generation,ui,"Session ended".into()).await;
                                 } else {
                                     peer=None;
-                                    send(&mut socket,ClientMessage::Close{session}).await?;
-                                    state.change(generation,|status|{status.reconnecting=false;status.phase="ready".into();status.session=None;status.peer=None;status.requester=None;status.message="Session ended".into();}).await;
+                                    send(&mut socket,ClientMessage::Close{session:id}).await?;
+                                    state.change(generation,|status|{status.reconnecting=still;status.phase="ready".into();status.session=None;status.peer=None;status.requester=None;status.message="Session ended".into();}).await;
                                 }
                             } else {
-                                state.change(generation,|status|{status.reconnecting=false;status.message="Reconnected; the session continues".into();}).await;
-                                if let Some(ui)=technician{state.slot_change(generation,ui,|view|view.message="Reconnected; the session continues".into()).await;}
+                                state.change(generation,|status|{status.reconnecting=still;status.message="Reconnected; the session continues".into();}).await;
+                                if let Some(ui)=technician{state.slot_change(generation,ui,|view|{view.reconnecting=false;view.message="Reconnected; the session continues".into();}).await;}
                             }
                         },
                         ServerMessage::Resumed{..}=>{},
@@ -3794,16 +3894,23 @@ async fn run(
             .unwrap_or(Duration::ZERO);
         error
     });
-    // The connection to the connection service is lost but the session's media connection is up: keep it for
-    // the next registration, which asks the connection service to resume it (nothing is cancelled).
+    // The connection to the connection service is lost but sessions' media connections are up: keep each of them
+    // for the next registration, which asks the connection service to resume every one on its own (nothing is
+    // cancelled). A session that cannot be resumed ends alone; the others still go on.
     if let Err(failure) = &result
         && failure.retryable
         && ready_at.is_some()
-        && (peer.as_ref().is_some_and(Peer::resumable) || (peer.is_none() && ctrl.len() == 1 && ctrl[0].resumable()))
         && !cancel.load(Ordering::Acquire)
-        && let Some(kept) = peer.take().or_else(|| ctrl.pop())
+        && (peer.as_ref().is_some_and(Peer::resumable) || ctrl.iter().any(Peer::resumable))
     {
-        *keep = Some(Carry { peer: kept, attempt: cancel.clone(), lease: broker_lease.clone(), since: carried_since.unwrap_or_else(std::time::Instant::now) });
+        let mut kept: Vec<Peer> = Vec::new();
+        if let Some(hosted) = peer.take().filter(Peer::resumable) {
+            kept.push(hosted);
+        }
+        for session in ctrl.drain(..) {
+            if session.resumable() { kept.push(session); }
+        }
+        *keep = Some(Carry { peers: kept, attempt: cancel.clone(), lease: broker_lease.clone(), since: carried_since.unwrap_or_else(std::time::Instant::now) });
         let _ = tokio::time::timeout(Duration::from_secs(2), socket.close(None)).await;
         return result;
     }
@@ -4880,5 +4987,143 @@ mod countdown_tests {
     fn the_platform_is_a_short_lowercase_word_the_broker_accepts() {
         let platform = app_platform();
         assert!(signaling_server::protocol::valid_app_version(crate::agent::APP_VERSION, &platform), "{platform}");
+    }
+}
+
+/// Recovery with several technician sessions: each session resumes and asks again on its own.
+#[cfg(test)]
+mod per_session_recovery_tests {
+    use super::*;
+    use crate::reconnect::Access;
+
+    fn technician(session: Uuid, remote: u32) -> Peer {
+        let now = std::time::Instant::now();
+        Peer {
+            id: session,
+            ui: session,
+            link: Default::default(),
+            handover: None,
+            remote,
+            host: false,
+            key: ed25519_dalek::SigningKey::from_bytes(&[7; 32]).verifying_key(),
+            source: String::new(),
+            #[cfg(target_os = "linux")]
+            portal: None,
+            confirm: false,
+            control: false,
+            clipboard: false,
+            files: false,
+            chat: false,
+            recording: false,
+            close_sent: false,
+            consent_cancel: Arc::new(AtomicBool::new(false)),
+            cancel: Arc::new(AtomicBool::new(false)),
+            signals: None,
+            early: Vec::new(),
+            nonce: None,
+            identity: None,
+            expires: Arc::new(AtomicU64::new(900)),
+            relay_expires: 0,
+            restart_pending: None,
+            rotated_at: now,
+            started_at: now,
+            local_consent: None,
+            accepted_at: None,
+            consent_id: Uuid::new_v4(),
+            joined: false,
+            switched: false,
+            reversed: false,
+        }
+    }
+
+    /// A registered technician with one open session per device: (state, stable ids, transport ids).
+    async fn open(devices: &[u32]) -> (RemoteSession, Vec<Uuid>, Vec<Uuid>) {
+        let remote = RemoteSession::default();
+        let (tx, mut commands) = mpsc::channel(64);
+        {
+            let mut inner = remote.0.lock().await;
+            inner.commands = Some(tx);
+            inner.status.phase = "ready".into();
+            inner.status.host = Some(111_111_111);
+        }
+        let (mut stable, mut transports) = (Vec::new(), Vec::new());
+        for device in devices {
+            let id = remote.request(*device, None, true).await.unwrap();
+            let _ = commands.recv().await;
+            let session = Uuid::new_v4();
+            remote
+                .slot_track(0, id, session, Arc::new(AtomicBool::new(false)), Uuid::new_v4(), Arc::new(AtomicBool::new(false)), false, false)
+                .await
+                .unwrap();
+            stable.push(id);
+            transports.push(session);
+        }
+        (remote, stable, transports)
+    }
+
+    fn view(status: &Status, id: Uuid) -> crate::remote_sessions::SessionStatus {
+        status.sessions.iter().find(|view| view.id == id).cloned().expect("session listed")
+    }
+
+    #[tokio::test]
+    async fn losing_the_computer_of_one_session_asks_again_for_that_session_only() {
+        let (remote, stable, transports) = open(&[300_000_001, 300_000_002]).await;
+        let access = |host| Access { host, unattended: true, password: None };
+        let last: std::collections::HashMap<u32, Access> = [(300_000_001, access(300_000_001)), (300_000_002, access(300_000_002))].into();
+        let mut retries = Vec::new();
+        assert!(begin_reconnect(&remote, 0, &mut retries, &last, transports[0]).await);
+        assert_eq!(retries.len(), 1);
+        assert_eq!(retries[0].slot, stable[0]);
+        let status = remote.status().await;
+        let first = view(&status, stable[0]);
+        assert!(first.reconnecting && !first.reconnect_failed);
+        assert_eq!(first.phase, "outgoing");
+        assert!(first.message.contains("Reconnecting"));
+        let second = view(&status, stable[1]);
+        assert!(!second.reconnecting && !second.reconnect_failed, "the other session is not touched");
+        assert!(!begin_reconnect(&remote, 0, &mut retries, &last, transports[0]).await, "one retry per device");
+        assert_eq!(retries.len(), 1);
+        // Both can ask again at the same time, each on its own clock.
+        assert!(begin_reconnect(&remote, 0, &mut retries, &last, transports[1]).await);
+        assert_eq!(retries.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn an_attended_session_is_not_asked_again_and_an_unknown_session_neither() {
+        let (remote, _, transports) = open(&[300_000_011]).await;
+        let attended: std::collections::HashMap<u32, Access> =
+            [(300_000_011, Access { host: 300_000_011, unattended: false, password: None })].into();
+        let mut retries = Vec::new();
+        assert!(!begin_reconnect(&remote, 0, &mut retries, &attended, transports[0]).await);
+        assert!(!begin_reconnect(&remote, 0, &mut retries, &attended, Uuid::new_v4()).await);
+        assert!(retries.is_empty());
+        assert!(!remote.status().await.sessions[0].reconnecting);
+    }
+
+    #[tokio::test]
+    async fn a_session_that_cannot_be_resumed_ends_alone() {
+        let (remote, stable, transports) = open(&[300_000_021, 300_000_022, 300_000_023]).await;
+        let mut ctrl: Vec<Peer> = (0..3).map(|n| technician(transports[n], 300_000_021 + n as u32)).collect();
+        let mut peer: Option<Peer> = None;
+        let mut resuming: Resuming = transports.iter().map(|id| (*id, std::time::Instant::now())).collect();
+        let mut end_when_resumed: Vec<Uuid> = vec![transports[0]];
+        end_resumed(&remote, 0, &mut peer, &mut ctrl, &mut resuming, &mut end_when_resumed, transports[1], "The session ended while the connection service restarted").await;
+        assert_eq!(ctrl.iter().map(|p| p.id).collect::<Vec<_>>(), vec![transports[0], transports[2]]);
+        assert_eq!(resuming.iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![transports[0], transports[2]]);
+        assert_eq!(end_when_resumed, vec![transports[0]], "the others keep their own wish");
+        let ids: Vec<Uuid> = remote.status().await.sessions.iter().map(|view| view.id).collect();
+        assert!(ids.contains(&stable[0]) && ids.contains(&stable[2]) && !ids.contains(&stable[1]));
+        // Naming a session by its stable id or its transport id finds the same waiting entry.
+        assert_eq!(resuming_id(&resuming, &peer, &ctrl, transports[2]), Some(transports[2]));
+        assert_eq!(resuming_id(&resuming, &peer, &ctrl, transports[1]), None);
+    }
+
+    #[test]
+    fn only_commands_about_a_resuming_session_wait() {
+        let session = Uuid::new_v4();
+        assert_eq!(command_session(&Command::Close(session)), Some(session));
+        assert_eq!(command_session(&Command::Reconnect(session)), Some(session));
+        assert_eq!(command_session(&Command::Request(1, None, false, session)), None, "a new session is not held back");
+        assert_eq!(command_session(&Command::Presence(vec![1])), None);
     }
 }

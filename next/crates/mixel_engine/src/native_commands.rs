@@ -540,6 +540,7 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
             out(remote.recording_hub().stop(remote.recording_view(key).await.0)?)
         }
         "remote_close" => out(remote.close(args.get("session")?).await?),
+        "remote_reconnect" => out(remote.reconnect(args.get("session")?).await?),
         "remote_stop_session" => out(remote.stop_session(args.get("consent")?).await?),
         "remote_restart" => out(remote.restart(args.get("session")?).await?),
         "remote_invite" => out(remote
