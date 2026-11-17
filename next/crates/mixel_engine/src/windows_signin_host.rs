@@ -81,7 +81,7 @@ fn public_status_path() -> PathBuf {
     folder().join("signin-host-status.json")
 }
 
-fn log(message: &str) {
+pub(crate) fn log(message: &str) {
     use std::io::Write;
     let path = folder().join("signin-host.log");
     if std::fs::metadata(&path).is_ok_and(|meta| meta.len() > 256 * 1024) {

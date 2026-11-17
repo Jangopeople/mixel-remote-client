@@ -306,7 +306,7 @@ async fn run(config: &mut Config) -> Result<(), String> {
     let mut transport = transport.map_err(|_| "Cannot create the native WebRTC transport")?;
     crate::qa_timeline::mark(if strict_relay { "transport created (relay only)" } else { "transport created (direct and relay)" });
     let result = async {
-        let (mut consent, channel, sender, size, mut control) =
+        let (mut consent, channel, sender, size, limit, mut control) =
             negotiate(config, &mut transport).await?;
         let files = if let Some(bulk) = control.bulk.take() {
             Some(
@@ -330,7 +330,7 @@ async fn run(config: &mut Config) -> Result<(), String> {
                 &mut consent,
                 &channel,
                 sender.ok_or("Host video sender unavailable")?,
-                size,
+                (size, limit),
                 &mut control,
                 &mut transport,
             )
@@ -367,14 +367,18 @@ fn source_size(config: &Config) -> Result<(usize, usize), String> {
 }
 /// The stream size for the shared display, scaled down to fit `limit` (never up).
 fn source_size_within(config: &Config, limit: (f64, f64)) -> Result<(usize, usize), String> {
-    if config.source == "qa-relay-fixture" && session_platform::relay_fixture_enabled() {
+    source_size_of(config, &config.source, limit)
+}
+/// The stream size for the display `source` (the shared one, or the one the technician switches to).
+fn source_size_of(config: &Config, source: &str, limit: (f64, f64)) -> Result<(usize, usize), String> {
+    if source == "qa-relay-fixture" && session_platform::relay_fixture_enabled() {
         return Ok((640, 420));
     }
     if !config.confirm {
         return Err("Whole-display sharing has not been confirmed".into());
     }
     #[cfg(target_os = "linux")]
-    let (width, height) = if config.source == crate::wayland_portal::SOURCE {
+    let (width, height) = if source == crate::wayland_portal::SOURCE {
         config
             .portal
             .as_ref()
@@ -382,24 +386,31 @@ fn source_size_within(config: &Config, limit: (f64, f64)) -> Result<(usize, usiz
             .ok_or("The Wayland share grant has expired")?
             .size()
     } else {
-        session_platform::display_size(&config.source)?
+        session_platform::display_size(source)?
     };
     #[cfg(not(target_os = "linux"))]
-    let (width, height) = session_platform::display_size(&config.source)?;
+    let (width, height) = session_platform::display_size(source)?;
     if width == 0 || height == 0 {
         return Err("The display dimensions are invalid".into());
     }
+    Ok(stream_size((width, height), limit))
+}
+/// A display size scaled down (never up) to fit `limit`, even numbers, at least the encoder minimum.
+fn stream_size((width, height): (usize, usize), limit: (f64, f64)) -> (usize, usize) {
     let scale = (limit.0 / width as f64).min(limit.1 / height as f64).min(1.0);
     let minimum = if cfg!(target_os = "macos") { 2 } else { 16 };
-    let width = ((width as f64 * scale) as usize / 2 * 2).max(minimum);
-    let height = ((height as f64 * scale) as usize / 2 * 2).max(minimum);
-    Ok((width, height))
+    (
+        ((width as f64 * scale) as usize / 2 * 2).max(minimum),
+        ((height as f64 * scale) as usize / 2 * 2).max(minimum),
+    )
 }
 type Negotiated = (
     Session,
     Arc<dyn NativeDataChannel>,
     Option<H264VideoSender>,
     (usize, usize),
+    // The largest stream size the technician's app shows (a display switch scales into it).
+    (f64, f64),
     ControlPipe,
 );
 async fn negotiate(
@@ -837,12 +848,10 @@ async fn negotiate(
         )
         .await;
     // Full HD when the technician's app can show it; otherwise the classic 1280x720.
-    let size = if config.host && peer_features.iter().any(|name| name == crate::remote_control::FULL_HD) {
-        source_size_within(config, (1920.0, 1080.0))?
-    } else {
-        size
-    };
-    Ok((consent, channel, sender, size, control))
+    let full_hd = config.host && peer_features.iter().any(|name| name == crate::remote_control::FULL_HD);
+    let limit = if full_hd { (1920.0, 1080.0) } else { (1280.0, 720.0) };
+    let size = if full_hd { source_size_within(config, limit)? } else { size };
+    Ok((consent, channel, sender, size, limit, control))
 }
 async fn pump_ice(config: &mut Config, transport: &mut NativeTransport) -> Result<(), String> {
     while let Ok(candidate) = transport.ice_candidates.try_recv() {
@@ -1101,7 +1110,7 @@ async fn host_media(
     consent: &mut Session,
     channel: &Arc<dyn NativeDataChannel>,
     sender: H264VideoSender,
-    size: (usize, usize),
+    (mut size, limit): ((usize, usize), (f64, f64)),
     control: &mut ControlPipe,
     transport: &mut NativeTransport,
 ) -> Result<(), String> {
@@ -1221,19 +1230,27 @@ async fn host_media(
                 batch += 1;
             }
             if let Some(source) = control.take_display_switch() {
-                // Same encoder and stream; another display of different size is fitted
-                // into the negotiated size (pointer positions are relative, so they stay right).
+                // The stream takes the size of the display switched to (all screens side by side are
+                // wider than one), scaled into what the technician's app shows; a new encoder starts
+                // with a complete picture and its parameter sets carry the new size.
                 // A display can be captured only once per process: close the current capture first.
                 let _ = capture.stop();
+                let next_size = source_size_of(config, &source, limit).unwrap_or(size);
+                #[cfg(all(feature = "qa-session", target_os = "windows"))]
+                crate::windows_signin_host::log(&format!("QA display switch to {source}: stream {}x{} -> {}x{} (limit {:?})", size.0, size.1, next_size.0, next_size.1, limit));
                 capture = match session_platform::capture(
                     &source,
-                    size,
+                    next_size,
                     #[cfg(target_os = "linux")]
                     config.portal.clone(),
                 ) {
                     Ok(next) => {
                         shown.clone_from(&source);
                         crate::session_guard::set_shared_source(&shown);
+                        if next_size != size {
+                            size = next_size;
+                            encoder = start_encoder(size, bitrate)?;
+                        }
                         next
                     }
                     // Keep the session: go back to the display shown before.
@@ -2002,6 +2019,16 @@ async fn viewer_media(
 mod display_fit_tests {
     use super::fit_frame;
     use native_os_capture::stream::CapturedFrame;
+    #[test]
+    fn all_screens_side_by_side_keep_their_proportions_in_the_stream() {
+        let full_hd = (1920.0, 1080.0);
+        // One display fits as it is, two side by side are scaled down together (not squeezed).
+        assert_eq!(super::stream_size((1920, 1080), full_hd), (1920, 1080));
+        assert_eq!(super::stream_size((3840, 1080), full_hd), (1920, 540));
+        assert_eq!(super::stream_size((2560, 1440), full_hd), (1920, 1080));
+        assert_eq!(super::stream_size((3840, 1080), (1280.0, 720.0)), (1280, 360));
+        assert_eq!(super::stream_size((800, 600), full_hd), (800, 600));
+    }
     #[test]
     fn a_switched_display_is_fitted_into_the_stream_size() {
         // 4x2 source with padded rows; left half blue, right half red.
