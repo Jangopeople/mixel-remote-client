@@ -2152,6 +2152,9 @@ async fn supervise(
             Ok(()) => return Ok(()),
             Err(error) => error,
         };
+        // Lab builds only: why the registration ended (a running session ends with it).
+        #[cfg(feature = "qa-session")]
+        eprintln!("QA registration ended at clock {}: {}", crate::remote_control::qa_wall_clock(), error.message);
         if !error.registered_for.is_zero() {
             ever_ready = true;
         }
