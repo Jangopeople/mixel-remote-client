@@ -121,7 +121,7 @@ impl FileHub {
             }
             return Ok(entry.scope.clone());
         }
-        if entries.len() >= 2 {
+        if entries.len() >= 8 {
             return Err("Previous file cleanup has not completed".into());
         }
         let (tx, rx) = mpsc::sync_channel(32);

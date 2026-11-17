@@ -73,7 +73,7 @@ struct Grant {
 
 #[derive(Clone, Default)]
 pub struct RecordingHub {
-    grant: Arc<Mutex<Option<Grant>>>,
+    grant: Arc<Mutex<Vec<Grant>>>,
     workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
@@ -85,7 +85,7 @@ pub struct RecordingScope {
 impl Drop for RecordingScope {
     fn drop(&mut self) {
         if let Ok(mut entry) = self.hub.grant.lock()
-            && let Some(grant) = entry.as_mut().filter(|grant| grant.session == self.session)
+            && let Some(grant) = entry.iter_mut().find(|grant| grant.session == self.session)
             && let Some(job) = grant.job.as_mut()
         {
             job.finish();
@@ -96,10 +96,16 @@ impl Drop for RecordingScope {
 impl RecordingHub {
     pub fn attach(&self, session: Uuid, live: Authorization) -> Result<RecordingScope, String> {
         let mut entry = self.grant.lock().map_err(|_| "Recording is unavailable")?;
-        if !live() || entry.as_ref().is_some_and(|grant| (grant.live)()) {
+        // One grant per session. An ended one stays while its recording still shows a result.
+        entry.retain(|grant| (grant.live)() || grant.job.is_some());
+        while entry.len() >= 8 {
+            entry.remove(0);
+        }
+        if !live() || entry.iter().any(|grant| grant.session == session && (grant.live)()) {
             return Err("This recording permission is no longer available".into());
         }
-        *entry = Some(Grant {
+        entry.retain(|grant| grant.session != session);
+        entry.push(Grant {
             session,
             live,
             job: None,
@@ -113,8 +119,8 @@ impl RecordingHub {
     pub fn view(&self, session: Uuid) -> Option<View> {
         let entry = self.grant.lock().ok()?;
         let grant = entry
-            .as_ref()
-            .filter(|grant| grant.session == session && (grant.live)())?;
+            .iter()
+            .find(|grant| grant.session == session && (grant.live)())?;
         grant.job.as_ref().map_or(Some(View::Ready), |job| {
             job.view.lock().ok().map(|view| view.clone())
         })
@@ -139,13 +145,13 @@ impl RecordingHub {
             .lock()
             .map_err(|_| "Recording workers are unavailable")?;
         workers.retain(|worker| !worker.is_finished());
-        if !workers.is_empty() {
-            return Err("Wait for the previous recording to finish saving".into());
+        if workers.len() >= 4 {
+            return Err("Wait for a previous recording to finish saving".into());
         }
         let mut entry = self.grant.lock().map_err(|_| "Recording is unavailable")?;
         let grant = entry
-            .as_mut()
-            .filter(|grant| grant.session == session && (grant.live)())
+            .iter_mut()
+            .find(|grant| grant.session == session && (grant.live)())
             .ok_or("This recording permission is no longer available")?;
         if grant.job.as_ref().is_some_and(|job| {
             !job.view.lock().is_ok_and(|view| {
@@ -189,8 +195,8 @@ impl RecordingHub {
     pub fn stop(&self, session: Uuid) -> Result<(), String> {
         let mut entry = self.grant.lock().map_err(|_| "Recording is unavailable")?;
         let job = entry
-            .as_mut()
-            .filter(|grant| grant.session == session)
+            .iter_mut()
+            .find(|grant| grant.session == session)
             .and_then(|grant| grant.job.as_mut())
             .ok_or("There is no recording to stop")?;
         job.finish();
@@ -199,7 +205,8 @@ impl RecordingHub {
 
     pub fn last_view(&self) -> Option<View> {
         let entry = self.grant.lock().ok()?;
-        let grant = entry.as_ref()?;
+        // The most recent recording of any session.
+        let grant = entry.iter().rev().find(|grant| grant.job.is_some())?;
         let view = grant.job.as_ref()?.view.lock().ok()?.clone();
         (!matches!(view, View::Ready)).then_some(view)
     }
@@ -235,7 +242,7 @@ impl RecordingScope {
         let Ok(mut entry) = self.hub.grant.lock() else {
             return;
         };
-        let Some(grant) = entry.as_mut().filter(|grant| grant.session == self.session) else {
+        let Some(grant) = entry.iter_mut().find(|grant| grant.session == self.session) else {
             return;
         };
         let live = (grant.live)();

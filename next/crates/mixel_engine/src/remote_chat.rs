@@ -45,7 +45,7 @@ struct Conversation {
 }
 
 #[derive(Clone, Default)]
-pub struct ChatHub(Arc<Mutex<Option<Conversation>>>);
+pub struct ChatHub(Arc<Mutex<Vec<Conversation>>>);
 
 impl ChatHub {
     fn attach(
@@ -55,10 +55,12 @@ impl ChatHub {
         output: mpsc::Sender<Outgoing>,
     ) -> Result<Attachment, String> {
         let mut state = self.0.lock().map_err(|_| "Chat state is unavailable")?;
-        if !live() || state.as_ref().is_some_and(|current| (current.live)()) {
+        // One conversation per session; ended ones are dropped here.
+        state.retain(|current| (current.live)());
+        if !live() || state.iter().any(|current| current.session == session) {
             return Err("A chat transport is already active or this session has ended".into());
         }
-        *state = Some(Conversation {
+        state.push(Conversation {
             session,
             live,
             output,
@@ -74,8 +76,8 @@ impl ChatHub {
     pub fn messages(&self, session: Uuid) -> Option<Vec<ChatMessage>> {
         let state = self.0.lock().ok()?;
         let conversation = state
-            .as_ref()
-            .filter(|current| current.session == session && (current.live)())?;
+            .iter()
+            .find(|current| current.session == session && (current.live)())?;
         Some(conversation.messages.iter().cloned().collect())
     }
 
@@ -85,8 +87,8 @@ impl ChatHub {
         {
             let state = self.0.lock().map_err(|_| "Chat state is unavailable")?;
             let conversation = state
-                .as_ref()
-                .filter(|current| current.session == session && (current.live)())
+                .iter()
+                .find(|current| current.session == session && (current.live)())
                 .ok_or("Chat is unavailable for this session")?;
             conversation
                 .output
@@ -113,8 +115,8 @@ impl Attachment {
     fn append(&self, mine: bool, text: String) -> Result<(), String> {
         let mut state = self.hub.0.lock().map_err(|_| "Chat state is unavailable")?;
         let conversation = state
-            .as_mut()
-            .filter(|current| current.session == self.session && (current.live)())
+            .iter_mut()
+            .find(|current| current.session == self.session && (current.live)())
             .ok_or("The chat session ended")?;
         if conversation.messages.len() == MAX_HISTORY {
             conversation.messages.pop_front();
@@ -130,12 +132,8 @@ impl Attachment {
 
 impl Drop for Attachment {
     fn drop(&mut self) {
-        if let Ok(mut state) = self.hub.0.lock()
-            && state
-                .as_ref()
-                .is_some_and(|current| current.session == self.session)
-        {
-            *state = None;
+        if let Ok(mut state) = self.hub.0.lock() {
+            state.retain(|current| current.session != self.session);
         }
     }
 }

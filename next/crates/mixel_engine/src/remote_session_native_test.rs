@@ -105,6 +105,7 @@ impl FixturePeer {
             state: self.session.clone(),
             generation: 0,
             session: id,
+            slot: id,
             nonce: [123; 32],
             host,
             login_window: false,

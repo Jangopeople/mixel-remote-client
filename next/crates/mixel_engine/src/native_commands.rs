@@ -514,18 +514,15 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
         }
         "remote_file_cancel" => out(remote.file_scope(args.get("consent")?).await?.cancel(args.get("id")?)?),
         "remote_record_may_start" => {
-            let session: Uuid = args.get("session")?;
-            let status = remote.status().await;
-            out(status.session == Some(session)
-                && status.phase == "active"
-                && !status.sharing
-                && status.received > 0
+            let key: Uuid = args.get("session")?;
+            let (session, view) = remote.recording_view(key).await;
+            out(view.is_some_and(|view| view.phase == "active" && view.received > 0)
                 && remote.recording_hub().may_start(session))
         }
         "remote_record_start" => {
-            let session: Uuid = args.get("session")?;
-            let status = remote.status().await;
-            if status.session != Some(session) || status.phase != "active" || status.sharing || status.received == 0 {
+            let key: Uuid = args.get("session")?;
+            let (session, view) = remote.recording_view(key).await;
+            if !view.is_some_and(|view| view.phase == "active" && view.received > 0) {
                 return Err("Start a permitted recording after the remote screen appears".into());
             }
             let hub = remote.recording_hub();
@@ -538,7 +535,10 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
             }
             out(hub.start(session, path)?)
         }
-        "remote_record_stop" => out(remote.recording_hub().stop(args.get("session")?)?),
+        "remote_record_stop" => {
+            let key: Uuid = args.get("session")?;
+            out(remote.recording_hub().stop(remote.recording_view(key).await.0)?)
+        }
         "remote_close" => out(remote.close(args.get("session")?).await?),
         "remote_stop_session" => out(remote.stop_session(args.get("consent")?).await?),
         "remote_restart" => out(remote.restart(args.get("session")?).await?),

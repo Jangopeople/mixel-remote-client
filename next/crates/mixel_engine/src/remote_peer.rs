@@ -53,6 +53,8 @@ pub struct Config {
     pub signals: mpsc::Receiver<Signal>,
     pub commands: mpsc::Sender<Command>,
     pub video: Arc<VideoMailbox>,
+    /// The technician session this media belongs to (the session id for a host or a colleague).
+    pub slot: Uuid,
     pub relay_only: bool,
     pub ice_servers: Vec<core_protocol::transport::NativeIceServer>,
     pub authorization: crate::remote_session::BrokerLease,
@@ -151,7 +153,8 @@ pub fn start(mut config: Config) -> Result<(), String> {
     let state = config.state.clone();
     let cancel = config.account_cancel.clone();
     let mirror = config.mirror;
-    state.spawn_media(&cancel, mirror, move || {
+    let slot = config.slot;
+    state.spawn_media(&cancel, mirror, slot, move || {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
