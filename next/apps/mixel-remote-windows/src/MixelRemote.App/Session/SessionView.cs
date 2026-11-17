@@ -36,6 +36,7 @@ internal sealed class SessionView : Grid
     private bool shown = true;
     private bool stale;
     private TextBlock? detailLine;
+    private TextBlock? fpsText;
 
     public SessionView(AppModel app, Window window, uint peer = 0, bool inWindow = false, string tool = "")
     {
@@ -120,7 +121,7 @@ internal sealed class SessionView : Grid
 
     private void OnSession(object? sender, System.ComponentModel.PropertyChangedEventArgs change)
     {
-        if (change.PropertyName == nameof(SessionModel.Fps)) { if (detailLine is not null && !closed) detailLine.Text = Detail(); }
+        if (change.PropertyName == nameof(SessionModel.Fps)) { if (fpsText is not null && !closed) { fpsText.Text = L("%d fps", session.Fps); AutomationProperties.SetItemStatus(fpsText, fpsText.Text); } }
         else Rebuild();
     }
 
@@ -449,6 +450,7 @@ internal sealed class SessionView : Grid
             });
         }
         var fps = new TextBlock { Text = L("%d fps", session.Fps), FontSize = 13, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
+        fpsText = fps;
         var facts = Ui.Column(8,
             Ui.Heading(L("Picture quality")),
             Ui.Split(Ui.Text(L("Pictures per second"), secondary: true), Ui.Text(L("%d fps", session.Fps))),
