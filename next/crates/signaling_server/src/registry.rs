@@ -2017,6 +2017,26 @@ mod rotation_tests {
         );
     }
     #[test]
+    fn five_wrong_support_passwords_lock_the_code_even_for_the_right_one() {
+        let mut registry = Registry::default();
+        let now = Instant::now();
+        let (controller, mut controller_events) = peer(&mut registry, 123_456_789, 10);
+        let (host, mut host_events) = peer(&mut registry, 234_567_890, 11);
+        let _ = controller_events.try_recv().unwrap();
+        let _ = host_events.try_recv().unwrap();
+        registry.handle(234_567_890, host, ClientMessage::GenerateSupportCode, now).unwrap();
+        let ServerMessage::SupportCode { code: Some(code), .. } = host_events.try_recv().unwrap() else { panic!("missing code") };
+        let ask = |registry: &mut Registry, code: crate::protocol::SupportCode| {
+            registry.handle(123_456_789, controller, ClientMessage::RequestWithCode { host: 234_567_890, code }, now)
+        };
+        for _ in 0..CODE_ATTEMPTS {
+            let wrong = crate::protocol::SupportCode::parse("ABCDEF012345".into()).unwrap();
+            assert!(ask(&mut registry, wrong).is_err(), "a wrong password is refused");
+        }
+        assert_eq!(ask(&mut registry, code.clone()), Err(ErrorCode::Unavailable), "locked: the right password no longer works either");
+    }
+
+    #[test]
     fn support_password_starts_sessions_for_thirty_minutes_then_needs_a_new_one() {
         let mut registry = Registry::default();
         let now = Instant::now();

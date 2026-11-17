@@ -172,6 +172,34 @@ pub(crate) fn iso_utc(seconds: u64) -> String {
     format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", rest / 3600, rest % 3600 / 60, rest % 60)
 }
 /// "This support session ends in 5 minutes (support password limit). Ask for a new password to continue."
+/// What the person sees when the connection service closes a session.
+fn closed_text(reason: signaling_server::protocol::CloseReason) -> String {
+    if reason == signaling_server::protocol::CloseReason::Expired {
+        "The support session reached its 2-hour limit.".to_owned()
+    } else {
+        format!("Session closed: {reason:?}")
+    }
+}
+
+#[cfg(test)]
+mod password_limit_tests {
+    use super::{closed_text, ending_message};
+    use signaling_server::protocol::CloseReason;
+
+    /// The connection service warns at 300 s and 60 s before the 2-hour end of a support-password session
+    /// (registry tests `a_password_session_is_warned_and_ends_after_two_hours`); this is what each side shows.
+    #[test]
+    fn the_five_minute_and_the_one_minute_warnings_and_the_clean_end_are_worded() {
+        assert!(ending_message(300).contains("ends in 5 minutes"), "{}", ending_message(300));
+        assert!(ending_message(60).contains("ends in 1 minute "), "{}", ending_message(60));
+        assert!(ending_message(1).contains("ends in 1 minute "));
+        assert!(ending_message(240).contains("ends in 4 minutes"));
+        assert!(ending_message(300).contains("Ask for a new password"));
+        assert_eq!(closed_text(CloseReason::Expired), "The support session reached its 2-hour limit.");
+        assert_eq!(closed_text(CloseReason::Requested), "Session closed: Requested");
+    }
+}
+
 fn ending_message(seconds: u32) -> String {
     let when = if seconds <= 60 { "1 minute".to_owned() } else { format!("{} minutes", seconds.div_ceil(60)) };
     format!("This support session ends in {when} (support password limit). Ask for a new password to continue.")
@@ -4042,7 +4070,7 @@ async fn run(
                             }
                         },
                         ServerMessage::Closed{session,reason}=>{
-                            let text=if reason==signaling_server::protocol::CloseReason::Expired{"The support session reached its 2-hour limit.".to_owned()}else{format!("Session closed: {reason:?}")};
+                            let text=closed_text(reason);
                             if peer.as_ref().is_some_and(|peer|media_end_ends_session(peer.id,session)){peer=None;state.change(generation,|status|{status.phase="ready".into();status.message=text;status.session=None;status.peer=None;status.requester=None;}).await;}
                             else if let Some(index)=ctrl.iter().position(|active|media_end_ends_session(active.id,session)){
                                 // A session that was asked for again after the computer was lost, closed before it ran (the
