@@ -17,6 +17,7 @@ LANGS = ['de', 'fr', 'it']
 
 # English: (German (Swiss spelling), French, Italian) — texts only the Linux app shows.
 LINUX = {
+    "Add computer": ("Computer hinzufügen", "Ajouter un ordinateur", "Aggiungi computer"),
     "%@ is in its own window": ("%@ ist in einem eigenen Fenster", "%@ est dans sa propre fenêtre", "%@ è in una finestra separata"),
     "Account & security": ("Konto und Sicherheit", "Compte et sécurité", "Account e sicurezza"),
     "Appearance": ("Darstellung", "Apparence", "Aspetto"),

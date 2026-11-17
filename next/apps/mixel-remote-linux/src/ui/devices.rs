@@ -28,25 +28,15 @@ pub struct DevicesPage {
     connect_id: gtk::Entry,
     connect_password: gtk::PasswordEntry,
     setup: Rc<SetupInputs>,
-    sizes: Columns,
+    table_head: gtk::Box,
 }
 
-/// The table's columns share their widths between the header and every row.
-struct Columns {
-    device: gtk::SizeGroup,
-    id: gtk::SizeGroup,
-    status: gtk::SizeGroup,
-    seen: gtk::SizeGroup,
-    version: gtk::SizeGroup,
-    actions: gtk::SizeGroup,
-}
-
-impl Columns {
-    fn new() -> Self {
-        let group = || gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal);
-        Self { device: group(), id: group(), status: group(), seen: group(), version: group(), actions: group() }
-    }
-}
+/// The table's column widths (the device column takes the rest).
+const ID_W: i32 = 108;
+const STATUS_W: i32 = 168;
+const SEEN_W: i32 = 78;
+const VERSION_W: i32 = 88;
+const ACTIONS_W: i32 = 132;
 
 impl DevicesPage {
     pub fn new(app: &Rc<App>) -> Self {
@@ -59,11 +49,17 @@ impl DevicesPage {
         widget.append(&head);
         let list = vbox(0);
         let scroller = gtk::ScrolledWindow::builder().hscrollbar_policy(gtk::PolicyType::Never).vexpand(true).child(&list).build();
-        widget.append(&scroller);
+        // The table scrolls sideways when the window is narrow; its header stays above the rows.
+        let table_head = vbox(0);
+        let table = vbox(0);
+        table.append(&table_head);
+        table.append(&scroller);
+        let sideways = gtk::ScrolledWindow::builder().hscrollbar_policy(gtk::PolicyType::Automatic).vscrollbar_policy(gtk::PolicyType::Never).vexpand(true).child(&table).build();
+        widget.append(&sideways);
         let search = entry(&t("Search name, ID or note"));
         search.set_icon_from_icon_name(gtk::EntryIconPosition::Primary, Some("edit-find-symbolic"));
         search.set_hexpand(false);
-        search.set_width_chars(26);
+        search.set_width_chars(14);
         search.update_property(&[gtk::accessible::Property::Label(&t("Search name, ID or note")), gtk::accessible::Property::KeyShortcuts("/")]);
         // Typing filters the loaded list at once; Enter asks the server (all pages).
         let a = app.clone();
@@ -87,7 +83,7 @@ impl DevicesPage {
         connect_id.connect_activate(move |_| connect_by_id(&a, &id, &pw));
         let (a, id, pw) = (app.clone(), connect_id.clone(), connect_password.clone());
         connect_password.connect_activate(move |_| connect_by_id(&a, &id, &pw));
-        let page = Self { widget, head, list, key: RefCell::new(String::new()), search, connect_id, connect_password, setup: Rc::new(SetupInputs::new(app)), sizes: Columns::new() };
+        let page = Self { widget, head, list, key: RefCell::new(String::new()), search, connect_id, connect_password, setup: Rc::new(SetupInputs::new(app)), table_head };
         // "/" jumps to the search (only when no text field is being typed in).
         let keys = gtk::EventControllerKey::new();
         let search = page.search.clone();
@@ -170,6 +166,7 @@ impl DevicesPage {
         self.head.append(&top);
 
         // Filters.
+        // One line; it scrolls sideways when the window is narrow.
         let row = hbox(8);
         row.set_valign(gtk::Align::Center);
         let search = adopt(&self.search);
@@ -203,17 +200,17 @@ impl DevicesPage {
         row.append(&spacer());
         if company.tenant().is_some() && state.signed_in() {
             let blocked = company.add_blocked();
+            let mut items: Vec<MenuItem> = Vec::new();
             if company.manages_devices() && !state.registered_here() {
                 let (a, setup) = (app.clone(), self.setup.clone());
-                let add = button(&t("Add this computer"), move || add_this_dialog(&a, &setup));
-                add.set_sensitive(blocked.is_empty());
-                add.set_tooltip_text((!blocked.is_empty()).then_some(blocked.as_str()));
-                row.append(&add);
+                items.push(Some((t("Add this computer"), blocked.is_empty(), Box::new(move || add_this_dialog(&a, &setup)))));
             }
             if company.deploys() {
                 let a = app.clone();
-                let add = button(&t("Add other computers"), move || deploy_dialog(&a));
-                add.set_sensitive(blocked.is_empty());
+                items.push(Some((t("Add other computers"), blocked.is_empty(), Box::new(move || deploy_dialog(&a)))));
+            }
+            if !items.is_empty() {
+                let add = menu(&t("Add computer"), items);
                 add.set_tooltip_text((!blocked.is_empty()).then_some(blocked.as_str()));
                 row.append(&add);
             }
@@ -223,17 +220,17 @@ impl DevicesPage {
         refresh.set_sensitive(state.signed_in() && !state.devices.loading);
         row.append(&refresh);
         let (a, b) = (app.clone(), app.clone());
-        let sort = menu(
+        let sort = icon_menu(
+            "view-sort-descending-symbolic",
             &if filters.sort == Sort::Status { t("Sorted by status") } else { t("Sorted by name") },
             vec![
                 Some((t("Sorted by status"), true, Box::new(move || a.edit(|state| state.devices.filters.sort = Sort::Status)))),
                 Some((t("Sorted by name"), true, Box::new(move || b.edit(|state| state.devices.filters.sort = Sort::Name)))),
             ],
         );
-        sort.add_css_class("flat");
-        sort.set_tooltip_text(Some(&t("Sort order")));
         row.append(&sort);
-        self.head.append(&row);
+        let filters_scroll = gtk::ScrolledWindow::builder().hscrollbar_policy(gtk::PolicyType::Automatic).vscrollbar_policy(gtk::PolicyType::Never).propagate_natural_height(true).child(&row).build();
+        self.head.append(&filters_scroll);
 
         if !company.add_blocked().is_empty() && company.manages_devices() {
             let text = if !company.writable() {
@@ -262,9 +259,12 @@ impl DevicesPage {
             self.head.append(&banner);
         }
         append_message(&self.head, &state.devices.error, true);
-        append_message(&self.head, &state.devices.message, false);
+        if state.devices.page > 0 || state.devices.has_next {
+            append_message(&self.head, &state.devices.message, false);
+        }
+        clear(&self.table_head);
         if state.signed_in() && !state.devices.devices.is_empty() {
-            self.head.append(&self.table_header());
+            self.table_head.append(&self.table_header());
         }
     }
 
@@ -273,7 +273,9 @@ impl DevicesPage {
         let boxed = hbox(6);
         boxed.add_css_class("mixel-connect-box");
         boxed.set_valign(gtk::Align::Center);
-        boxed.append(&dim(&t("Connect by ID")));
+        let connect_label = dim(&t("Connect by ID"));
+        connect_label.set_wrap(false);
+        boxed.append(&connect_label);
         boxed.append(&adopt(&self.connect_id));
         // A one-time password: only for a person who gave it on the phone; the warning says so.
         let pop = gtk::Popover::new();
@@ -304,13 +306,13 @@ impl DevicesPage {
         let header = hbox(12);
         header.set_margin_start(12);
         header.set_margin_end(12);
-        let cell = |text: &str, group: Option<&gtk::SizeGroup>, expand: bool| {
+        let cell = |text: &str, width: Option<i32>, expand: bool| {
             let label = gtk::Label::new(Some(&text.to_uppercase()));
             label.add_css_class("mixel-th");
             label.set_xalign(0.0);
             label.set_hexpand(expand);
-            if let Some(group) = group {
-                group.add_widget(&label);
+            if let Some(width) = width {
+                label.set_size_request(width, -1);
             }
             label
         };
@@ -320,12 +322,12 @@ impl DevicesPage {
         let tile = hbox(0);
         tile.set_size_request(38, 1);
         header.append(&tile);
-        header.append(&cell(&t("Device"), Some(&self.sizes.device), true));
-        header.append(&cell(&t("ID"), Some(&self.sizes.id), false));
-        header.append(&cell(&t("Status"), Some(&self.sizes.status), false));
-        header.append(&cell(&t("Last seen"), Some(&self.sizes.seen), false));
-        header.append(&cell(&t("Version"), Some(&self.sizes.version), false));
-        let actions = cell(&t("Actions"), Some(&self.sizes.actions), false);
+        header.append(&cell(&t("Device"), None, true));
+        header.append(&cell(&t("ID"), Some(ID_W), false));
+        header.append(&cell(&t("Status"), Some(STATUS_W), false));
+        header.append(&cell(&t("Last seen"), Some(SEEN_W), false));
+        header.append(&cell(&t("Version"), Some(VERSION_W), false));
+        let actions = cell(&t("Actions"), Some(ACTIONS_W), false);
         actions.set_xalign(1.0);
         header.append(&actions);
         header
@@ -485,8 +487,7 @@ impl DevicesPage {
         sub.set_ellipsize(gtk::pango::EllipsizeMode::End);
         text.append(&sub);
         text.set_hexpand(true);
-        text.set_size_request(120, -1);
-        self.sizes.device.add_widget(&text);
+        text.set_size_request(100, -1);
         row.append(&text);
 
         // ID.
@@ -494,13 +495,13 @@ impl DevicesPage {
         id.add_css_class("monospace");
         id.set_xalign(0.0);
         id.set_selectable(false);
-        self.sizes.id.add_widget(&id);
+        id.set_size_request(ID_W, -1);
         row.append(&id);
 
         // Status: the progress of a connection that is being prepared sits on the row.
         let status = hbox(8);
         status.set_valign(gtk::Align::Center);
-        self.sizes.status.add_widget(&status);
+        status.set_size_request(STATUS_W, -1);
         match live {
             Some("connecting") => {
                 let step = state.workspace.attempt.as_ref().map(|attempt| attempt.step).unwrap_or(0);
@@ -532,25 +533,26 @@ impl DevicesPage {
         // Last seen and version.
         let seen = match presence {
             Presence::This | Presence::Online => t("Now"),
-            _ => state.devices.server_presence.get(&device.connection_id).map(|record| format::last_seen(record.last_seen.as_deref(), format::now())).filter(|text| !text.is_empty()).unwrap_or_else(|| "—".into()),
+            _ if matches!(live, Some("ready" | "starting")) => t("Now"),
+            _ => state.devices.server_presence.get(&device.connection_id).map(|record| format::ago(record.last_seen.as_deref(), format::now())).filter(|text| !text.is_empty()).unwrap_or_else(|| "—".into()),
         };
         let seen = label(&seen);
         seen.set_xalign(0.0);
-        self.sizes.seen.add_widget(&seen);
+        seen.set_size_request(SEEN_W, -1);
         row.append(&seen);
         let version = hbox(6);
         version.append(&label(meta.and_then(|meta| meta.app_version.as_deref()).unwrap_or("—")));
         if summary.update {
             version.append(&pill_tag("update", &t("Update")));
         }
-        self.sizes.version.add_widget(&version);
+        version.set_size_request(VERSION_W, -1);
         row.append(&version);
 
         // Actions.
         let actions = hbox(4);
         actions.set_halign(gtk::Align::End);
         actions.set_valign(gtk::Align::Center);
-        self.sizes.actions.add_widget(&actions);
+        actions.set_size_request(ACTIONS_W, -1);
         if matches!(live, Some("ready" | "starting")) {
             let (a, peer) = (app.clone(), device.connection_id);
             let show = button(&t("Show"), move || a.show_session(peer));

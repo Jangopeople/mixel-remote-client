@@ -131,7 +131,7 @@ async fn scene(application: &adw::Application, folder: &std::path::Path, name: &
     adw::StyleManager::default().set_color_scheme(if dark { adw::ColorScheme::ForceDark } else { adw::ColorScheme::ForceLight });
     let engine = Rc::new(engine_for(name));
     // Sessions that are shown at once (the session scenes), the others stay in Devices with a notice.
-    let open_session = name.starts_with("session") && name != "session-ready" || name == "invite-colleague" || name == "sessions";
+    let open_session = name.starts_with("session") && name != "session-ready" || matches!(name, "invite-colleague" | "sessions" | "popout");
     let settings = Settings { language: language.into(), when_ready: if open_session { "open".into() } else { String::new() }, open_in: if name == "popout" { "window".into() } else { String::new() }, ..Settings::default() };
     let app = App::new(engine.clone(), Store::memory(settings));
     crate::ui::install(&app, application, false);
@@ -147,6 +147,9 @@ async fn scene(application: &adw::Application, folder: &std::path::Path, name: &
     app.refresh_remote().await;
     let section = section_for(name);
     app.edit(|state| state.section = section);
+    if name == "signed-out" {
+        app.edit(|state| state.providers = vec!["azure".into(), "google".into(), "apple".into()]);
+    }
     if matches!(name, "connecting" | "connect-failed") {
         // A connection being prepared: the device list with the card and the progress on the row.
         app.edit(|state| {
@@ -210,6 +213,8 @@ async fn scene(application: &adw::Application, folder: &std::path::Path, name: &
             settle(300).await;
             top_dialog(application, &window)
         }
+        // The session in its own window: save that window too.
+        "popout" => gtk::Window::list_toplevels().into_iter().filter_map(|widget| widget.downcast::<gtk::Window>().ok()).find(|other| other.is_visible() && other.is::<adw::Window>()),
         "consent" => {
             let dialog = top_dialog(application, &window);
             // The person ticks and unticks an option: the dialog is built again each time, with a
@@ -386,7 +391,12 @@ pub fn run(folder: PathBuf, languages: &str) -> i32 {
             for language in &languages {
                 // Other languages: the main screens; English: all of them.
                 let scenes: Vec<&str> = if language == "en" { SCENES.to_vec() } else { vec!["remote-control", "devices", "session", "consent", "settings"] };
+                // MIXEL_SHOT_SCENES=a,b: only these scenes (for quick looks while working on a screen).
+                let only: Vec<String> = std::env::var("MIXEL_SHOT_SCENES").map(|list| list.split(',').map(str::to_owned).collect()).unwrap_or_default();
                 for name in scenes {
+                    if !only.is_empty() && !only.iter().any(|wanted| wanted == name) {
+                        continue;
+                    }
                     for dark in [false, true] {
                         if !scene(&application, &folder, name, dark, language).await {
                             eprintln!("FAIL screenshot {language} {name} dark={dark}");

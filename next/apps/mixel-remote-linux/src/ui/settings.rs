@@ -21,9 +21,10 @@ pub struct SettingsPage {
 
 fn group(title: &str, description: &str) -> adw::PreferencesGroup {
     let group = adw::PreferencesGroup::new();
-    group.set_title(title);
+    // Titles and descriptions are Pango markup: "&" must be escaped.
+    group.set_title(&gtk::glib::markup_escape_text(title));
     if !description.is_empty() {
-        group.set_description(Some(description));
+        group.set_description(Some(&gtk::glib::markup_escape_text(description)));
     }
     group
 }

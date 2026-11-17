@@ -19,6 +19,9 @@ msgstr "%@ prova fino al %@"
 msgid "%@ · read-only"
 msgstr "%@ · sola lettura"
 
+msgid "%d days ago"
+msgstr "%d giorni fa"
+
 msgid "%d devices"
 msgstr "%d dispositivi"
 
@@ -27,6 +30,12 @@ msgstr "%d dispositivi · %d online"
 
 msgid "%d fps"
 msgstr "%d fps"
+
+msgid "%d h ago"
+msgstr "%d h fa"
+
+msgid "%d min ago"
+msgstr "%d min fa"
 
 msgid "%d of %d devices"
 msgstr "%d di %d dispositivi"
@@ -93,6 +102,9 @@ msgstr "Aggiungi %@ ai preferiti"
 
 msgid "Add and enroll this computer"
 msgstr "Aggiungi e registra questo computer"
+
+msgid "Add computer"
+msgstr "Aggiungi computer"
 
 msgid "Add note"
 msgstr "Aggiungi nota"
@@ -697,6 +709,9 @@ msgstr "Partecipa"
 msgid "Joined as colleague"
 msgstr "Unito come collega"
 
+msgid "Just now"
+msgstr "Adesso"
+
 msgid "Keyboard & mouse"
 msgstr "Tastiera e mouse"
 
@@ -1084,9 +1099,6 @@ msgstr "ID Remote"
 msgid "Remote clipboard updated."
 msgstr "Appunti remoti aggiornati."
 
-msgid "Remote control"
-msgstr "Controllo remoto"
-
 msgid "Remote printing"
 msgstr "Stampa remota"
 
@@ -1347,9 +1359,6 @@ msgstr "Dimensione %d"
 
 msgid "Someone wants to connect"
 msgstr "Qualcuno vuole connettersi"
-
-msgid "Sort order"
-msgstr "Ordinamento"
 
 msgid "Sorted by name"
 msgstr "Ordinati per nome"

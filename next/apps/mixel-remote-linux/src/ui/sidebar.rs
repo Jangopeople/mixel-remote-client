@@ -22,7 +22,7 @@ impl Sidebar {
     pub fn new() -> Self {
         let widget = vbox(0);
         widget.add_css_class("mixel-sidebar");
-        widget.set_size_request(250, -1);
+        widget.set_size_request(232, -1);
         widget.set_hexpand(false);
         let body = vbox(2);
         body.set_margin_top(14);

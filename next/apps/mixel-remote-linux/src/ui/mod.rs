@@ -142,7 +142,10 @@ pub fn install(app: &Rc<App>, application: &adw::Application, autostart: bool) {
     let ui = Ui::new(app, application);
     app.ui.replace(Some(ui.clone()));
     app.shell.replace(Some(Rc::new(GtkShell { window: ui.window.clone(), toasts: ui.toasts.clone() })));
-    apply_appearance(&app.store.borrow().settings.appearance);
+    let appearance = app.store.borrow().settings.appearance.clone();
+    if !appearance.is_empty() {
+        apply_appearance(&appearance);
+    }
     ui.install_actions(app);
     if let Some(runtime) = app.engine.runtime() {
         let tray = crate::tray::Tray::start(app, &runtime);
@@ -163,7 +166,7 @@ impl Ui {
             let theme = gtk::IconTheme::for_display(&display);
             theme.add_resource_path("/ch/mixel/remote/icons");
         }
-        let window = adw::ApplicationWindow::builder().application(application).title("Mixel Remote").default_width(1120).default_height(740).icon_name(crate::APP_ID).build();
+        let window = adw::ApplicationWindow::builder().application(application).title("Mixel Remote").default_width(1180).default_height(740).icon_name(crate::APP_ID).build();
         window.set_size_request(360, 480);
         let toasts = adw::ToastOverlay::new();
         window.set_content(Some(&toasts));
@@ -564,7 +567,7 @@ impl Parts {
         pages.add_named(&computer.widget, Some(Section::Computer.id()));
         pages.add_named(&account.widget, Some(Section::Account.id()));
         content.append(&pages);
-        let sidebar_pane = gtk::ScrolledWindow::builder().hscrollbar_policy(gtk::PolicyType::Never).vscrollbar_policy(gtk::PolicyType::Automatic).min_content_width(250).propagate_natural_width(false).child(&sidebar.widget).build();
+        let sidebar_pane = gtk::ScrolledWindow::builder().hscrollbar_policy(gtk::PolicyType::Never).vscrollbar_policy(gtk::PolicyType::Automatic).min_content_width(232).propagate_natural_width(false).child(&sidebar.widget).build();
         let leaflet = adw::Leaflet::new();
         leaflet.set_can_navigate_back(true);
         leaflet.append(&sidebar_pane);
@@ -581,6 +584,8 @@ impl Parts {
         console_page.set_title(&t("Devices"));
         console_page.set_icon(Some(&gio::ThemedIcon::new("computer-symbolic")));
         console_page.set_tooltip(&t("Devices"));
+        // Pinned: the Devices tab has no close button.
+        tabs.set_page_pinned(&console_page, true);
 
         let session = session::SessionView::new(app);
         let session_tabs: Rc<RefCell<Vec<SessionTab>>> = Rc::new(RefCell::new(Vec::new()));
@@ -631,7 +636,8 @@ impl Parts {
 
         let signin = signin::SigninPage::new();
         let root = gtk::Stack::new();
-        root.set_transition_type(gtk::StackTransitionType::Crossfade);
+        // No transition: the screen that is not shown has no size, and a fade would draw it.
+        root.set_transition_type(gtk::StackTransitionType::None);
         root.add_named(&shell, Some("shell"));
         let signin_shell = vbox(0);
         let signin_header = adw::HeaderBar::new();

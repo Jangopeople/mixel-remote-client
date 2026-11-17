@@ -40,7 +40,7 @@
 /* Pro Console (Direction B): shell, sidebar, device table, floating cards, session toolbar. */
 @define-color mixel_line alpha(@window_fg_color, 0.12);
 @define-color mixel_info #1f6fc4;
-.mixel-nav { padding: 7px 10px; border-radius: 9px; min-height: 22px; font-weight: 500; }
+.mixel-nav { padding: 5px 10px; border-radius: 9px; min-height: 22px; font-weight: 500; }
 .mixel-nav.active { background-color: alpha(@accent_bg_color, 0.12); color: @accent_color; font-weight: 700; }
 .mixel-nav .mixel-count { opacity: 0.7; font-feature-settings: "tnum"; }
 .mixel-pill { background-color: @accent_bg_color; color: @accent_fg_color; border-radius: 99px; padding: 0 7px; font-size: 11px; font-weight: 700; min-height: 18px; }
@@ -57,7 +57,7 @@
 .mixel-title { font-size: 26px; font-weight: 800; }
 .mixel-connect-box { background-color: @card_bg_color; border: 1px solid @mixel_line; border-radius: 12px; padding: 4px 4px 4px 12px; }
 .mixel-connect-box entry { background: none; border: none; box-shadow: none; outline: none; font-family: monospace; font-size: 16px; min-width: 150px; }
-.mixel-chip { border-radius: 99px; padding: 3px 12px; min-height: 22px; font-weight: 500; border: 1px solid @mixel_line; background: none; }
+.mixel-chip { border-radius: 99px; padding: 2px 11px; min-height: 22px; font-weight: 500; border: 1px solid @mixel_line; background: none; }
 .mixel-chip:checked { background-color: alpha(@accent_bg_color, 0.12); color: @accent_color; border-color: alpha(@accent_bg_color, 0.45); }
 .mixel-th { font-size: 11px; font-weight: 700; letter-spacing: 0.8px; opacity: 0.6; padding: 6px 0; }
 .mixel-table-row { border-bottom: 1px solid @mixel_line; padding: 6px 12px; min-height: 52px; }

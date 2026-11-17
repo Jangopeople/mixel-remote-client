@@ -75,10 +75,10 @@ impl SigninPage {
             .build();
         let scroller = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
-            .hexpand(true)
+            .hexpand(false)
             .child(&clamp)
             .build();
-        scroller.set_size_request(340, -1);
+        scroller.set_size_request(460, -1);
         widget.append(&scroller);
         widget.set_visible_child(&scroller);
         let stay = gtk::CheckButton::with_label(&t("Stay signed in on this computer"));
@@ -117,8 +117,8 @@ impl SigninPage {
     fn build(&self, app: &Rc<App>, state: &State) {
         let account = &state.account;
         clear(&self.form);
-        let tile = mark(44);
-        tile.set_halign(gtk::Align::Start);
+        let tile = hbox(0);
+        tile.append(&mark(44));
         self.form.append(&tile);
         let title = gtk::Label::builder()
             .label(t("Sign in to Mixel Remote"))
@@ -250,14 +250,17 @@ impl SigninPage {
         texts.append(&caption(&t("Get a support ID for your technician")));
         quick.append(&texts);
         let a = app.clone();
-        quick.append(&button(&t("Quick Support"), move || {
+        let quick_button = button(&t("Quick Support"), move || {
             a.open_uri("https://remote.mixel.ch")
-        }));
+        });
+        quick_button.set_valign(gtk::Align::Center);
+        quick.append(&quick_button);
         self.form.append(&quick);
 
         // Legal.
         let fine = gtk::FlowBox::new();
         fine.set_selection_mode(gtk::SelectionMode::None);
+        fine.set_homogeneous(false);
         fine.set_margin_top(6);
         for (title, page) in [
             (t("Terms of Service"), "terms"),
