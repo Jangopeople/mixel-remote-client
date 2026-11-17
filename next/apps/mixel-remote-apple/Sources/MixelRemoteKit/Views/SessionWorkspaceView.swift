@@ -222,10 +222,11 @@ struct ToolPanel: View {
     @ObservedObject var app: AppModel
     @ObservedObject var session: SessionModel
     let tool: SessionWorkspaceView.Tool
+    var showsTitle = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(verbatim: tool.title).font(.headline)
+            if showsTitle { Text(verbatim: tool.title).font(.headline) }
             switch tool {
             case .chat: chat
             case .files: files

@@ -3,12 +3,13 @@ import SwiftUI
 
 /// The sections of the app (sidebar on the Mac, tabs on the phone).
 public enum AppSection: String, CaseIterable, Identifiable, Sendable {
-    case remote, devices, reports, account, settings
+    case remote, devices, sessions, reports, account, settings
     public var id: String { rawValue }
     public var title: String {
         switch self {
         case .remote: L("Remote control")
         case .devices: L("Devices")
+        case .sessions: L("Sessions")
         case .reports: L("Session reports")
         case .account: L("Account")
         case .settings: L("Settings")
@@ -18,6 +19,7 @@ public enum AppSection: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .remote: "arrow.left.arrow.right"
         case .devices: "laptopcomputer.and.iphone"
+        case .sessions: "macwindow.on.rectangle"
         case .reports: "list.bullet.rectangle"
         case .account: "person.crop.circle"
         case .settings: "gearshape"
@@ -51,6 +53,7 @@ public final class AppModel: ObservableObject {
     public lazy var assistant = AssistantModel(app: self)
     public lazy var drawing = DrawingModel(app: self)
     public lazy var reports = ReportsModel(app: self)
+    public lazy var workspace = WorkspaceModel(app: self)
 
     /// The app opens web pages (sign-in, legal texts) through this.
     public var openURL: (URL) -> Void = { _ in }
@@ -128,6 +131,7 @@ public final class AppModel: ObservableObject {
         reports.statusChanged(from: previous, to: next)
         host.statusChanged(from: previous, to: next)
         devices.statusChanged(from: previous, to: next)
+        workspace.statusChanged(from: previous, to: next)
         await goOnlineIfNeeded()
     }
 

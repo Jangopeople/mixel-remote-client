@@ -50,6 +50,22 @@ enum Entry {
     }
 }
 
+/// The main window: the console, with the session-window hooks of the workspace.
+struct MainWindow: View {
+    @ObservedObject var app: AppModel
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        RootView(app: app)
+            .tint(Theme.brand)
+            .onAppear {
+                app.workspace.openWindow = { peer in openWindow(id: "session", value: peer) }
+                app.workspace.focusWindow = { peer in NotificationCenter.default.post(name: .mixelFocusSessionWindow, object: peer) }
+                app.start()
+            }
+    }
+}
+
 struct MixelRemoteMacApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @Environment(\.openWindow) private var openWindow
@@ -57,15 +73,22 @@ struct MixelRemoteMacApp: App {
     var body: some Scene {
         Window("Mixel Remote", id: "main") {
             if let app = delegate.model {
-                RootView(app: app)
-                    .tint(Theme.brand)
-                    .onAppear { app.start() }
+                MainWindow(app: app)
             } else {
                 StartupFailure(message: delegate.failure)
             }
         }
-        .defaultSize(width: 1080, height: 720)
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1280, height: 800)
         .commands { AppCommands(model: delegate.model) }
+
+        // A session popped out of its tab ("Window"); keyed by the other computer's Remote ID.
+        WindowGroup(L("Session"), id: "session", for: UInt32.self) { $peer in
+            if let app = delegate.model, let peer {
+                SessionWindowView(app: app, peer: peer)
+            }
+        }
+        .defaultSize(width: 1180, height: 760)
 
         Settings {
             if let app = delegate.model {
@@ -98,6 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         do {
             let engine = try CoreEngine(dataDirectory: CoreEngine.defaultDirectory())
             let app = AppModel(engine: engine)
+            app.section = .devices
             app.checksForUpdates = true
             app.quit = { [weak self] in
                 self?.quitting = true
@@ -209,7 +233,6 @@ struct AppCommands: Commands {
                 .keyboardShortcut("c", modifiers: [.command, .shift])
             Divider()
             Button(L("End session")) { model?.session.end() }
-                .keyboardShortcut(".", modifiers: .command)
         }
         CommandGroup(after: .sidebar) {
             ForEach(Array(AppSection.allCases.enumerated()), id: \.element) { index, section in

@@ -35,6 +35,10 @@ public struct SettingsView: View {
                 } label: { Text(verbatim: L("Language")) }
             } header: { Text(verbatim: L("General")) }
 
+            if !app.isPhone {
+                SessionSettingsSection(workspace: app.workspace)
+            }
+
             Section {
                 LabeledContent {
                     Text(verbatim: Format.remoteId(app.remote.host ?? enrollment.current?.connectionId)).monospacedDigit().textSelection(.enabled)
@@ -273,5 +277,23 @@ struct RolloutSection: View {
             }
         } header: { Text(verbatim: L("Rollout for many computers")) }
         .task { if enrollment.companies.isEmpty { enrollment.loadTeamRecords() } }
+    }
+}
+
+/// Sessions: what happens when one is ready, and where it opens (both remembered).
+struct SessionSettingsSection: View {
+    @ObservedObject var workspace: WorkspaceModel
+
+    var body: some View {
+        Section {
+            Picker(selection: $workspace.whenReady) {
+                Text(verbatim: L("Stay in Devices and show “Open”")).tag(WorkspaceModel.WhenReady.stay)
+                Text(verbatim: L("Switch to the session")).tag(WorkspaceModel.WhenReady.open)
+            } label: { Text(verbatim: L("When a session is ready")) }
+            Picker(selection: $workspace.openIn) {
+                Text(verbatim: L("A tab in this window")).tag(WorkspaceModel.OpenIn.tab)
+                Text(verbatim: L("Its own window")).tag(WorkspaceModel.OpenIn.window)
+            } label: { Text(verbatim: L("Open sessions in")) }
+        } header: { Text(verbatim: L("Sessions")) }
     }
 }

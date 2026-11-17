@@ -16,6 +16,8 @@ public final class DevicesModel: ObservableObject {
     @Published public private(set) var hasNext = false
     @Published public private(set) var message = ""
     @Published public var error = ""
+    /// A short confirmation (the wake signal was sent).
+    @Published public var notice = ""
     @Published public private(set) var serverPresence: [UInt32: SaasPresence] = [:]
     /// The deploy link just created (shown once).
     @Published public var deployLink: DeployLinkCreated?
@@ -107,6 +109,96 @@ public final class DevicesModel: ObservableObject {
         }
     }
 
+    // MARK: The console's views, filters and groups
+
+    /// The view chosen in the sidebar.
+    public enum ListView: Hashable, Sendable {
+        case all, online, favorites, recent
+        case group(String)
+    }
+
+    @Published public var listView: ListView = .all
+    /// Quick filters above the table.
+    @Published public var onlineOnly = false
+    @Published public var systems: Set<String> = []
+    /// Typed into the console's search field: name, ID or group (filters at once, no round trip).
+    @Published public var filterText = ""
+
+    /// A group of rows in the table.
+    public struct RowGroup: Identifiable, Equatable {
+        public var id: String
+        public var name: String
+        public var devices: [Device]
+        public var online: Int
+    }
+
+    /// Online, or this computer.
+    public func isOnline(_ device: Device) -> Bool {
+        let presence = presence(of: device)
+        return presence == .online || presence == .this
+    }
+
+    public func devices(in view: ListView) -> [Device] {
+        let all = allDevices
+        switch view {
+        case .all: return all
+        case .online: return all.filter { isOnline($0) || app.workspace.state(of: $0.connectionId) != nil }
+        case .favorites: return all.filter { favorites.contains($0.device) }
+        case .recent: return recent.compactMap { id in all.first { $0.device == id } }
+        case .group(let name): return all.filter { ($0.groupName ?? "") == name }
+        }
+    }
+
+    /// The groups of the listed devices, by name ("" = no group), with their counts.
+    public var groupNames: [String] {
+        Array(Set(allDevices.compactMap(\.groupName))).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    public var filtered: [Device] {
+        let text = filterText.trimmingCharacters(in: .whitespaces).lowercased()
+        let digits = text.filter(\.isASCIIDigit)
+        return devices(in: listView).filter { device in
+            if onlineOnly, !isOnline(device), app.workspace.state(of: device.connectionId) == nil { return false }
+            if !systems.isEmpty, !systems.contains(device.os.lowercased()) { return false }
+            if text.isEmpty { return true }
+            if device.name.lowercased().contains(text) { return true }
+            if let group = device.groupName, group.lowercased().contains(text) { return true }
+            if !digits.isEmpty, digits.count == text.filter({ !$0.isWhitespace }).count, String(device.connectionId).contains(digits) { return true }
+            return false
+        }
+    }
+
+    /// Rank for "sorted by status": in session, online, checking, unknown, offline.
+    func statusRank(_ device: Device) -> Int {
+        if app.workspace.state(of: device.connectionId) != nil { return 0 }
+        switch presence(of: device) {
+        case .online: return 1
+        case .this: return 2
+        case .checking: return 3
+        case .unknown: return 4
+        case .offline: return 5
+        }
+    }
+
+    /// The table: grouped by group (no group last), each sorted by status, then name.
+    public var rowGroups: [RowGroup] {
+        let rows = filtered
+        let byGroup = Dictionary(grouping: rows) { $0.groupName ?? "" }
+        let names = byGroup.keys.sorted { a, b in
+            if a.isEmpty != b.isEmpty { return !a.isEmpty }
+            return a.localizedStandardCompare(b) == .orderedAscending
+        }
+        return names.map { name in
+            let sorted = (byGroup[name] ?? []).sorted { a, b in
+                let ra = statusRank(a), rb = statusRank(b)
+                if ra != rb { return ra < rb }
+                return a.name.localizedStandardCompare(b.name) == .orderedAscending
+            }
+            let title = name.isEmpty ? (names.count == 1 ? L("All devices") : L("No group")) : name
+            return RowGroup(id: name.isEmpty ? "-" : name, name: title, devices: sorted, online: sorted.filter(isOnline).count)
+        }
+    }
+
     // MARK: Favorites and recent connections (company devices)
 
     struct FavoriteRow: Codable { var deviceId: String }
@@ -148,6 +240,19 @@ public final class DevicesModel: ObservableObject {
         (companyAll + devices).first { $0.connectionId == connection }?.name ?? Format.remoteId(connection)
     }
 
+    /// The device's operating system ("" when it is not in the list).
+    public func os(of connection: UInt32) -> String {
+        (companyAll + devices).first { $0.connectionId == connection }?.os ?? ""
+    }
+
+    /// Every listed device: all of the company's devices, or this page of the directory.
+    public var allDevices: [Device] { tenant != nil ? companyAll : devices }
+
+    /// The time the connection service last saw the device ("" when unknown).
+    public func lastSeenDate(_ device: Device) -> Date? {
+        serverPresence[device.connectionId]?.lastSeen.flatMap(Format.parseDate)
+    }
+
     /// One of the company's devices (any page).
     func isCompanyHost(_ connection: UInt32) -> Bool { companyAll.contains { $0.connectionId == connection } }
 
@@ -162,11 +267,13 @@ public final class DevicesModel: ObservableObject {
 
     /// Asks the connection service which listed devices are online (every 15 s while connected).
     func checkPresence(force: Bool = false) async {
-        guard app.remote.connected, !devices.isEmpty, force || Date().timeIntervalSince(lastPresence) > 15 else { return }
+        guard app.remote.connected, !allDevices.isEmpty, force || Date().timeIntervalSince(lastPresence) > 15 else { return }
         lastPresence = Date()
-        let hosts = devices.map(\.connectionId).filter { $0 != app.remote.host }
+        let hosts = allDevices.map(\.connectionId).filter { $0 != app.remote.host }
         guard !hosts.isEmpty else { return }
-        try? await app.engine.perform("remote_presence", ["hosts": Array(hosts.prefix(100))])
+        for start in stride(from: 0, to: min(hosts.count, 2000), by: 100) {
+            try? await app.engine.perform("remote_presence", ["hosts": Array(hosts[start..<min(hosts.count, start + 100)])])
+        }
         // The answer arrives in remote_status.online; the next read shows it.
         try? await Task.sleep(nanoseconds: 600_000_000)
         checked.formUnion(hosts)
@@ -220,7 +327,10 @@ public final class DevicesModel: ObservableObject {
     /// Why Connect is not possible ("" when it is).
     public func connectBlocked(_ device: Device) -> String {
         if device.connectionId == app.remote.host { return L("This is the computer you are using.") }
-        if app.remote.inSession { return L("End the current session first.") }
+        if app.remote.inSession {
+            // Several sessions at once need the engine's multi-session support (one today).
+            return L("End the current session first.")
+        }
         if presence(of: device) == .offline { return L("This device is offline.") }
         if app.busy { return L("Please wait…") }
         if !app.signedIn { return L("Sign in first.") }
@@ -332,6 +442,7 @@ public final class DevicesModel: ObservableObject {
         app.act {
             try await self.app.engine.perform("wake_on_lan", ["macs": macs])
             self.message = L("Wake signal sent to %@. It shows Online when it has started.", device.name)
+            self.notice = self.message
         }
     }
 
