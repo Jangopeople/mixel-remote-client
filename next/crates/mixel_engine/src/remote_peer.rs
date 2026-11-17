@@ -1585,18 +1585,21 @@ fn hand_over(
     let Some(previous) = config.previous.take() else {
         return Ok(());
     };
-    previous.retire();
     #[cfg(feature = "qa-session")]
     eprintln!("QA renewal: the renewed transport took over the picture at clock {}", crate::remote_control::qa_wall_clock());
-    if control.recording_allowed && recording.is_none() {
-        *recording = Some(
-            config
-                .state
-                .recording_hub()
-                .attach(config.session, config.input_authorization())?,
-        );
-    }
-    Ok(())
+    // The recording goes on from this transport: attach BEFORE the one before is told to stop, so its
+    // end cannot finish the running recording first.
+    let attached = if control.recording_allowed && recording.is_none() {
+        config
+            .state
+            .recording_hub()
+            .attach_renewal(config.session, config.input_authorization())
+            .map(|scope| *recording = Some(scope))
+    } else {
+        Ok(())
+    };
+    previous.retire();
+    attached
 }
 async fn viewer_media(
     config: &mut Config,

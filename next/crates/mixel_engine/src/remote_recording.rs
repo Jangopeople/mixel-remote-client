@@ -57,10 +57,13 @@ struct Job {
 }
 
 impl Job {
+    #[track_caller]
     fn finish(&mut self) {
         let Some(output) = self.output.take() else {
             return;
         };
+        #[cfg(feature = "qa-session")]
+        eprintln!("QA recording job finished from {}", std::panic::Location::caller());
         if let Ok(mut stopped) = self.stopped.lock() {
             *stopped = Some(Instant::now());
         }
@@ -108,13 +111,24 @@ impl Drop for RecordingScope {
 
 impl RecordingHub {
     pub fn attach(&self, session: Uuid, live: Authorization) -> Result<RecordingScope, String> {
+        self.attach_inner(session, live, false)
+    }
+
+    /// The renewed transport takes over: attaches while the transport before may still be live and
+    /// carries a running recording over, so the old transport's end (which can come at any moment
+    /// after it is told to stop) can no longer finish it.
+    pub fn attach_renewal(&self, session: Uuid, live: Authorization) -> Result<RecordingScope, String> {
+        self.attach_inner(session, live, true)
+    }
+
+    fn attach_inner(&self, session: Uuid, live: Authorization, renewal: bool) -> Result<RecordingScope, String> {
         let mut entry = self.grant.lock().map_err(|_| "Recording is unavailable")?;
         // One grant per session. An ended one stays while its recording still shows a result.
         entry.retain(|grant| (grant.live)() || grant.job.is_some());
         while entry.len() >= 8 {
             entry.remove(0);
         }
-        if !live() || entry.iter().any(|grant| grant.session == session && (grant.live)()) {
+        if !live() || (!renewal && entry.iter().any(|grant| grant.session == session && (grant.live)())) {
             return Err("This recording permission is no longer available".into());
         }
         // A recording of the grant before (a transport of this session that was just replaced) is
@@ -132,6 +146,8 @@ impl RecordingHub {
         }
         entry.retain(|grant| grant.session != session);
         let scope = NEXT_SCOPE.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "qa-session")]
+        eprintln!("QA recording attach: scope {scope}, carried running job {}", carried.is_some());
         entry.push(Grant {
             session,
             scope,
@@ -608,6 +624,30 @@ mod renewal_tests {
         assert!(matches!(hub.last_view(), Some(View::Saved)));
         assert_eq!(samples(&file), (5, 2, 2), "3 pictures before, 2 after the renewal, nothing lost or doubled");
         assert_eq!(hub.parts(session), vec![file.to_string_lossy().into_owned()]);
+        drop(renewed);
+    }
+
+    /// The renewed transport attaches while the old one is still live and the old one ends right after:
+    /// the running recording must survive that order too (it raced with the old transport's end).
+    #[tokio::test]
+    async fn the_end_of_the_old_transport_after_the_takeover_leaves_the_recording_running() {
+        let directory = tempfile::tempdir().unwrap();
+        let hub = RecordingHub::default();
+        let session = Uuid::new_v4();
+        let old = hub.attach(session, Arc::new(|| true)).unwrap();
+        let file = directory.path().join("race.mp4");
+        hub.start(session, file.clone()).unwrap();
+        old.submit(&key(1), 0, (2, 2));
+        std::thread::sleep(Duration::from_millis(30));
+        let renewed = hub.attach_renewal(session, Arc::new(|| true)).unwrap();
+        drop(old);
+        assert!(matches!(hub.view(session), Some(View::Recording)));
+        renewed.submit(&key(1), 10, (2, 2));
+        renewed.submit(&delta(), 3010, (2, 2));
+        std::thread::sleep(Duration::from_millis(30));
+        hub.stop(session).unwrap();
+        hub.finish().await.unwrap();
+        assert_eq!(samples(&file).0, 3);
         drop(renewed);
     }
 
