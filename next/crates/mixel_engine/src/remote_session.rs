@@ -3886,7 +3886,7 @@ async fn run(
                             if let Some(Out{slot,host,key,unattended:was_unattended,joined,cancelled})=outgoing.pop_front(){
                                 // A computer with unattended access accepts this. One without it
                                 // still gets the usual Accept prompt, instead of a hard failure.
-                                if was_unattended && !joined && !cancelled && code==ErrorCode::Unavailable {
+                                if was_unattended && !joined && !cancelled && code==ErrorCode::Unavailable && !retries.iter().any(|again|again.host==host) {
                                     crate::qa_timeline::mark("unattended request refused (Unavailable): asking again as an attended request");
                                     send(&mut socket,ClientMessage::Request{host}).await?;
                                     outgoing.push_front(Out{slot,host,key,unattended:false,joined:false,cancelled:false});
