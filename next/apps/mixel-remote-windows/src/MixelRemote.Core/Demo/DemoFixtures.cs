@@ -87,6 +87,13 @@ public static class DemoFixtures
              {"session_id":"e1000000-0000-4000-8000-000000000002","technician_id":"11111111-2222-4333-8444-555555555555","technician_name":"Anna Muster","technician_email":"anna@muster.test","device_id":"d1000000-0000-4000-8000-000000000002","device_name":"Accounting Mac","connection_id":268455901,"started_at":"2026-11-12T15:40:00Z","ended_at":"2026-11-12T15:52:00Z","duration_seconds":720,"kind":"unattended","colleague":false,"note":null}]
             """);
         engine.Reply("remote_draw", "true");
+        // Device administration (contract of docs/mixel-remote-device-admin-api.md, 2.1): badges, versions, notes.
+        engine.Reply("remote_admin_devices", $$"""
+            [{"device_id":"d1000000-0000-4000-8000-000000000001","connection_id":731204118,"name":"Reception PC","os":"windows","group_name":"Front office","note":"Desk 3, docked","favorite":false,"unattended_setting":"on","unattended_default":false,"unattended_allowed":true,"status":"online","last_seen":"{{DateTimeOffset.UtcNow:o}}","app_version":"2.0.18","can_admin":true,"updated_at":"2026-11-17T08:00:00Z"},
+             {"device_id":"d1000000-0000-4000-8000-000000000002","connection_id":268455901,"name":"Accounting Mac","os":"macos","note":null,"favorite":true,"unattended_setting":"default","unattended_default":false,"unattended_allowed":true,"status":"online","app_version":"2.0.18","can_admin":true,"updated_at":"2026-11-17T08:00:00Z"},
+             {"device_id":"d1000000-0000-4000-8000-000000000003","connection_id":519003442,"name":"Warehouse laptop","os":"linux","note":null,"favorite":false,"unattended_setting":"off","unattended_default":false,"unattended_allowed":false,"status":"offline","app_version":"2.0.15","can_admin":true,"updated_at":"2026-11-17T08:00:00Z"},
+             {"device_id":"d1000000-0000-4000-8000-000000000004","connection_id":482913557,"name":"This PC","os":"windows","note":null,"favorite":false,"unattended_setting":"default","unattended_default":true,"unattended_allowed":true,"status":"online","app_version":"2.0.18","can_admin":true,"updated_at":"2026-11-17T08:00:00Z"}]
+            """);
     }
 
     public static void Incoming(MockEngine engine)
