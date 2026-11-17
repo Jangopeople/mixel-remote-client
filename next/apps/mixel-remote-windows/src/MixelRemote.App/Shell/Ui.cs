@@ -214,11 +214,11 @@ internal static class Ui
     }
 
     /// <summary>An error (Mixel red) or a notice line; nothing when empty.</summary>
-    public static UIElement? Message(string text, bool error = true)
+    public static UIElement? Message(string text, bool error = true, double maxWidth = 640)
     {
         if (string.IsNullOrWhiteSpace(text)) return null;
         var row = Row(8, Icon(error ? "\uE7BA" : "\uE946", 14, error ? BrandBrush : Secondary), Text(text, secondary: !error));
-        ((TextBlock)row.Children[1]).MaxWidth = 640;
+        ((TextBlock)row.Children[1]).MaxWidth = maxWidth;
         if (error) ((TextBlock)row.Children[1]).Foreground = BrandBrush;
         AutomationProperties.SetName(row, text);
         AutomationProperties.SetLiveSetting(row, Microsoft.UI.Xaml.Automation.Peers.AutomationLiveSetting.Polite);

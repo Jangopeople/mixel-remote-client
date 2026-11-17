@@ -337,7 +337,7 @@ internal sealed partial class MainWindow
         }
         else
         {
-            stack.Children.Add(Ui.Message(attempt.Failure) ?? new Grid());
+            stack.Children.Add(Ui.Message(attempt.Failure, maxWidth: 310) ?? new Grid());
             // The first connect of a computer that is not added to the account yet: the fix is one click away (same as the Mac).
             if (app.SetupOffer) stack.Children.Add(Ui.Primary(L("Add this computer"), () => _ = app.AddThisFromFailure()));
         }

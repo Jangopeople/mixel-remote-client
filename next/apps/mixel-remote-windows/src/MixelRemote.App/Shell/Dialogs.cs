@@ -92,7 +92,7 @@ internal static class Dialogs
     }
 
     /// <summary>A dialog with custom content and only a close button.</summary>
-    public static async Task Show(XamlRoot root, string title, UIElement content, string? primary = null, Func<Task<bool>>? onPrimary = null)
+    public static async Task Show(XamlRoot root, string title, UIElement content, string? primary = null, Func<Task<bool>>? onPrimary = null, Action<ContentDialog>? opened = null)
     {
         var dialog = new ContentDialog
         {
@@ -114,6 +114,7 @@ internal static class Dialogs
                 deferral.Complete();
             };
         }
+        opened?.Invoke(dialog);
         await dialog.ShowAsync();
     }
 }

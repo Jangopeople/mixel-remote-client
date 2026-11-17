@@ -554,7 +554,15 @@ internal sealed class DevicesPage : PageView
     private async Task AddThisComputer()
     {
         var card = Shared.EnrollmentCard(App, this);
-        await Dialogs.Show(Root, L("Add this computer"), card);
+        // The dialog closes by itself once this computer is added.
+        var enrollment = App.Enrollment;
+        System.ComponentModel.PropertyChangedEventHandler? watch = null;
+        await Dialogs.Show(Root, L("Add this computer"), card, opened: dialog =>
+        {
+            watch = (_, _) => { if (enrollment.Current is not null) DispatcherQueue.TryEnqueue(dialog.Hide); };
+            enrollment.PropertyChanged += watch;
+        });
+        if (watch is not null) enrollment.PropertyChanged -= watch;
     }
 
     /// <summary>"Add other computers": a deploy link and the one-line command for each system.</summary>

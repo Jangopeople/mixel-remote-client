@@ -48,8 +48,9 @@ internal sealed class ReportsPage : PageView
         }
         stack.Children.Add(Ui.Text(Reports.Manager ? L("Every session of your company's technicians.") : L("Your own sessions."), secondary: true));
         stack.Children.Add(Filters());
-        stack.Children.Add(Ui.Message(Reports.Error));
-        stack.Children.Add(Ui.Message(saved, error: false));
+        // Ui.Message is null when there is nothing to say; adding null to the panel throws and left the page empty.
+        if (Ui.Message(Reports.Error) is { } failure) stack.Children.Add(failure);
+        if (Ui.Message(saved, error: false) is { } done) stack.Children.Add(done);
         stack.Children.Add(Table());
         return Wrap(stack);
     }
