@@ -130,4 +130,7 @@ WINDOWS = {
     'Retry': ('Erneut versuchen', 'Réessayer', 'Riprova'),
     'Ask the remote computer again': ('Den entfernten Computer erneut anfragen', 'Demander de nouveau à l’ordinateur distant', 'Richiedere di nuovo il computer remoto'),
     'End session with %@?': ('Sitzung mit %@ beenden?', 'Terminer la session avec %@ ?', 'Terminare la sessione con %@?'),
+    'The last install did not work. It is tried again later by itself, or press Update now.': ('Die letzte Installation hat nicht funktioniert. Sie wird später automatisch erneut versucht, oder drücken Sie «Jetzt aktualisieren».', 'La dernière installation a échoué. Elle sera retentée automatiquement plus tard, ou appuyez sur « Mettre à jour maintenant ».', 'L’ultima installazione non è riuscita. Verrà ritentata automaticamente più tardi, oppure prema «Aggiorna ora».'),
+    'Version %@ is ready. Installing restarts the app and signs you out.': ('Version %@ ist bereit. Die Installation startet die App neu und meldet Sie ab.', 'La version %@ est prête. L’installation redémarre l’application et vous déconnecte.', 'La versione %@ è pronta. L’installazione riavvia l’app e la disconnette.'),
+    'This computer is not set up for unattended access; asking the person there': ('Dieser Computer ist nicht für unbeaufsichtigten Zugriff eingerichtet; die Person vor Ort wird gefragt', 'Cet ordinateur n’est pas configuré pour l’accès sans surveillance ; la personne sur place est sollicitée', 'Questo computer non è configurato per l’accesso non presidiato; si interpella la persona sul posto'),
 }

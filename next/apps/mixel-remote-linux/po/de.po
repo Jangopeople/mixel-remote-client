@@ -775,6 +775,9 @@ msgstr "Sitzungsbericht wird geladen…"
 msgid "Loading your devices…"
 msgstr "Ihre Geräte werden geladen…"
 
+msgid "Loading…"
+msgstr "Wird geladen…"
+
 msgid "Lock computer"
 msgstr "Computer sperren"
 
@@ -1002,6 +1005,9 @@ msgstr "Verbindungs-ID des Partners"
 
 msgid "Pen"
 msgstr "Stift"
+
+msgid "People who may connect to %@ (%@) without anyone there being asked."
+msgstr "Personen, die sich mit %@ (%@) verbinden dürfen, ohne dass jemand vor Ort gefragt wird."
 
 msgid "Personal account"
 msgstr "Persönliches Konto"
@@ -1450,8 +1456,14 @@ msgstr "Die Verbindung kam nicht zustande. Die Gegenseite hat abgelehnt, nicht g
 msgid "The file could not be saved"
 msgstr "Die Datei konnte nicht gespeichert werden"
 
+msgid "The list could not be read."
+msgstr "Die Liste konnte nicht gelesen werden."
+
 msgid "The other computer cannot take a second technician directly. Use a meeting link instead."
 msgstr "Der andere Computer kann keinen zweiten Techniker direkt aufnehmen. Verwenden Sie stattdessen einen Meeting-Link."
+
+msgid "The people who may connect to this computer are managed in the administration console of its company."
+msgstr "Wer sich mit diesem Computer verbinden darf, wird in der Verwaltungskonsole der zugehörigen Firma festgelegt."
 
 msgid "The person opens Mixel Quick Support on their phone and tells you the ID it shows."
 msgstr "Die Person öffnet Mixel Quick Support auf dem Handy und nennt Ihnen die angezeigte ID."
@@ -1495,6 +1507,9 @@ msgstr "Dieser Linux-Computer verwendet Wayland: Sichtschutz, Sperren von Tastat
 msgid "This app controls other devices; it cannot be controlled itself."
 msgstr "Diese App steuert andere Geräte; sie selbst kann nicht gesteuert werden."
 
+msgid "This company has no other technicians."
+msgstr "Diese Firma hat keine weiteren Techniker."
+
 msgid "This company is read-only"
 msgstr "Diese Firma ist schreibgeschützt"
 
@@ -1503,6 +1518,9 @@ msgstr "Diese Firma ist schreibgeschützt. Geräte können Sie weiterhin entfern
 
 msgid "This computer"
 msgstr "Dieser Computer"
+
+msgid "This computer did not accept an unattended connection from you. Ask an admin to allow you unattended access to this computer (its menu in Devices, Unattended access, Who may connect…), or connect and ask the person there to accept."
+msgstr "Dieser Computer hat Ihre unbeaufsichtigte Verbindung nicht akzeptiert. Bitten Sie eine Administratorin oder einen Administrator, Ihnen unbeaufsichtigten Zugriff auf diesen Computer zu erlauben (sein Menü in Geräte, Unbeaufsichtigter Zugriff, Wer darf sich verbinden…), oder verbinden Sie sich und bitten Sie die Person vor Ort um Bestätigung."
 
 msgid "This computer goes offline and is no longer reachable until you sign in again."
 msgstr "Dieser Computer geht offline und ist erst nach erneuter Anmeldung wieder erreichbar."
@@ -1515,6 +1533,9 @@ msgstr "Dieser Computer ist noch nicht verbunden"
 
 msgid "This computer is not in the list? Add it"
 msgstr "Dieser Computer fehlt in der Liste? Hinzufügen"
+
+msgid "This computer is not set up for unattended access. The person there was asked to accept."
+msgstr "Dieser Computer ist nicht für unbeaufsichtigten Zugriff eingerichtet. Die Person vor Ort wurde um Bestätigung gebeten."
 
 msgid "This computer is not set up yet."
 msgstr "Dieser Computer ist noch nicht eingerichtet."
@@ -1548,6 +1569,9 @@ msgstr "Dies ist der Computer, den Sie verwenden."
 
 msgid "This is the newest version."
 msgstr "Dies ist die neueste Version."
+
+msgid "This person cannot be given access to this computer."
+msgstr "Diese Person kann keinen Zugriff auf diesen Computer erhalten."
 
 msgid "This session was opened with a one-time password. Continue only if the person at the other computer gave it to you; either side can end it at any time."
 msgstr "Diese Sitzung wurde mit einem Einmalpasswort geöffnet. Fahren Sie nur fort, wenn die Person am anderen Computer es Ihnen gegeben hat; jede Seite kann sie jederzeit beenden."
@@ -1599,6 +1623,12 @@ msgstr "Unbeaufsichtigt"
 
 msgid "Unattended access"
 msgstr "Unbeaufsichtigter Zugriff"
+
+msgid "Unattended access: who may connect…"
+msgstr "Unbeaufsichtigter Zugriff: wer sich verbinden darf…"
+
+msgid "Unattended session: nobody at that computer was asked."
+msgstr "Unbeaufsichtigte Sitzung: Niemand an diesem Computer wurde gefragt."
 
 msgid "Unattended sharing"
 msgstr "Unbeaufsichtigte Freigabe"
@@ -1690,6 +1720,9 @@ msgstr "Wenn eine Sitzung bereit ist"
 msgid "White"
 msgstr "Weiss"
 
+msgid "Who may connect…"
+msgstr "Wer darf sich verbinden…"
+
 msgid "Windows (PowerShell, as administrator)"
 msgstr "Windows (PowerShell, als Administrator)"
 
@@ -1746,6 +1779,9 @@ msgstr "Hier erscheinen Ihre Geräte"
 
 msgid "Your meeting opens in the browser. Choose “Share screen” there; the other person is asked to watch."
 msgstr "Ihr Meeting öffnet sich im Browser. Wählen Sie dort «Bildschirm teilen»; die andere Person wird gefragt, ob sie zusehen möchte."
+
+msgid "automatic (company setting)"
+msgstr "automatisch (Firmeneinstellung)"
 
 msgid "done"
 msgstr "fertig"

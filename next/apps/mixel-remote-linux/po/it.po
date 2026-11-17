@@ -775,6 +775,9 @@ msgstr "Caricamento del rapporto delle sessioni…"
 msgid "Loading your devices…"
 msgstr "Caricamento dei tuoi dispositivi…"
 
+msgid "Loading…"
+msgstr "Caricamento…"
+
 msgid "Lock computer"
 msgstr "Blocca il computer"
 
@@ -1002,6 +1005,9 @@ msgstr "ID di connessione del partner"
 
 msgid "Pen"
 msgstr "Penna"
+
+msgid "People who may connect to %@ (%@) without anyone there being asked."
+msgstr "Persone che possono collegarsi a %@ (%@) senza che qualcuno sul posto venga interpellato."
 
 msgid "Personal account"
 msgstr "Account personale"
@@ -1450,8 +1456,14 @@ msgstr "La connessione non è stata stabilita. L’altra parte ha rifiutato, non
 msgid "The file could not be saved"
 msgstr "Non è stato possibile salvare il file"
 
+msgid "The list could not be read."
+msgstr "Impossibile leggere l’elenco."
+
 msgid "The other computer cannot take a second technician directly. Use a meeting link instead."
 msgstr "L’altro computer non può accogliere direttamente un secondo tecnico. Usi invece un link di riunione."
+
+msgid "The people who may connect to this computer are managed in the administration console of its company."
+msgstr "Le persone autorizzate a collegarsi a questo computer sono gestite nella console di amministrazione della sua azienda."
 
 msgid "The person opens Mixel Quick Support on their phone and tells you the ID it shows."
 msgstr "La persona apre Mixel Quick Support sul telefono e Le comunica l’ID mostrato."
@@ -1495,6 +1507,9 @@ msgstr "Questo computer Linux usa Wayland: lo schermo privacy, il blocco di tast
 msgid "This app controls other devices; it cannot be controlled itself."
 msgstr "Questa app controlla altri dispositivi; non può essere controllata a sua volta."
 
+msgid "This company has no other technicians."
+msgstr "Questa azienda non ha altri tecnici."
+
 msgid "This company is read-only"
 msgstr "Questa azienda è in sola lettura"
 
@@ -1503,6 +1518,9 @@ msgstr "Questa azienda è in sola lettura. Puoi ancora rimuovere dispositivi; ag
 
 msgid "This computer"
 msgstr "Questo computer"
+
+msgid "This computer did not accept an unattended connection from you. Ask an admin to allow you unattended access to this computer (its menu in Devices, Unattended access, Who may connect…), or connect and ask the person there to accept."
+msgstr "Questo computer non ha accettato la sua connessione non presidiata. Chieda a un amministratore di consentirle l’accesso non presidiato a questo computer (il suo menu in Dispositivi, Accesso non presidiato, Chi può collegarsi…), oppure si colleghi e chieda alla persona sul posto di accettare."
 
 msgid "This computer goes offline and is no longer reachable until you sign in again."
 msgstr "Questo computer va offline e non è raggiungibile finché non accede di nuovo."
@@ -1515,6 +1533,9 @@ msgstr "Questo computer non è ancora connesso"
 
 msgid "This computer is not in the list? Add it"
 msgstr "Questo computer non è nell’elenco? Aggiungilo"
+
+msgid "This computer is not set up for unattended access. The person there was asked to accept."
+msgstr "Questo computer non è configurato per l’accesso non presidiato. La persona sul posto è stata invitata ad accettare."
 
 msgid "This computer is not set up yet."
 msgstr "Questo computer non è ancora configurato."
@@ -1548,6 +1569,9 @@ msgstr "È il computer che stai usando."
 
 msgid "This is the newest version."
 msgstr "Questa è la versione più recente."
+
+msgid "This person cannot be given access to this computer."
+msgstr "Questa persona non può ottenere l’accesso a questo computer."
 
 msgid "This session was opened with a one-time password. Continue only if the person at the other computer gave it to you; either side can end it at any time."
 msgstr "Questa sessione è stata aperta con una password monouso. Continui solo se la persona all’altro computer gliel’ha data; ciascuna parte può terminarla in qualsiasi momento."
@@ -1599,6 +1623,12 @@ msgstr "Non presidiata"
 
 msgid "Unattended access"
 msgstr "Accesso non presidiato"
+
+msgid "Unattended access: who may connect…"
+msgstr "Accesso non presidiato: chi può collegarsi…"
+
+msgid "Unattended session: nobody at that computer was asked."
+msgstr "Sessione non presidiata: nessuno a quel computer è stato interpellato."
 
 msgid "Unattended sharing"
 msgstr "Condivisione non presidiata"
@@ -1690,6 +1720,9 @@ msgstr "Quando una sessione è pronta"
 msgid "White"
 msgstr "Bianco"
 
+msgid "Who may connect…"
+msgstr "Chi può collegarsi…"
+
 msgid "Windows (PowerShell, as administrator)"
 msgstr "Windows (PowerShell, come amministratore)"
 
@@ -1746,6 +1779,9 @@ msgstr "Qui compaiono i tuoi dispositivi"
 
 msgid "Your meeting opens in the browser. Choose “Share screen” there; the other person is asked to watch."
 msgstr "La riunione si apre nel browser. Scegli «Condividi schermo»; all’altra persona viene chiesto di guardare."
+
+msgid "automatic (company setting)"
+msgstr "automatico (impostazione dell’azienda)"
 
 msgid "done"
 msgstr "completato"

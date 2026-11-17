@@ -8405,6 +8405,28 @@
         }
       }
     },
+    "People who may connect to %@ (%@) without anyone there being asked.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Personen, die sich mit %@ (%@) verbinden dürfen, ohne dass jemand vor Ort gefragt wird."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Personnes autorisées à se connecter à %@ (%@) sans que quelqu’un sur place soit sollicité."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persone che possono collegarsi a %@ (%@) senza che qualcuno sul posto venga interpellato."
+          }
+        }
+      }
+    },
     "Period": {
       "localizations": {
         "de": {
@@ -12277,6 +12299,28 @@
         }
       }
     },
+    "The list could not be read.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Liste konnte nicht gelesen werden."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La liste n’a pas pu être lue."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile leggere l’elenco."
+          }
+        }
+      }
+    },
     "The other computer cannot take a second technician directly. Use a meeting link instead.": {
       "localizations": {
         "de": {
@@ -12295,6 +12339,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "L’altro computer non può accogliere direttamente un secondo tecnico. Usi invece un link di riunione."
+          }
+        }
+      }
+    },
+    "The people who may connect to this computer are managed in the administration console of its company.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wer sich mit diesem Computer verbinden darf, wird in der Verwaltungskonsole der zugehörigen Firma festgelegt."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Les personnes autorisées à se connecter à cet ordinateur sont gérées dans la console d’administration de son entreprise."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le persone autorizzate a collegarsi a questo computer sono gestite nella console di amministrazione della sua azienda."
           }
         }
       }
@@ -12717,6 +12783,28 @@
         }
       }
     },
+    "This company has no other technicians.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Firma hat keine weiteren Techniker."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cette entreprise n’a pas d’autres techniciens."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questa azienda non ha altri tecnici."
+          }
+        }
+      }
+    },
     "This company is read-only": {
       "localizations": {
         "de": {
@@ -12805,6 +12893,28 @@
         }
       }
     },
+    "This computer did not accept an unattended connection from you. Ask an admin to allow you unattended access to this computer (its menu in Devices, Unattended access, Who may connect…), or connect and ask the person there to accept.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieser Computer hat Ihre unbeaufsichtigte Verbindung nicht akzeptiert. Bitten Sie eine Administratorin oder einen Administrator, Ihnen unbeaufsichtigten Zugriff auf diesen Computer zu erlauben (sein Menü in Geräte, Unbeaufsichtigter Zugriff, Wer darf sich verbinden…), oder verbinden Sie sich und bitten Sie die Person vor Ort um Bestätigung."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cet ordinateur n’a pas accepté votre connexion sans surveillance. Demandez à un administrateur de vous autoriser l’accès sans surveillance à cet ordinateur (son menu dans Appareils, Accès sans surveillance, Qui peut se connecter…), ou connectez-vous et demandez à la personne sur place d’accepter."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo computer non ha accettato la sua connessione non presidiata. Chieda a un amministratore di consentirle l’accesso non presidiato a questo computer (il suo menu in Dispositivi, Accesso non presidiato, Chi può collegarsi…), oppure si colleghi e chieda alla persona sul posto di accettare."
+          }
+        }
+      }
+    },
     "This computer is being removed from Mixel Remote. It is removed as soon as it is online.": {
       "localizations": {
         "de": {
@@ -12867,6 +12977,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Questo computer non è nell’elenco? Aggiungilo"
+          }
+        }
+      }
+    },
+    "This computer is not set up for unattended access. The person there was asked to accept.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieser Computer ist nicht für unbeaufsichtigten Zugriff eingerichtet. Die Person vor Ort wurde um Bestätigung gebeten."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cet ordinateur n’est pas configuré pour l’accès sans surveillance. La personne sur place a été invitée à accepter."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo computer non è configurato per l’accesso non presidiato. La persona sul posto è stata invitata ad accettare."
           }
         }
       }
@@ -13065,6 +13197,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Questa è la versione più recente."
+          }
+        }
+      }
+    },
+    "This person cannot be given access to this computer.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Person kann keinen Zugriff auf diesen Computer erhalten."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cette personne ne peut pas obtenir l’accès à cet ordinateur."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questa persona non può ottenere l’accesso a questo computer."
           }
         }
       }
@@ -14235,6 +14389,28 @@
         }
       }
     },
+    "Who may connect…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wer darf sich verbinden…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Qui peut se connecter…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chi può collegarsi…"
+          }
+        }
+      }
+    },
     "Window": {
       "localizations": {
         "de": {
@@ -14759,6 +14935,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Il tuo nome"
+          }
+        }
+      }
+    },
+    "automatic (company setting)": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "automatisch (Firmeneinstellung)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "automatique (réglage de l’entreprise)"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "automatico (impostazione dell’azienda)"
           }
         }
       }
