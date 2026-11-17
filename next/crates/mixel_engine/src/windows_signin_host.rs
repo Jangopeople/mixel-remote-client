@@ -843,7 +843,13 @@ fn supervise() {
                 Err(error) => log(&error),
             }
         }
-        std::thread::sleep(Duration::from_secs(2));
+        // Every 2 s, but a stop of the service is noticed within 100 ms (a restart for an update waits for it).
+        for _ in 0..20 {
+            if STOP.load(Ordering::Acquire) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
     if let Some((process, _)) = host {
         stop_host(process);
@@ -891,9 +897,12 @@ async fn update_self() {
     };
     use std::os::windows::process::CommandExt;
     // Detached helper (survives the service stop): swap the service program, start it again.
-    let script = "sc.exe stop MixelRemoteSignIn | Out-Null; Start-Sleep 5; \
-        Copy-Item -LiteralPath $env:MIXEL_UPDATE_FILE -Destination $env:MIXEL_UPDATE_DEST -Force; \
-        if($?){ Add-Content -LiteralPath $env:MIXEL_UPDATE_LOG 'always-on program replaced' }; sc.exe start MixelRemoteSignIn | Out-Null";
+    // The program is copied as soon as the service has really stopped (the old fixed pause of 5 s kept every
+    // technician waiting for nothing); a copy refused because the old program is still closing is tried again.
+    let script = "sc.exe stop MixelRemoteSignIn | Out-Null; \
+        for($i=0;$i -lt 300 -and (Get-Service MixelRemoteSignIn).Status -ne 'Stopped';$i++){ Start-Sleep -Milliseconds 50 }; \
+        $ok=$false; for($i=0;$i -lt 100 -and -not $ok;$i++){ try{ Copy-Item -LiteralPath $env:MIXEL_UPDATE_FILE -Destination $env:MIXEL_UPDATE_DEST -Force -ErrorAction Stop; $ok=$true }catch{ Start-Sleep -Milliseconds 100 } }; \
+        if($ok){ Add-Content -LiteralPath $env:MIXEL_UPDATE_LOG 'always-on program replaced' }; sc.exe start MixelRemoteSignIn | Out-Null";
     let spawned = std::process::Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
         .env("MIXEL_UPDATE_FILE", &installer)

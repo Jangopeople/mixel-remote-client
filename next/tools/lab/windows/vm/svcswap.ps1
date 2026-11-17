@@ -2,7 +2,7 @@
 # new = stop, wait until the service has really stopped, copy at once, start.
 param([string]$Mode = 'old')
 function T { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
-$dst = 'C:\Program Files\Mixel Remote Sign-in Screen\mixel-remote-signin.exe'; $src = 'C:\lab\helper2.exe'
+$dst = 'C:\Program Files\Mixel Remote Sign-in Screen\mixel-remote-signin.exe'; $src = 'C:\lab\helper3.exe'
 "start $(T)"
 sc.exe stop MixelRemoteSignIn | Out-Null; "stop requested $(T)"
 if ($Mode -eq 'old') { Start-Sleep 5 } else { while ((Get-Service MixelRemoteSignIn).Status -ne 'Stopped') { Start-Sleep -Milliseconds 50 }; "stopped $(T)"; while (Get-Process mixel-remote-signin -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 50 } }

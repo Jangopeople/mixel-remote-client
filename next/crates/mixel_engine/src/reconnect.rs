@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 /// How long the same device is asked again.
 pub const WINDOW: Duration = Duration::from_secs(60);
 /// Pause between two asks.
-pub const EVERY: Duration = Duration::from_secs(2);
+pub const EVERY: Duration = Duration::from_secs(1);
 
 #[derive(Clone)]
 pub struct Access {
@@ -82,8 +82,8 @@ mod tests {
         let mut retry = Retry::start(unattended(), start).unwrap();
         assert_eq!(retry.step(start, false), Step::Ask);
         assert_eq!(retry.step(start + Duration::from_millis(500), false), Step::Wait);
-        assert_eq!(retry.step(start + Duration::from_secs(2), true), Step::Wait, "an ask is still open");
-        assert_eq!(retry.step(start + Duration::from_secs(2), false), Step::Ask);
+        assert_eq!(retry.step(start + Duration::from_secs(1), true), Step::Wait, "an ask is still open");
+        assert_eq!(retry.step(start + Duration::from_secs(1), false), Step::Ask);
         assert_eq!(retry.step(start + Duration::from_secs(5), false), Step::Ask);
     }
 

@@ -64,7 +64,8 @@ LangString StartNow ${LANG_ITALIAN} "Avvia Mixel Remote"
   ReadEnvStr $0 USERNAME
   nsExec::Exec 'taskkill /F /FI "USERNAME eq $0" /IM mixel-remote.exe'
   nsExec::Exec 'taskkill /F /FI "USERNAME eq $0" /IM mixel-remote-helper.exe'
-  Sleep 1500
+  ; taskkill /F returns when the processes are gone; a short pause lets the file handles close.
+  Sleep 300
 !macroend
 
 Section "Install"
