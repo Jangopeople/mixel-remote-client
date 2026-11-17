@@ -2685,6 +2685,13 @@ fn command_session(command: &Command) -> Option<Uuid> {
         _ => None,
     }
 }
+/// A transport's end ends its technician session only when it is the session's CURRENT transport. After a renewal
+/// the session's ID for the person (`ui`) is still the first transport's service ID: the end of that replaced
+/// transport must not end the session (the first renewal of a held session ended it right after the take-over).
+fn media_end_ends_session(current_transport: Uuid, ended_transport: Uuid) -> bool {
+    current_transport == ended_transport
+}
+
 /// A session being resumed after the connection service restarted could not be: it ends here, alone. The other
 /// sessions that are being resumed, and those that were never lost, are not touched.
 #[allow(clippy::too_many_arguments)]
@@ -3479,7 +3486,7 @@ async fn run(
                         state.change(generation,|status|status.colleagues=views).await;
                         continue;
                     }
-                    if let Some(index)=ctrl.iter().position(|active|(active.id==session || active.ui==session) && !active.close_sent){
+                    if let Some(index)=ctrl.iter().position(|active|media_end_ends_session(active.id,session) && !active.close_sent){
                         // This technician session's media ended (the peer left or failed): only this one ends.
                         let again=result.is_err() && !ctrl[index].joined && ctrl[index].signals.is_some() && !retries.iter().any(|active|active.host==ctrl[index].remote) && last_access.get(&ctrl[index].remote).is_some_and(crate::reconnect::Access::repeatable);
                         let mut over=ctrl.remove(index);over.take_close();remember_gone(&mut recent,over.id);remember_gone(&mut recent,session);
@@ -3876,8 +3883,8 @@ async fn run(
                         },
                         ServerMessage::Closed{session,reason}=>{
                             let text=if reason==signaling_server::protocol::CloseReason::Expired{"The support session reached its 2-hour limit.".to_owned()}else{format!("Session closed: {reason:?}")};
-                            if peer.as_ref().is_some_and(|peer|peer.id==session || peer.ui==session){peer=None;state.change(generation,|status|{status.phase="ready".into();status.message=text;status.session=None;status.peer=None;status.requester=None;}).await;}
-                            else if let Some(index)=ctrl.iter().position(|active|active.id==session || active.ui==session){let over=ctrl.remove(index);remember_gone(&mut recent,over.id);state.slot_end(generation,over.ui,text).await;}
+                            if peer.as_ref().is_some_and(|peer|media_end_ends_session(peer.id,session)){peer=None;state.change(generation,|status|{status.phase="ready".into();status.message=text;status.session=None;status.peer=None;status.requester=None;}).await;}
+                            else if let Some(index)=ctrl.iter().position(|active|media_end_ends_session(active.id,session)){let over=ctrl.remove(index);remember_gone(&mut recent,over.id);state.slot_end(generation,over.ui,text).await;}
                         },
                         ServerMessage::Error{code} if !resuming.is_empty()=>{
                             // Not known any more (older connection service, or the 90 seconds passed): the session that was
@@ -4044,6 +4051,15 @@ mod registration_tests {
     /// A transport renewal starts the new media owner while the one before (same session) still shares: that must
     /// be accepted (found in the 30-minute hold: the session ended at the first renewal), a second new transport
     /// for the same session while one runs must not, and a plain new one must wait.
+    #[test]
+    fn the_end_of_a_replaced_transport_does_not_end_the_session() {
+        let (first, renewed) = (Uuid::new_v4(), Uuid::new_v4());
+        // the session's `ui` stays `first`; after the renewal its current transport is `renewed`
+        assert!(!media_end_ends_session(renewed, first), "the replaced transport ending is not the end of the session");
+        assert!(media_end_ends_session(renewed, renewed));
+        assert!(media_end_ends_session(first, first), "before any renewal the first transport is the current one");
+    }
+
     #[test]
     fn a_renewal_may_start_beside_the_media_owner_it_replaces() {
         let remote = RemoteSession::default();

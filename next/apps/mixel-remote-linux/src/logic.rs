@@ -582,9 +582,10 @@ pub struct Wheel {
 
 impl Wheel {
     /// GTK deltas (positive = down/right; 1.0 = one wheel notch, touchpads send fractions) →
-    /// engine steps (positive = up/left; a notch is three steps, as a browser's line mode).
+    /// engine steps (positive = up/left; ONE step per notch, as the hosts apply it: a wheel notch of 120 units on
+    /// Windows, one button event on X11, and the Windows and Mac technicians send).
     pub fn add(&mut self, dx: f64, dy: f64) -> Option<(i16, i16)> {
-        let scale = 3.0;
+        let scale = 1.0;
         self.x = (self.x - dx * scale).clamp(-120.0, 120.0);
         self.y = (self.y - dy * scale).clamp(-120.0, 120.0);
         let (horizontal, vertical) = (self.x.trunc() as i16, self.y.trunc() as i16);
@@ -1072,11 +1073,13 @@ mod tests {
         assert_eq!(queue.push(input::key(4, false)), Queued::Stalled);
         assert_eq!(queue.len(), 0);
         let mut wheel = Wheel::default();
-        assert_eq!(wheel.add(0.0, 1.0), Some((0, -3)));
-        assert_eq!(wheel.add(0.0, -0.1), None, "fine deltas add up");
-        assert_eq!(wheel.add(0.0, -0.1), None);
+        assert_eq!(wheel.add(0.0, 1.0), Some((0, -1)), "one notch is one step");
+        assert_eq!(wheel.add(0.0, -0.4), None, "fine deltas add up");
+        assert_eq!(wheel.add(0.0, -0.4), None);
         assert_eq!(wheel.add(0.0, -0.2), Some((0, 1)));
-        assert_eq!(wheel.add(-1.0, 0.0), Some((3, 0)));
+        assert_eq!(wheel.add(-1.0, 0.0), Some((1, 0)));
+        let steps: i16 = (0..5).filter_map(|_| wheel.add(0.0, 1.0)).map(|(_, y)| y).sum();
+        assert_eq!(steps, -5, "five notches are five steps");
     }
 
     #[test]
