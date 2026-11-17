@@ -181,13 +181,15 @@ impl Config {
         let peer = self.peer_expires.clone();
         let broker = self.authorization.clone();
         let started = self.consent_started;
-        let retire = self.link.retire.clone();
+        // Not bound to this transport: the session's file scope (and its owner thread) outlives a
+        // transport renewal, and its end would end the session. Each transport's file network
+        // task stops with the transport (`input_authorization`).
         Arc::new(move || {
             if started.elapsed() >= core_protocol::files::LIFETIME {
                 consent.store(true, Ordering::Release);
                 return false;
             }
-            !retire.load(Ordering::Acquire) && authorization_live(&account, &consent, &peer, &broker)
+            authorization_live(&account, &consent, &peer, &broker)
         })
     }
     async fn signal(&self, signal: Signal) -> Result<(), String> {
@@ -2020,7 +2022,9 @@ mod renewal_tests {
         assert!(!before.stopped() && input() && files());
         before.link.retire();
         assert!(before.stopped(), "the replaced transport stops");
-        assert!(!input() && !files(), "its input, file and recording grants end with it");
+        assert!(!input(), "its input, file network and recording grants end with it");
+        // The session's file scope is the session's, not the transport's: it goes on.
+        assert!(files(), "the file scope outlives the renewal");
         assert!(!session.load(Ordering::Acquire), "the session goes on");
         assert!(!renewed.stopped() && renewed.input_authorization()());
         // Ending the session still stops every transport of it.
