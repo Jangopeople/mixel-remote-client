@@ -407,6 +407,10 @@ impl MacStream {
             config.setColorSpaceName(objc2_core_graphics::kCGColorSpaceSRGB);
             config.setMinimumFrameInterval(CMTime::new(1, fps as i32));
             config.setQueueDepth(3);
+            // The Mac's own pointer stays out of the picture, as on Windows and Linux hosts: the
+            // technician's pointer is the one that moves it, so a pointer drawn into the picture too
+            // showed two pointers, the picture's one trailing behind (reported on 2.0.16).
+            config.setShowsCursor(false);
             let frames = Arc::new(FrameMailbox::default());
             let output = MixelCaptureOutput::alloc().set_ivars(OutputIvars {
                 mailbox: frames.clone(),

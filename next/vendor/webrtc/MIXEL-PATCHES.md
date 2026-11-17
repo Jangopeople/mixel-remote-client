@@ -17,3 +17,17 @@ Regression: `core_protocol::transport::receive_buffer_tests::a_keyframe_sized_bu
 `src/media_stream/track_local/static_sample.rs`: `TrackLocalStaticSample::packetize_sample` does the first half of `write_sample` (same sequence numbers, timestamps and payload type) and returns the RTP packets; `write_sample` is now that plus the unchanged write loop. The host writes the packets itself with `TrackLocal::write_rtp`, spread over time (`mixel_engine::video_pacing`), instead of handing a whole keyframe to the socket in one burst. Nothing changes on the wire.
 
 Regression: `core_protocol::stream_turn::tests` (byte-identical picture through `send`, which now runs through `packetize_sample`) and `mixel_engine::video_pacing::tests`. Keep the method when upgrading the crate.
+
+## First-flight timers of DTLS and SCTP (17 Nov 2026)
+
+`vendor/rtc-dtls` and `vendor/rtc-sctp` are rtc-dtls 0.21.1 and rtc-sctp 0.21.1 from crates.io (licenses kept,
+examples and benches dropped) with one constant each changed: the DTLS handshake's first retransmission after
+250 ms instead of 1 s (`conn/mod.rs` `INITIAL_TICKER_INTERVAL`; it still doubles per try) and SCTP's RTO before the
+first RTT measurement 250 ms instead of 1 s (`association/timer.rs` `RTO_INITIAL`) and its lowest RTO 400 ms instead
+of 1 s (`RTO_MIN`, as in the SCTP stack libwebrtc uses: the data channel's open message lost as the association came
+up waited a full second). In a relay-only session the first DTLS flight and the first SCTP
+INIT are regularly lost at the moment ICE completes (the other side is not ready yet); each cost one full second
+(lab, 17 Nov: ICE done after 0.14 s, DTLS after 1.0-1.3 s more, the data channel 1.1-2.2 s after that).
+
+Regression: the lab timeline (`mixel_engine::qa_timeline`, "QA transport" lines) and `rtc-sctp`'s own timer tests
+(`cargo test --manifest-path vendor/rtc-sctp/Cargo.toml timer`). Keep both changes when upgrading the crates.

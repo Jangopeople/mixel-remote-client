@@ -31,3 +31,4 @@ __pycache__/
 
 # Lab runs (QA sessions, measurements); never committed
 /_lab/
+/next/vendor/*/target/

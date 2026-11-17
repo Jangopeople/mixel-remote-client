@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-exclude = ["vendor/webrtc", "vendor/nix"]
+exclude = ["vendor/webrtc", "vendor/nix", "vendor/rtc-dtls", "vendor/rtc-sctp"]
 members = ["crates/core_protocol", "crates/signaling_server", "crates/web_client", "crates/native_os_capture", "crates/mixel_engine", "crates/desktop_app", "crates/mixel_core_ffi", "crates/mixel_core_capi", "crates/mobile_app", "crates/quick_host", "apps/mixel-remote-linux"]
 
 [workspace.package]
@@ -25,3 +25,6 @@ all = "warn"
 webrtc = { path = "vendor/webrtc" }
 # nix 0.31.3 with two Mac-only constants no longer assumed on iPhone (needed by the phone host core).
 nix = { path = "vendor/nix" }
+# rtc 0.21.1 with shorter first-flight timers (DTLS hello, SCTP INIT); see vendor/webrtc/MIXEL-PATCHES.md.
+rtc-dtls = { path = "vendor/rtc-dtls" }
+rtc-sctp = { path = "vendor/rtc-sctp" }

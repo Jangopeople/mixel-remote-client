@@ -85,6 +85,17 @@ impl Check<'_> {
         let data = self.context.remote.next_video(session, false).await.ok().filter(|data| data.len() > 32 && data.starts_with(b"MRF2"))?;
         Some(data[32..].as_chunks::<4>().0.iter().filter(|pixel| pixel[0] > 190 && pixel[1] < 90 && pixel[2] < 90).count())
     }
+    /// The next picture as a PNG file in the run's folder (lab proof of what the technician sees).
+    async fn save_picture(&self, session: uuid::Uuid, name: &str) -> bool {
+        let Ok(data) = self.context.remote.next_video(session, false).await else { return false };
+        if data.len() <= 32 || !data.starts_with(b"MRF2") {
+            return false;
+        }
+        let word = |at: usize| u32::from_le_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]]);
+        let (width, height) = (word(4), word(8));
+        image::RgbaImage::from_raw(width, height, data[32..].to_vec())
+            .is_some_and(|picture| picture.save(self.folder.join(name)).is_ok())
+    }
     /// A hand-shake file of the lab script, within `seconds`.
     async fn file(&self, name: &str, seconds: u64) -> Option<String> {
         file(&self.folder.join(name), seconds).await
@@ -260,6 +271,23 @@ async fn session(check: &mut Check<'_>, suffix: &str, tenant: &str, mine: u64) {
     if active["clipboard"] == true {
         check.check("the early clipboard push itself succeeds", push.is_ok(), format!("{push:?}"));
     }
+    // 1b. Only when the lab script asks for it (`save-picture.txt`): two pictures as PNG files, one
+    // after a pointer move to the middle of the screen (proof of what the technician sees).
+    if check.folder.join("save-picture.txt").exists() {
+        let _ = check.input(id, InputEvent::Pointer { x: 32768, y: 32768 }).await;
+        let mut saved = 0;
+        for round in 0..40 {
+            if check.save_picture(id, &format!("picture-{saved}.png")).await {
+                saved += 1;
+                if saved == 2 {
+                    break;
+                }
+                let _ = check.input(id, InputEvent::Pointer { x: 32768 + 200 * round, y: 32768 }).await;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        check.print(&format!("pictures saved for the lab: {saved}"));
+    }
     // 2. Pictures.
     let (mut frames, waited) = (0, Instant::now());
     while frames < 3 && waited.elapsed() < Duration::from_secs(25) {
@@ -348,6 +376,23 @@ async fn session(check: &mut Check<'_>, suffix: &str, tenant: &str, mine: u64) {
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
         check.check("chat answer from the host arrives", seen, "");
+    }
+    // 5a. A file to the host (when the host allowed files): sent, received complete and identical.
+    if active["files"] == true && let Some(consent) = check.status().await["consent"].as_str().map(str::to_owned) {
+        let path = check.folder.join("qa-file-send.bin");
+        let _ = std::fs::write(&path, qa_file_bytes());
+        let started = Instant::now();
+        let offered = check.call("remote_file_send", json!({ "consent": consent, "path": path.to_string_lossy() })).await;
+        let mut phase = String::new();
+        while offered.is_ok() && started.elapsed() < Duration::from_secs(120) {
+            let view = check.call("remote_file_status", json!({ "consent": consent })).await.unwrap_or(Value::Null);
+            phase = view["outgoing"]["phase"].as_str().unwrap_or_default().to_owned();
+            if phase == "complete" || phase == "failed" {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        check.check(&format!("a 300 kB file sent to the host ({phase} after {} ms)", started.elapsed().as_millis()), offered.is_ok() && phase == "complete", format!("{offered:?}"));
     }
     // 5b. Only when the lab script asks for it (`load-wanted.txt`): the same round trips while the
     // host's picture keeps moving. The lab script starts a moving picture on the host's screen and
@@ -534,6 +579,11 @@ async fn under_load(check: &mut Check<'_>, id: uuid::Uuid, session: &str, contro
     );
 }
 
+/// The lab file sent from the technician to the host: 300 kB, the same bytes on both sides.
+fn qa_file_bytes() -> Vec<u8> {
+    (0..300_000u32).map(|index| (index.wrapping_mul(2_654_435_761).wrapping_add(7) >> 13) as u8).collect()
+}
+
 /// The computer being helped; see the module text. `folder/live.txt` has every line.
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub async fn host(context: &Context, suffix: String, folder: PathBuf, session_file: Option<PathBuf>) -> Result<Value, String> {
@@ -609,7 +659,7 @@ async fn hosted(check: &mut Check<'_>, suffix: &str, mine: u64) {
         let source = targets.as_array().and_then(|list| list.iter().find(|target| target["full_display"] == true)).and_then(|target| target["id"].as_str()).unwrap_or_default().to_owned();
         let control = incoming["input_access"] == true;
         check.print(&format!("screen to share: {source}; keyboard and mouse may be allowed here: {control}"));
-        let decision = json!({ "session": incoming["session"], "accept": true, "source": source, "confirm": true, "control": control, "clipboard": true, "files": false, "chat": true, "recording": false });
+        let decision = json!({ "session": incoming["session"], "accept": true, "source": source, "confirm": true, "control": control, "clipboard": true, "files": true, "chat": true, "recording": false });
         let decided = check.call("remote_decide", json!({ "decision": decision })).await;
         (decided, check.wait(60, |status| status["phase"] == "active" && status["sharing"] == true).await)
     };
@@ -647,8 +697,36 @@ async fn hosted(check: &mut Check<'_>, suffix: &str, mine: u64) {
     check.check("the technician's chat message arrives", seen, "");
     let answer = check.call("remote_chat_send", json!({ "session": session, "text": format!("Answer from the {platform} host {suffix}") })).await;
     check.check("chat answer sent", answer.is_ok(), format!("{answer:?}"));
+    // A file from the technician (when files were allowed): accepted, complete and identical.
+    if active["files"] == true && let Some(consent) = check.status().await["consent"].as_str().map(str::to_owned) {
+        let (mut id, waited) = (None, Instant::now());
+        while id.is_none() && waited.elapsed() < Duration::from_secs(120) && check.status().await["phase"] == "active" {
+            let view = check.call("remote_file_status", json!({ "consent": consent })).await.unwrap_or(Value::Null);
+            if view["incoming"]["phase"] == "offered" {
+                id = view["incoming"]["id"].as_str().map(str::to_owned);
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        let target = check.folder.join("qa-file-received.bin");
+        let accepted = match &id {
+            Some(id) => check.call("remote_file_accept", json!({ "consent": consent, "id": id, "path": target.to_string_lossy() })).await.map(|_| ()),
+            None => Err("no file offered".into()),
+        };
+        let mut same = false;
+        while accepted.is_ok() && waited.elapsed() < Duration::from_secs(180) {
+            let view = check.call("remote_file_status", json!({ "consent": consent })).await.unwrap_or(Value::Null);
+            if view["incoming"]["phase"] == "complete" || view["incoming"]["phase"] == "failed" {
+                same = std::fs::read(&target).is_ok_and(|bytes| bytes == qa_file_bytes());
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        check.check("the technician's file arrives complete and identical", same, format!("{accepted:?}"));
+        let _ = std::fs::remove_file(&target);
+    }
+    // Long enough for a technician that holds the session through renewals (hold-minutes.txt, up to 40 min).
     check.print("WAITING for the technician to end the session");
-    let ended = check.wait(300, |status| status["phase"] != "active").await;
+    let ended = check.wait(2700, |status| status["phase"] != "active").await;
     check.check("the technician ends the session; this computer is ready again", ended.is_some() && check.wait(20, |status| status["phase"] == "ready").await.is_some(), check.status().await["message"].clone());
     check.print(&format!("shown after the session: {}", check.status().await["message"]));
 }
