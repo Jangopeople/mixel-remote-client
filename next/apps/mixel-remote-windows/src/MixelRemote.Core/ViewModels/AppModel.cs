@@ -6,7 +6,7 @@ using static MixelRemote.Support.T;
 namespace MixelRemote.ViewModels;
 
 /// <summary>The sections of the app (the sidebar).</summary>
-public enum AppSection { Remote, Devices, Account, Settings }
+public enum AppSection { Remote, Devices, Sessions, Reports, Account, Settings }
 
 /// <summary>
 /// The app's state: the account, the connection to Mixel and the parts of the app. Reads the engine a few
@@ -15,7 +15,7 @@ public enum AppSection { Remote, Devices, Account, Settings }
 /// </summary>
 public sealed class AppModel : Observable
 {
-    private AppSection section = AppSection.Remote;
+    private AppSection section = AppSection.Devices;
     private AccountStatus account = new() { Message = "Sign in with your Mixel account" };
     private RemoteStatus remote = RemoteStatus.Offline;
     private string error = "";
@@ -42,6 +42,8 @@ public sealed class AppModel : Observable
         Settings = new SettingsModel(this);
         Enrollment = new EnrollmentModel(this);
         Assistant = new AssistantModel(this);
+        Workspace = new WorkspaceModel(this);
+        Reports = new ReportsModel(this);
     }
 
     public IEngine Engine { get; }
@@ -53,6 +55,8 @@ public sealed class AppModel : Observable
     public SettingsModel Settings { get; }
     public EnrollmentModel Enrollment { get; }
     public AssistantModel Assistant { get; }
+    public WorkspaceModel Workspace { get; }
+    public ReportsModel Reports { get; }
 
     public AppSection Section { get => section; set => Set(ref section, value); }
     public AccountStatus Account { get => account; private set => Set(ref account, value); }
@@ -161,6 +165,7 @@ public sealed class AppModel : Observable
         Session.StatusChanged(previous, now);
         Host.StatusChanged(previous, now);
         Devices.StatusChanged(previous, now);
+        Workspace.Refresh(now);
         await GoOnlineIfNeeded();
     }
 

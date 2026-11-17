@@ -71,6 +71,9 @@ public sealed class SessionModel : Observable
     public bool RecordingPending { get => recordingPending; private set => Set(ref recordingPending, value); }
     public string MeetingNotice { get => meetingNotice; private set => Set(ref meetingNotice, value); }
     public string DismissedMeetingRoom { get; set; } = "";
+    private DateTimeOffset? recordingSince;
+    /// <summary>When the running recording started (for "REC 00:42" over the picture).</summary>
+    public DateTimeOffset? RecordingSince { get => recordingSince; private set => Set(ref recordingSince, value); }
     /// <summary>A print job of the other computer arrived (the session window opens the print jobs).</summary>
     public event EventHandler? PrintJobArrived;
     /// <summary>Raised for every new picture (the screen redraws without going through bindings).</summary>
@@ -114,6 +117,9 @@ public sealed class SessionModel : Observable
         {
             Clear();
         }
+        var recording = next.Recording?.Running == true;
+        if (recording && RecordingSince is null) RecordingSince = DateTimeOffset.UtcNow;
+        else if (!recording && RecordingSince is not null) RecordingSince = null;
         if (next.Phase is "active" or "incoming" or "outgoing") StartTools();
         else StopTools();
         if (!next.InSession) stoppedConsent = null;
@@ -128,10 +134,12 @@ public sealed class SessionModel : Observable
         video?.Cancel();
         video = null;
         viewingSession = null;
+        var had = Frame is not null;
         Frame = null;
         Fps = 0;
         shownTimes.Clear();
         inputQueue.Clear();
+        if (had) app.Workspace.Refresh();
     }
 
     private void StartVideo(string session)
@@ -182,7 +190,11 @@ public sealed class SessionModel : Observable
     {
         var first = Frame is null;
         frame = decoded;
-        if (first) Raise(nameof(Frame));
+        if (first)
+        {
+            Raise(nameof(Frame));
+            app.Workspace.Refresh();
+        }
         FrameArrived?.Invoke(this, decoded);
         var now = DateTimeOffset.UtcNow;
         shownTimes.Enqueue(now);
