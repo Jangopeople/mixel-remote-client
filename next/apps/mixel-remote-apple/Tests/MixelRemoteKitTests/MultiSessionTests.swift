@@ -299,17 +299,137 @@ final class MultiSessionTests: XCTestCase {
         app.stop()
     }
 
-    func testPasswordAndReconnectingStateAreReadPerSession() async throws {
+    func testPasswordAndUnattendedFlagsBelongToTheirOwnSession() async throws {
         let engine = MockEngine()
-        var all = status([item(1), item(2)])
-        all.unattendedSession = true
+        var first = item(1)
+        first.unattendedSession = true
+        var second = item(2)
+        second.passwordSession = PasswordSessionView(endsAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(240)), secondsLeft: 240)
+        var all = status([first, second, item(3)])
         all.reconnecting = true
         Fixtures.company(engine)
         engine.reply("remote_status", all)
         let app = await Fixtures.app(engine)
-        XCTAssertTrue(app.remote.isReconnecting, "the reconnecting banner reads the whole status")
-        XCTAssertTrue(try XCTUnwrap(app.sessionModels[peer(1)]).remote.unattendedSession, "the oldest session carries the status flags")
-        XCTAssertFalse(try XCTUnwrap(app.sessionModels[peer(2)]).remote.unattendedSession, "another session does not borrow them")
+        XCTAssertTrue(app.remote.isReconnecting, "the registration-lost banner reads the whole status")
+        let one = try XCTUnwrap(app.sessionModels[peer(1)]).remote
+        let two = try XCTUnwrap(app.sessionModels[peer(2)]).remote
+        let three = try XCTUnwrap(app.sessionModels[peer(3)]).remote
+        XCTAssertTrue(one.unattendedSession)
+        XCTAssertNil(one.passwordSession)
+        XCTAssertFalse(two.unattendedSession)
+        XCTAssertEqual(two.passwordSession?.secondsLeft, 240, "the password warning is this session's own")
+        XCTAssertFalse(three.unattendedSession)
+        XCTAssertNil(three.passwordSession, "a session without the flags does not borrow another's")
+        app.stop()
+    }
+
+    func testPerSessionFlagsDecodeAndAreOptional() throws {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let with = #"{"id":"a","phase":"active","password_session":{"ends_at":"2026-11-17T12:00:00Z","seconds_left":299},"unattended_session":true,"reconnecting":false,"reconnect_failed":false}"#
+        let item = try decoder.decode(RemoteSessionItem.self, from: Data(with.utf8))
+        XCTAssertEqual(item.passwordSession, PasswordSessionView(endsAt: "2026-11-17T12:00:00Z", secondsLeft: 299))
+        XCTAssertTrue(item.unattendedSession)
+        let without = try decoder.decode(RemoteSessionItem.self, from: Data(#"{"id":"a","phase":"active"}"#.utf8))
+        XCTAssertNil(without.passwordSession)
+        XCTAssertFalse(without.unattendedSession || without.reconnecting || without.reconnectFailed)
+        let retry = try decoder.decode(RemoteSessionItem.self, from: Data(#"{"id":"a","phase":"outgoing","reconnecting":true}"#.utf8))
+        XCTAssertFalse(retry.isNewRequest, "a session asking its computer again is not a new request")
+    }
+
+    func testAnOldEngineSingleSessionKeepsTheStatusFlags() {
+        var old = RemoteStatus(phase: "active", host: 482_913_557, session: "s", consent: "c", peer: peer(1), control: true, unattendedSession: true)
+        old.passwordSession = PasswordSessionView(endsAt: "2026-11-17T12:00:00Z")
+        let item = old.viewerSessions.first
+        XCTAssertTrue(item?.unattendedSession == true)
+        XCTAssertEqual(item?.passwordSession?.endsAt, "2026-11-17T12:00:00Z")
+        let seen = old.describing(item!)
+        XCTAssertTrue(seen.unattendedSession)
+        XCTAssertNotNil(seen.passwordSession)
+    }
+
+    // MARK: Reconnect (the computer went away, the engine asks again)
+
+    /// What the engine reports while session 2's computer is gone: the item stays (phase `outgoing`), the
+    /// top-level session is empty only when nothing else runs; here session 1 keeps running.
+    private func retrying(_ n: Int, failed: Bool = false) -> RemoteSessionItem {
+        var it = item(n, phase: "outgoing")
+        it.reconnecting = !failed
+        it.reconnectFailed = failed
+        it.control = false
+        it.message = failed ? "Could not reconnect" : "Reconnecting..."
+        return it
+    }
+
+    func testAReconnectingSessionKeepsItsTabAndShowsReconnecting() async throws {
+        let (app, engine) = try await app(sessions: 2)
+        let ws = app.workspace
+        ws.show(peer(2))
+        await show([item(1), retrying(2)], app, engine)
+        XCTAssertEqual(ws.tabs.map(\.peer), [peer(1), peer(2)], "the tab stays")
+        XCTAssertEqual(ws.tab(peer(2))?.state, "reconnecting")
+        XCTAssertEqual(ws.tab(peer(1))?.state, "ready", "the other session is untouched")
+        XCTAssertEqual(ws.selected, .session(peer(2)), "not sent back to Devices")
+        XCTAssertEqual(app.sessionModels[peer(2)]?.link, .reconnecting)
+        XCTAssertFalse(app.remote.requesting, "a retrying session is not a new request")
+        XCTAssertNotNil(ws.session(for: peer(2)), "its model is still there for End and Retry")
+        // The computer is back: the same tab is live again.
+        await show([item(1), item(2)], app, engine)
+        XCTAssertEqual(app.sessionModels[peer(2)]?.link, .live)
+        XCTAssertEqual(ws.tabs.map(\.sessionId), ["id-1", "id-2"])
+        app.stop()
+    }
+
+    func testEndWorksWhileRetryingWhenTheTopLevelSessionIsEmpty() async throws {
+        let (app, engine) = try await app(sessions: 1)
+        var only = RemoteStatus(phase: "outgoing", message: "Reconnecting...", host: 482_913_557, sessions: [retrying(1)], maxSessions: 4)
+        only.session = nil
+        engine.reply("remote_status", only)
+        await app.refreshRemote()
+        XCTAssertNil(app.remote.session)
+        XCTAssertEqual(app.workspace.tab(peer(1))?.state, "reconnecting")
+        app.workspace.end(peer(1))
+        try await waitFor { !engine.calls("remote_close").isEmpty }
+        XCTAssertEqual(engine.calls("remote_close").map { $0.object["session"] as? String }, ["id-1"], "the stable id, not the empty status session")
+        app.stop()
+    }
+
+    func testCouldNotReconnectOffersRetryWhichSendsRemoteReconnect() async throws {
+        let (app, engine) = try await app(sessions: 2)
+        await show([item(1), retrying(2, failed: true)], app, engine)
+        let ws = app.workspace
+        XCTAssertEqual(ws.tab(peer(2))?.state, "reconnect_failed")
+        XCTAssertEqual(app.sessionModels[peer(2)]?.link, .failed)
+        XCTAssertEqual(app.sessionModels[peer(2)]?.remote.message, "Could not reconnect")
+        // Retry only exists in that state: a live session sends nothing.
+        app.sessionModels[peer(1)]?.retryReconnect()
+        try await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertTrue(engine.calls("remote_reconnect").isEmpty)
+        app.sessionModels[peer(2)]?.retryReconnect()
+        try await waitFor { !engine.calls("remote_reconnect").isEmpty }
+        XCTAssertEqual(engine.calls("remote_reconnect").map { $0.object["session"] as? String }, ["id-2"])
+        XCTAssertTrue(engine.calls("remote_close").isEmpty, "Retry does not end the session")
+        // Retry restarts the minute: reconnecting again, same tab.
+        await show([item(1), retrying(2)], app, engine)
+        XCTAssertEqual(ws.tab(peer(2))?.state, "reconnecting")
+        // End works from the failed state too.
+        await show([item(1), retrying(2, failed: true)], app, engine)
+        ws.end(peer(2))
+        try await waitFor { !engine.calls("remote_close").isEmpty }
+        XCTAssertEqual(engine.calls("remote_close").map { $0.object["session"] as? String }, ["id-2"])
+        // The engine drops it: the tab goes.
+        await show([item(1)], app, engine)
+        XCTAssertEqual(ws.tabs.map(\.peer), [peer(1)])
+        app.stop()
+    }
+
+    func testCancelRequestsDoesNotEndARetryingSession() async throws {
+        let (app, engine) = try await app(sessions: 2)
+        await show([item(1), retrying(2), item(3, phase: "outgoing")], app, engine)
+        app.cancelRequests()
+        try await waitFor { !engine.calls("remote_close").isEmpty }
+        try await settle()
+        XCTAssertEqual(engine.calls("remote_close").map { $0.object["session"] as? String }, ["id-3"], "only the new request is cancelled")
         app.stop()
     }
 

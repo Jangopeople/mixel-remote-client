@@ -93,10 +93,32 @@ struct SessionStage: View {
             Theme.stage
             RemoteScreen(session: session)
             if session.frame != nil, session.focused { DrawingOverlay(drawing: drawing, pictureSize: session.size) }
-            if session.frame == nil {
+            switch session.link {
+            case .reconnecting:
                 VStack(spacing: 12) {
                     ProgressView().controlSize(.large).tint(.white)
-                    Text(verbatim: L("Starting video")).foregroundStyle(.white.opacity(0.85))
+                    Text(verbatim: L("Reconnecting…")).font(.title3.weight(.semibold)).foregroundStyle(.white)
+                    Text(verbatim: L("The session stays open while Mixel Remote asks that computer again.")).font(.callout).foregroundStyle(.white.opacity(0.75))
+                }
+                .accessibilityElement(children: .combine)
+            case .failed:
+                VStack(spacing: 12) {
+                    Image(systemName: "wifi.exclamationmark").font(.system(size: 34)).foregroundStyle(.white.opacity(0.85))
+                    Text(verbatim: L("Could not reconnect")).font(.title3.weight(.semibold)).foregroundStyle(.white)
+                    HStack(spacing: 10) {
+                        Button(L("Retry")) { session.retryReconnect() }
+                            .buttonStyle(PrimaryButtonStyle())
+                            .accessibilityLabel(Text(verbatim: L("Retry")))
+                        Button(L("End session")) { session.end() }
+                            .disabled(session.stopping)
+                    }
+                }
+            case .live:
+                if session.frame == nil {
+                    VStack(spacing: 12) {
+                        ProgressView().controlSize(.large).tint(.white)
+                        Text(verbatim: L("Starting video")).foregroundStyle(.white.opacity(0.85))
+                    }
                 }
             }
             VStack {

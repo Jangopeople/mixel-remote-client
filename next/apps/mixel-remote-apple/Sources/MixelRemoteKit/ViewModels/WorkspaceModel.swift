@@ -42,7 +42,8 @@ public final class WorkspaceModel: ObservableObject {
         public var peer: UInt32
         public var name: String
         public var os: String
-        /// `connecting`, `starting` (video not there yet), `ready`, `ending`.
+        /// `connecting`, `starting` (video not there yet), `ready`, `ending`, `reconnecting` (the computer went away,
+        /// the engine asks for it again), `reconnect_failed` ("Could not reconnect", Retry or End).
         public var state: String
         /// The session's stable engine id.
         public var sessionId: String = ""
@@ -104,10 +105,17 @@ public final class WorkspaceModel: ObservableObject {
             guard let peer = item.peer else { return nil }
             let shown = app.sessionModels[peer]?.frame != nil
             let state: String
-            switch item.phase {
-            case "active": state = shown ? "ready" : "starting"
-            case "closing": state = "ending"
-            default: return nil
+            if item.reconnectFailed {
+                state = "reconnect_failed"
+            } else if item.reconnecting {
+                // The session stays (phase `outgoing` while it asks again); it is not "ended" and not a new request.
+                state = "reconnecting"
+            } else {
+                switch item.phase {
+                case "active": state = shown ? "ready" : "starting"
+                case "closing": state = "ending"
+                default: return nil
+                }
             }
             return SessionTab(peer: peer, name: app.devices.name(of: peer), os: app.devices.os(of: peer), state: state, sessionId: item.id)
         }

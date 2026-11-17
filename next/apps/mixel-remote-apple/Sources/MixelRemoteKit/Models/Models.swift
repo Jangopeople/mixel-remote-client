@@ -188,7 +188,7 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
                                   control: control, clipboard: clipboard, files: files, recordingPermitted: recordingPermitted, recording: recording,
                                   displays: displays, display: display, displayAll: displayAll, printJobs: printJobs, hostActions: hostActions,
                                   signinId: signinId, hostMacs: hostMacs, meetingOffer: meetingOffer, peerFeatures: peerFeatures,
-                                  joinedSession: joinedSession, switched: switched)]
+                                  joinedSession: joinedSession, switched: switched, passwordSession: passwordSession, unattendedSession: unattendedSession)]
     }
 
     /// Sessions the engine lets this app hold (1 for an older engine).
@@ -209,7 +209,7 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
     }
 
     /// A technician session is being requested (waiting for Accept, or negotiating).
-    public var requesting: Bool { viewerSessions.contains { ["outgoing", "negotiating"].contains($0.phase) } }
+    public var requesting: Bool { viewerSessions.contains { $0.isNewRequest } }
 
     /// This status with the single-session fields (`phase`, `session`, `control`, ...) describing `item`:
     /// what a session's model and screens read as "the session".
@@ -238,13 +238,10 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
         copy.peerFeatures = item.peerFeatures
         copy.joinedSession = item.joinedSession
         copy.switched = item.switched
-        // The one-time-password and unattended flags of the status describe the oldest running session only
-        // (the engine has no per-session field for them): other sessions rely on what this app sent itself.
-        let primary = viewerSessions.first { $0.phase == "active" } ?? viewerSessions.first
-        if primary?.id != item.id {
-            copy.passwordSession = nil
-            copy.unattendedSession = false
-        }
+        // The one-time-password and unattended flags belong to the session itself (engine 2.1.0 reports them per
+        // `sessions[]` item; an older engine's single session carries the status's own, see `viewerSessions`).
+        copy.passwordSession = item.passwordSession
+        copy.unattendedSession = item.unattendedSession
         return copy
     }
 }
@@ -280,12 +277,25 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
     public var switched: Bool
     public var quality: SessionQuality?
     public var startedAt: Double?
+    /// The computer went away and this app asks for it again (every 2 s for 60 s); `phase` is `outgoing`.
+    public var reconnecting: Bool
+    /// The minute is over: "Could not reconnect"; the session stays listed until `remote_reconnect` or `remote_close`.
+    public var reconnectFailed: Bool
+    /// Opened with a one-time password: this session's own end time (its 5 and 1 minute warnings are this session's only).
+    public var passwordSession: PasswordSessionView?
+    public var unattendedSession: Bool
+
+    /// A request still waiting for Accept or negotiating (not a session asking its computer again).
+    public var isNewRequest: Bool { ["outgoing", "negotiating"].contains(phase) && !reconnecting && !reconnectFailed }
 
     public init(id: String, session: String? = nil, peer: UInt32? = nil, phase: String = "active", message: String = "", consent: String? = nil,
                 received: UInt64 = 0, control: Bool = false, clipboard: Bool = false, files: Bool = false, recordingPermitted: Bool = false,
                 recording: RecordingView? = nil, displays: UInt16 = 0, display: UInt16 = 0, displayAll: Bool = false, printJobs: [String] = [],
                 hostActions: [String] = [], signinId: UInt32? = nil, hostMacs: [String] = [], meetingOffer: [String]? = nil,
-                peerFeatures: [String] = [], joinedSession: Bool = false, switched: Bool = false, quality: SessionQuality? = nil, startedAt: Double? = nil) {
+                peerFeatures: [String] = [], joinedSession: Bool = false, switched: Bool = false, quality: SessionQuality? = nil, startedAt: Double? = nil,
+                reconnecting: Bool = false, reconnectFailed: Bool = false, passwordSession: PasswordSessionView? = nil, unattendedSession: Bool = false) {
+        self.reconnecting = reconnecting; self.reconnectFailed = reconnectFailed
+        self.passwordSession = passwordSession; self.unattendedSession = unattendedSession
         self.id = id; self.session = session; self.peer = peer; self.phase = phase; self.message = message; self.consent = consent
         self.received = received; self.control = control; self.clipboard = clipboard; self.files = files
         self.recordingPermitted = recordingPermitted; self.recording = recording; self.displays = displays; self.display = display
@@ -297,6 +307,7 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
     private enum Key: String, CodingKey {
         case id, session, peer, device, phase, message, consent, received, control, clipboard, files, recordingPermitted, recording, displays, display
         case displayAll, printJobs, hostActions, signinId, hostMacs, meetingOffer, peerFeatures, joinedSession, switched, quality, startedAt
+        case reconnecting, reconnectFailed, passwordSession, unattendedSession
     }
 
     public init(from decoder: Decoder) throws {
@@ -326,6 +337,10 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
         switched = (try? c.decodeIfPresent(Bool.self, forKey: .switched)) ?? false
         quality = try? c.decodeIfPresent(SessionQuality.self, forKey: .quality)
         startedAt = try? c.decodeIfPresent(Double.self, forKey: .startedAt)
+        reconnecting = (try? c.decodeIfPresent(Bool.self, forKey: .reconnecting)) ?? false
+        reconnectFailed = (try? c.decodeIfPresent(Bool.self, forKey: .reconnectFailed)) ?? false
+        passwordSession = try? c.decodeIfPresent(PasswordSessionView.self, forKey: .passwordSession)
+        unattendedSession = (try? c.decodeIfPresent(Bool.self, forKey: .unattendedSession)) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -354,6 +369,10 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
         try c.encode(peerFeatures, forKey: .peerFeatures)
         try c.encode(joinedSession, forKey: .joinedSession)
         try c.encode(switched, forKey: .switched)
+        try c.encode(reconnecting, forKey: .reconnecting)
+        try c.encode(reconnectFailed, forKey: .reconnectFailed)
+        try c.encode(passwordSession, forKey: .passwordSession)
+        try c.encode(unattendedSession, forKey: .unattendedSession)
         try c.encode(quality, forKey: .quality)
         try c.encode(startedAt, forKey: .startedAt)
     }
@@ -406,7 +425,9 @@ public struct Invitation: Codable, Equatable, Sendable, Identifiable {
 /// at `ends_at` (the broker's 2-hour limit, ISO 8601).
 public struct PasswordSessionView: Codable, Equatable, Sendable {
     public var endsAt: String?
-    public init(endsAt: String? = nil) { self.endsAt = endsAt }
+    /// Seconds left as the engine counts them (informational; the banner counts down from `endsAt`).
+    public var secondsLeft: Int?
+    public init(endsAt: String? = nil, secondsLeft: Int? = nil) { self.endsAt = endsAt; self.secondsLeft = secondsLeft }
 }
 
 /// Recording state of the session: `ready`, `waiting_for_video`, `recording`, `saving`, `saved`,

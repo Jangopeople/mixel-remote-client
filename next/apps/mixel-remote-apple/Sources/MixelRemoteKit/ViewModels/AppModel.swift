@@ -204,7 +204,8 @@ public final class AppModel: ObservableObject {
 
     /// Cancels every request still waiting for the other side (outgoing or negotiating).
     public func cancelRequests() {
-        for item in remote.viewerSessions where ["outgoing", "negotiating"].contains(item.phase) { closeSession(item.id) }
+        // A session asking its computer again (reconnecting) is not a request: it is ended with its own End button.
+        for item in remote.viewerSessions where item.isNewRequest { closeSession(item.id) }
     }
 
     /// A set-up computer goes online by itself once someone is signed in, so the person who needs
@@ -416,7 +417,7 @@ public final class AppModel: ObservableObject {
     /// The status line of the connection, as the desktop app words it.
     public var connectionMessage: String {
         if session.stopping { return L("Ending the session…") }
-        if remote.requesting, let item = remote.viewerSessions.last(where: { ["outgoing", "negotiating"].contains($0.phase) }) {
+        if remote.requesting, let item = remote.viewerSessions.last(where: { $0.isNewRequest }) {
             return item.phase == "outgoing" && requestFlags(for: item.peer).unattended
                 ? L("Requesting unattended access…")
                 : item.phase == "outgoing" ? L("Waiting for the other person to accept your request.") : L("Connecting securely…")

@@ -107,6 +107,26 @@ public final class SessionModel: ObservableObject {
         get { app.requestFlags(for: peer).password }
         set { app.setRequestFlags(for: peer) { $0.password = newValue } }
     }
+    /// What the person sees of the link to the other computer: live, asking again (the computer went away),
+    /// or given up after a minute (Retry or End).
+    public enum Link: Equatable, Sendable { case live, reconnecting, failed }
+    public var link: Link {
+        guard let item else { return .live }
+        return item.reconnectFailed ? .failed : item.reconnecting ? .reconnecting : .live
+    }
+
+    /// "Retry" after "Could not reconnect": the engine asks the same computer again for another minute.
+    /// Carries the stable id (the status's own `session` is empty while the session retries).
+    public func retryReconnect() {
+        guard link == .failed, let id = sessionId else { return }
+        error = ""
+        Task {
+            do { try await app.engine.perform("remote_reconnect", ["session": id]) }
+            catch { self.error = AppModel.message(error) }
+            await app.refreshRemote()
+        }
+    }
+
     var locallyStopped: Bool { remote.consent != nil && remote.consent == stoppedConsent }
 
     /// The model of no session follows the shared session (this computer is helped) and nothing else.

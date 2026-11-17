@@ -160,6 +160,7 @@ struct TitleTabStrip: View {
         switch tab.state {
         case "ready": Theme.success
         case "ending": .secondary
+        case "reconnect_failed": Theme.brand
         default: Theme.warning
         }
     }

@@ -378,7 +378,7 @@ struct DeviceTableRow: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(state == "ready" || state == "starting" ? Theme.activeRow : hovering ? Theme.hoverRow : Theme.page)
+        .background(state == "ready" || state == "starting" || state == "reconnecting" || state == "reconnect_failed" ? Theme.activeRow : hovering ? Theme.hoverRow : Theme.page)
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.hairline.opacity(0.7)).frame(height: 1) }
         .onHover { hovering = $0 }
         .contextMenu { menuItems(presence) }
@@ -452,8 +452,9 @@ struct DeviceTableRow: View {
                 ProgressView(value: Double(attempt.step + 1), total: 5).tint(Theme.brand).frame(maxWidth: 200)
             }
             .accessibilityElement(children: .combine)
-        } else if state == "ready" || state == "starting" || state == "ending" {
-            Pill(state == "starting" ? L("Starting video") : L("In session"), symbol: "macwindow", foreground: Theme.sessionText, background: Theme.sessionSoft)
+        } else if state == "ready" || state == "starting" || state == "ending" || state == "reconnecting" || state == "reconnect_failed" {
+            Pill(state == "starting" ? L("Starting video") : state == "reconnecting" ? L("Reconnecting…") : state == "reconnect_failed" ? L("Could not reconnect") : L("In session"),
+                 symbol: "macwindow", foreground: Theme.sessionText, background: Theme.sessionSoft)
         } else {
             HStack(spacing: 6) {
                 StatusBadge(badge(presence), model.label(presence))
@@ -476,7 +477,7 @@ struct DeviceTableRow: View {
 
     @ViewBuilder private func actions(_ presence: DevicesModel.Presence, _ state: String?) -> some View {
         HStack(spacing: 6) {
-            if state == "ready" || state == "starting" {
+            if state == "ready" || state == "starting" || state == "reconnecting" || state == "reconnect_failed" {
                 Button { workspace.show(device.connectionId) } label: { Label(L("Show"), systemImage: "macwindow") }
                     .help(L("Show the session with %@", device.name))
             } else {

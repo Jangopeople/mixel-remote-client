@@ -238,7 +238,7 @@ struct DeviceRow: View {
             } else if model.managesIsmDevices, ["macos", "windows", "linux"].contains(device.os) {
                 Button(L("Edit device")) { edit(device) }
             }
-            let connectingHere = app.remote.viewerSessions.contains { $0.peer == device.connectionId && ["outgoing", "negotiating"].contains($0.phase) }
+            let connectingHere = app.remote.viewerSessions.contains { $0.peer == device.connectionId && $0.isNewRequest }
             Button(connectingHere ? L("Connecting…") : L("Connect")) { model.connect(device, unattended: true) }
                 .buttonStyle(PrimaryButtonStyle())
                 .disabled(!blocked.isEmpty || connectingHere)

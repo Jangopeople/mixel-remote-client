@@ -3213,6 +3213,28 @@
         }
       }
     },
+    "Could not reconnect": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbindung konnte nicht wiederhergestellt werden"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible de se reconnecter"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile riconnettersi"
+          }
+        }
+      }
+    },
     "Create Mixel ID": {
       "localizations": {
         "de": {
@@ -8999,6 +9021,28 @@
         }
       }
     },
+    "Reconnecting…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbindung wird wiederhergestellt…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reconnexion…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Riconnessione…"
+          }
+        }
+      }
+    },
     "Reconnecting… the session stays open": {
       "localizations": {
         "de": {
@@ -9831,6 +9875,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Riavvio di Mixel Remote…"
+          }
+        }
+      }
+    },
+    "Retry": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erneut versuchen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réessayer"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Riprova"
           }
         }
       }
@@ -12361,6 +12427,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "La sessione è pronta."
+          }
+        }
+      }
+    },
+    "The session stays open while Mixel Remote asks that computer again.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Sitzung bleibt offen, während Mixel Remote diesen Computer erneut anfragt."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La session reste ouverte pendant que Mixel Remote redemande cet ordinateur."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La sessione resta aperta mentre Mixel Remote contatta di nuovo quel computer."
           }
         }
       }
