@@ -10429,6 +10429,28 @@
         }
       }
     },
+    "Send files…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dateien senden…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envoyer des fichiers…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invia file…"
+          }
+        }
+      }
+    },
     "Send invitation": {
       "localizations": {
         "de": {

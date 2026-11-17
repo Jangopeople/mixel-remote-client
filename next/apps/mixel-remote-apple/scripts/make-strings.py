@@ -131,6 +131,7 @@ NATIVE = {
     'Could not reconnect': ('Verbindung konnte nicht wiederhergestellt werden', 'Impossible de se reconnecter', 'Impossibile riconnettersi'),
     'Retry': ('Erneut versuchen', 'Réessayer', 'Riprova'),
     'End session with %@?': ('Sitzung mit %@ beenden?', 'Terminer la session avec %@ ?', 'Terminare la sessione con %@?'),
+    'Send files…': ('Dateien senden…', 'Envoyer des fichiers…', 'Invia file…'),
     'Back into a tab': ('Zurück in einen Tab', 'Retour dans un onglet', 'Torna in una scheda'),
     'Chat with %@': ('Chat mit %@', 'Chat avec %@', 'Chat con %@'),
     'Checking unattended access': ('Unbeaufsichtigter Zugriff wird geprüft', 'Vérification de l’accès sans surveillance', 'Verifica dell’accesso non presidiato'),

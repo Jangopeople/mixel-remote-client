@@ -166,7 +166,7 @@ public final class WorkspaceModel: ObservableObject {
         }
         updateAttempt(status)
         for tab in next where tab.state == "ready" && before[tab.peer]?.state != "ready" {
-            becameReady(tab.peer)
+            if filesWanted.contains(tab.peer) { startFileFlow(tab.peer) } else { becameReady(tab.peer) }
         }
     }
 
@@ -199,6 +199,7 @@ public final class WorkspaceModel: ObservableObject {
                     : Translator.shared.translate(sentence)
             }
         }
+        if !current.failure.isEmpty { filesWanted.remove(current.peer) }
         current.step = step
         if current != attempt { attempt = current }
     }
@@ -215,6 +216,40 @@ public final class WorkspaceModel: ObservableObject {
     }
 
     private var attemptWindow: Set<UInt32> = []
+    /// Devices whose "Send files…" is waiting for the session to be ready: the file picker opens then.
+    private var filesWanted: Set<UInt32> = []
+    public func isWaitingToSendFiles(_ peer: UInt32) -> Bool { filesWanted.contains(peer) }
+
+    /// Row menu "Send files…": uses the session with this device (connecting first when there is none), then
+    /// opens the file picker and sends the chosen file over the session's file channel, the same way the
+    /// session toolbar's "Send a file…" does. The engine's file commands need an active session that was granted
+    /// file transfer, so connecting first is the only path.
+    public func sendFiles(to peer: UInt32, name: String? = nil, os: String = "") {
+        if let tab = tab(peer) {
+            if tab.state == "ready" || tab.state == "starting" { startFileFlow(peer) }
+            return
+        }
+        guard attempt == nil || attempt?.failure.isEmpty == false else { return }
+        filesWanted.insert(peer)
+        connect(peer: peer, name: name, os: os, unattended: true, checkPhone: false)
+        // A connection that could not start at all (busy) leaves a failed attempt: nothing to wait for.
+        if attempt?.failure.isEmpty == false { filesWanted.remove(peer) }
+    }
+
+    /// The session is ready: bring it forward and let the person pick the file.
+    private func startFileFlow(_ peer: UInt32) {
+        filesWanted.remove(peer)
+        show(peer)
+        guard let model = session(for: peer) else { return }
+        guard model.remote.files else {
+            model.error = L("File transfer was not allowed for this session.")
+            return
+        }
+        Task { [weak self] in
+            guard let self, let path = await self.app.chooseFile() else { return }
+            await model.sendFileWhenConnected(path: path)
+        }
+    }
 
     // MARK: Actions
 
@@ -245,6 +280,7 @@ public final class WorkspaceModel: ObservableObject {
         guard let current = attempt else { return }
         attempt = nil
         attemptWindow.remove(current.peer)
+        filesWanted.remove(current.peer)
         if let item = app.remote.viewerSessions.first(where: { $0.peer == current.peer }) { app.closeSession(item.id) }
     }
 

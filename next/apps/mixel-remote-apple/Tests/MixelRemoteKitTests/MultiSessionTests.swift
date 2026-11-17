@@ -433,6 +433,74 @@ final class MultiSessionTests: XCTestCase {
         app.stop()
     }
 
+    // MARK: Row menu "Send files..."
+
+    private let filesConnected = #"{"connected":true,"incoming":null,"outgoing":null,"message":""}"#
+
+    func testSendFilesFromTheRowUsesTheRunningSession() async throws {
+        let (app, engine) = try await app(sessions: 2)
+        engine.reply("remote_file_status", json: filesConnected)
+        var picked = 0
+        app.chooseFile = { picked += 1; return "/tmp/report.pdf" }
+        app.workspace.sendFiles(to: peer(2))
+        try await waitFor { !engine.calls("remote_file_send").isEmpty }
+        XCTAssertEqual(picked, 1)
+        XCTAssertTrue(engine.calls("remote_request").isEmpty, "no second connection to a device that has a session")
+        XCTAssertEqual(engine.calls("remote_file_send").map { $0.object["consent"] as? String }, ["consent-2"])
+        XCTAssertEqual(engine.calls("remote_file_send").first?.object["path"] as? String, "/tmp/report.pdf")
+        XCTAssertEqual(app.workspace.selected, .session(peer(2)), "the session is brought forward")
+        app.stop()
+    }
+
+    func testSendFilesConnectsFirstThenOpensThePicker() async throws {
+        let (app, engine) = try await app(sessions: 1)
+        engine.reply("remote_file_status", json: filesConnected)
+        engine.reply("remote_request", json: "\"id-3\"")
+        var picked = 0
+        app.chooseFile = { picked += 1; return "/tmp/a.txt" }
+        let ws = app.workspace
+        ws.sendFiles(to: peer(3), name: "SRV-03")
+        XCTAssertTrue(ws.isWaitingToSendFiles(peer(3)))
+        try await waitFor { !engine.calls("remote_request").isEmpty }
+        XCTAssertEqual(engine.calls("remote_request").first?.object["host"] as? Int, Int(peer(3)))
+        XCTAssertEqual(picked, 0, "the picker waits for the session")
+        engine.queue(frame: VideoFrame.sample(width: 320, height: 200, sequence: 1), session: "id-3")
+        await show([item(1), item(3)], app, engine)
+        try await waitFor { app.sessionModels[self.peer(3)]?.frame != nil }
+        ws.refresh()
+        try await waitFor { !engine.calls("remote_file_send").isEmpty }
+        XCTAssertEqual(picked, 1)
+        XCTAssertFalse(ws.isWaitingToSendFiles(peer(3)))
+        XCTAssertEqual(engine.calls("remote_file_send").map { $0.object["consent"] as? String }, ["consent-3"])
+        app.stop()
+    }
+
+    func testSendFilesWhenTheSessionDoesNotAllowFilesSaysSoAndOpensNoPicker() async throws {
+        let (app, engine) = try await app(sessions: 1)
+        var noFiles = item(1)
+        noFiles.files = false
+        await show([noFiles], app, engine)
+        var picked = 0
+        app.chooseFile = { picked += 1; return "/tmp/a.txt" }
+        app.workspace.sendFiles(to: peer(1))
+        try await settle()
+        XCTAssertEqual(picked, 0)
+        XCTAssertEqual(app.sessionModels[peer(1)]?.error, "File transfer was not allowed for this session.")
+        XCTAssertTrue(engine.calls("remote_file_send").isEmpty)
+        app.stop()
+    }
+
+    func testACancelledConnectionForgetsThePendingFilePicker() async throws {
+        let (app, engine) = try await app(sessions: 1)
+        engine.reply("remote_request", json: "\"id-3\"")
+        let ws = app.workspace
+        ws.sendFiles(to: peer(3))
+        try await waitFor { !engine.calls("remote_request").isEmpty }
+        ws.cancelAttempt()
+        XCTAssertFalse(ws.isWaitingToSendFiles(peer(3)))
+        app.stop()
+    }
+
     // MARK: Older engine, renewal
 
     func testAnEngineWithoutSessionsStillWorksWithOneSession() async throws {

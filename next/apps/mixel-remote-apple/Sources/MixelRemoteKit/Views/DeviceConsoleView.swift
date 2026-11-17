@@ -510,6 +510,8 @@ struct DeviceTableRow: View {
             workspace.connect(peer: device.connectionId, name: device.name, os: device.os, unattended: true, checkPhone: false)
             workspace.openAttemptInWindow()
         }.disabled(!blocked.isEmpty)
+        Button(L("Send files…")) { workspace.sendFiles(to: device.connectionId, name: device.name, os: device.os) }
+            .disabled(workspace.tab(device.connectionId).map { $0.state != "ready" && $0.state != "starting" } ?? !blocked.isEmpty)
         if presence == .offline, !model.knownMacs(device).isEmpty {
             Button(L("Wake")) { model.wake(device) }
         }

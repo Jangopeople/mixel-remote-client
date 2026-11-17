@@ -191,6 +191,33 @@ final class ConsoleRedesignTests: XCTestCase {
         XCTAssertEqual(model.filtered.map(\.name), ["Reception PC"], "search finds a note")
     }
 
+    /// Row menu "Move to group…": the engine's company command carries the tenant, the device id and the group
+    /// (a group id, or nothing for "No group").
+    func testMoveToGroupSendsTheCompanyMoveCommand() async throws {
+        let engine = MockEngine()
+        Fixtures.company(engine)
+        engine.reply("remote_admin_devices", json: adminJSON(version: ("2.0.19", "2.0.19")))
+        engine.reply("saas_move_device", json: "null")
+        let app = await Fixtures.app(engine)
+        app.devices.admin = EngineDeviceAdminService(engine: engine)
+        await app.devices.load()
+        let device = try XCTUnwrap(app.devices.allDevices.first { $0.connectionId == 731_204_118 })
+        var moved = await app.devices.move(device, to: "group-1")
+        XCTAssertTrue(moved)
+        var call = try XCTUnwrap(engine.calls("saas_move_device").last).object
+        XCTAssertEqual(call["device"] as? String, device.device)
+        XCTAssertEqual(call["group"] as? String, "group-1")
+        XCTAssertNotNil(call["tenant"] as? String)
+        moved = await app.devices.move(device, to: nil)
+        XCTAssertTrue(moved)
+        call = try XCTUnwrap(engine.calls("saas_move_device").last).object
+        XCTAssertTrue(call["group"] == nil || call["group"] is NSNull, "no group")
+        engine.fail("saas_move_device", "Not allowed.")
+        moved = await app.devices.move(device, to: "group-2")
+        XCTAssertFalse(moved)
+        XCTAssertFalse(app.devices.error.isEmpty, "a refused move shows its reason")
+    }
+
     func testNoteUnattendedRenameAndRemoveUseTheAdminCommands() async throws {
         let engine = MockEngine()
         Fixtures.company(engine)

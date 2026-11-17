@@ -517,6 +517,14 @@ public final class SessionModel: ObservableObject {
         }
     }
 
+    /// Sends the file once the session's file channel is up (it opens a moment after the session; up to 6 s).
+    func sendFileWhenConnected(path: String) async {
+        for _ in 0..<30 where files?.connected != true {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        sendFile(path: path)
+    }
+
     /// The suggested name of a file the other side offers (for the Save panel).
     public func offeredName(_ id: String) async -> String? {
         guard let consent = remote.consent else { return nil }
