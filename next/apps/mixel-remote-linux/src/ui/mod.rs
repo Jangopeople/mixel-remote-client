@@ -399,14 +399,31 @@ impl Ui {
             });
         });
         let (a, weak) = (app.clone(), Rc::downgrade(self));
-        window.connect_close_request(move |_| {
-            // Closing the window puts the session back into its tab; the session goes on.
-            if let Some(ui) = weak.upgrade() {
-                ui.popouts.borrow_mut().remove(&peer);
+        window.connect_close_request(move |window| {
+            // Closing the window ends the session, after "End session with <device>?" (the "Back into
+            // a tab" button is what docks it). Cancel keeps both the window and the session.
+            let decision = crate::logic::window_close(&a.state.borrow().workspace, peer);
+            match decision {
+                crate::logic::WindowClose::Ask { id, prompt } => {
+                    let a = a.clone();
+                    dialogs::confirm(
+                        window,
+                        &prompt,
+                        &t("The session ends for both computers. To keep it running, move the window back into a tab instead."),
+                        &t("End session"),
+                        move || a.end_session_id(&id),
+                    );
+                    glib::Propagation::Stop
+                }
+                crate::logic::WindowClose::Dock | crate::logic::WindowClose::Close => {
+                    if let Some(ui) = weak.upgrade() {
+                        ui.popouts.borrow_mut().remove(&peer);
+                    }
+                    let a = a.clone();
+                    glib::idle_add_local_once(move || a.window_closed(peer));
+                    glib::Propagation::Proceed
+                }
             }
-            let a = a.clone();
-            glib::idle_add_local_once(move || a.window_closed(peer));
-            glib::Propagation::Proceed
         });
         self.popouts.borrow_mut().insert(peer, window.clone());
         window.present();
@@ -811,7 +828,7 @@ impl Parts {
             entry.page.set_title(&tab.name);
             entry.page.set_icon(Some(&os_icon_of(&tab.os)));
             entry.page.set_tooltip(&tf("Session with %@", &[&tab.name]));
-            entry.page.set_loading(tab.state == crate::workspace::TabState::Starting);
+            entry.page.set_loading(matches!(tab.state, crate::workspace::TabState::Starting | crate::workspace::TabState::Reconnecting));
             let in_window = workspace.is_in_window(tab.peer);
             entry.slot.set_visible(!in_window);
             entry.popped.set_visible(in_window);
