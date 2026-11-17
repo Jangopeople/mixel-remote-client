@@ -83,6 +83,17 @@ public sealed class VideoFrame
         return output;
     }
 
+    /// <summary>True when <see cref="ToBgraCopy"/> is a plain copy (BGRA rows without padding): no per-pixel work.</summary>
+    public bool IsPackedBgra => !Rgba && Stride == Width * 4;
+
+    /// <summary>The BGRA pixels as tightly packed rows (for B8G8R8A8 bitmaps drawn with alpha ignored); one memory copy.</summary>
+    public byte[] ToBgraCopy()
+    {
+        var copy = new byte[Width * Height * 4];
+        Buffer.BlockCopy(Data, HeaderSize, copy, 0, copy.Length);
+        return copy;
+    }
+
     /// <summary>The pixels as tightly packed RGBA rows (for Direct3D R8G8B8A8 bitmaps).</summary>
     public byte[] ToRgba()
     {

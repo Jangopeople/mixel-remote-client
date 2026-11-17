@@ -192,7 +192,9 @@ internal sealed class RemoteScreen : Grid
             if (!ReferenceEquals(bitmapFrame, frame) || bitmap is null)
             {
                 bitmap?.Dispose();
-                bitmap = CanvasBitmap.CreateFromBytes(device, frame.ToRgba(), frame.Width, frame.Height, DirectXPixelFormat.R8G8B8A8UIntNormalized);
+                bitmap = frame.IsPackedBgra
+                    ? CanvasBitmap.CreateFromBytes(device, frame.ToBgraCopy(), frame.Width, frame.Height, DirectXPixelFormat.B8G8R8A8UIntNormalized, 96f, CanvasAlphaMode.Ignore)
+                    : CanvasBitmap.CreateFromBytes(device, frame.ToRgba(), frame.Width, frame.Height, DirectXPixelFormat.R8G8B8A8UIntNormalized);
                 bitmapFrame = frame;
             }
             using (var drawing = chain.CreateDrawingSession(Colors.Black))

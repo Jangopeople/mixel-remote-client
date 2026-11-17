@@ -785,4 +785,12 @@ public sealed class ViewModelTests
         raised.Remove("Frame");
         Assert.AreEqual(0, raised.Count, "pictures must not make pages rebuild: " + string.Join(",", raised));
     }
+
+    [TestMethod]
+    public void A_packed_bgra_picture_is_copied_without_per_pixel_work()
+    {
+        var frame = VideoFrame.Decode(VideoFrame.Sample(16, 8, 1))!;
+        Assert.AreEqual(16 * 8 * 4, frame.ToBgraCopy().Length);
+        Assert.AreEqual(!frame.Rgba && frame.Stride == 16 * 4, frame.IsPackedBgra);
+    }
 }
