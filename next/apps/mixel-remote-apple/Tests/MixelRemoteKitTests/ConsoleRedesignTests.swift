@@ -56,6 +56,7 @@ final class ConsoleRedesignTests: XCTestCase {
         let now = Date()
         XCTAssertNil(SessionNotice.make(passwordSession: false, sentPassword: false, unattended: false, endsAt: nil, now: now), "an ordinary session shows nothing")
         XCTAssertEqual(SessionNotice.make(passwordSession: false, sentPassword: false, unattended: true, endsAt: nil, now: now)?.kind, .unattended)
+        XCTAssertEqual(SessionNotice.make(passwordSession: false, sentPassword: false, unattended: false, unattendedRefused: true, endsAt: nil, now: now)?.kind, .unattendedRefused, "unattended was refused: the technician is told the person there is asked")
         // The app's own request carried a password but the engine reports no end yet: the banner is there, without a time.
         XCTAssertEqual(SessionNotice.make(passwordSession: false, sentPassword: true, unattended: false, endsAt: nil, now: now)?.kind, .password(seconds: nil))
         // A password wins over "unattended".

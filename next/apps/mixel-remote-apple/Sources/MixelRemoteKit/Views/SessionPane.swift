@@ -477,6 +477,8 @@ public struct SessionWindowView: View {
             .frame(minWidth: 820, minHeight: 520)
             .background(WindowReader { found in
                 window = found
+                // A session window belongs to a running session: macOS does not bring it back after a restart.
+                found?.isRestorable = false
                 guard let found, closeGuard == nil else { return }
                 let guardian = WindowCloseGuard(window: found) {
                     // Closed by the person: no session left means close; else ask, and close only after "End".
