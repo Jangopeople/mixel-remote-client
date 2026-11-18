@@ -27,6 +27,7 @@ pub fn install(app: &Rc<App>) {
     let answers = format!("{}.cmd.log", log.clone().unwrap_or_else(|| "/tmp/mixel-qa".into()));
     if let Some(path) = log {
         let app = app.clone();
+        let (fast_app, fast_path) = (app.clone(), path.clone());
         glib::timeout_add_local(Duration::from_secs(1), move || {
             let state = app.state.borrow();
             let remote = &state.remote;
@@ -49,6 +50,20 @@ pub fn install(app: &Rc<App>) {
                 );
             }
             append(&path, &line);
+            glib::ControlFlow::Continue
+        });
+        // Every change of a session's control state (control_pending: picture up, control channel still opening), sampled every 50 ms.
+        let (app, path) = (fast_app, fast_path);
+        let last = std::cell::RefCell::new(std::collections::HashMap::<String, (bool, bool, String)>::new());
+        glib::timeout_add_local(Duration::from_millis(50), move || {
+            let state = app.state.borrow();
+            for item in &state.remote.sessions {
+                let now = (item.control_pending, item.control, crate::logic::connection_message(true, &state.remote.viewed_as(item), false));
+                if last.borrow().get(&item.id) != Some(&now) {
+                    append(&path, &format!("{} CTL {} phase={} pending={} control={} line={}", now_ms(), item.id.chars().take(8).collect::<String>(), item.phase, now.0, now.1, now.2));
+                    last.borrow_mut().insert(item.id.clone(), now);
+                }
+            }
             glib::ControlFlow::Continue
         });
     }
