@@ -253,9 +253,10 @@ async fn session(check: &mut Check<'_>, suffix: &str, tenant: &str, mine: u64) {
     };
     // 1. At once, before any picture: a key release, then the clipboard (the host is still starting).
     // (A host that may not inject input allows viewing only: the input steps are then left out.)
-    let control = active["control"] == true;
     let started = Instant::now();
-    let release = if control { check.input(id, InputEvent::Key { usage: 225, down: false }).await } else { Err("view only".into()) };
+    // With the fast first picture the session is already active before the control channel is open: an input in that window
+    // is not delivered (Ok(false)), and the clipboard push waits for the channel; both are recorded, never lost silently.
+    let release = check.input(id, InputEvent::Key { usage: 225, down: false }).await;
     let release_ms = started.elapsed().as_millis();
     let early = format!("Mixel early clipboard {suffix} äöü");
     let copied = session_platform::write_text(&early);
@@ -263,13 +264,17 @@ async fn session(check: &mut Check<'_>, suffix: &str, tenant: &str, mine: u64) {
     let push_ms = started.elapsed().as_millis();
     let picture_before = check.picture(id).await;
     check.check("session active", true, "");
+    // Control, clipboard, files and the peer's features arrive with the control channel, a moment after the first picture.
+    let active = check.wait(15, |status| status["phase"] == "active" && status["session"] == active["session"] && status["control"] == true).await.unwrap_or(active);
+    let control = active["control"] == true;
     check.print(&format!("early: key release {release:?} after {release_ms} ms; clipboard push {push:?} after {push_ms} ms (copied {copied:?}, picture already there: {picture_before})"));
     check.print(&format!("granted: control {} clipboard {} files {}; host actions {}; features {}", active["control"], active["clipboard"], active["files"], active["host_actions"], active["peer_features"]));
     tokio::time::sleep(Duration::from_secs(3)).await;
     let status = check.status().await;
     check.check("the session survives the early key release and clipboard push", status["phase"] == "active" && status["session"] == active["session"], format!("{} {}", status["phase"], status["message"]));
     if active["clipboard"] == true {
-        check.check("the early clipboard push itself succeeds", push.is_ok(), format!("{push:?}"));
+        // Before the control channel is open (fast first picture) the push is refused in plain words, never lost silently.
+        check.check("the early clipboard push succeeds or is refused visibly until the channel is open", push.is_ok() || push.as_ref().err().is_some_and(|error| error.contains("not granted")), format!("{push:?}"));
     }
     // 1b. Only when the lab script asks for it (`save-picture.txt`): two pictures as PNG files, one
     // after a pointer move to the middle of the screen (proof of what the technician sees).
