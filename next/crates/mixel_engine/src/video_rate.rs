@@ -168,6 +168,54 @@ pub struct RateControl {
     pub cuts: u32,
     pub softs: u32,
     pub max_queue: Duration,
+    tune: Tune,
+}
+
+/// Lab knobs of the controller (defaults = the shipped behaviour). Only a `qa-session` build reads
+/// `MIXEL_RATE_TUNE` ("cutfloor=0.5,holdoff=3000,probe=4000,probemul=1.5,qhigh=250,growth=1.2"), so one lab
+/// binary can try candidates without a rebuild; a release build always uses the defaults.
+#[derive(Clone, Copy, Debug)]
+struct Tune {
+    /// A hard cut never goes below this share of the limit/ceiling the line carried before (0 = off).
+    cut_floor: f64,
+    /// Minimum time between two hard cuts.
+    holdoff: Duration,
+    probe_every: Duration,
+    probe_mul: f64,
+    queue_high: Duration,
+    growth: f64,
+}
+
+impl Tune {
+    fn new() -> Self {
+        #[allow(unused_mut)]
+        let mut tune = Self {
+            cut_floor: 0.0,
+            holdoff: Duration::from_millis(1000),
+            probe_every: PROBE_EVERY,
+            probe_mul: 1.25,
+            queue_high: QUEUE_HIGH,
+            growth: 1.10,
+        };
+        #[cfg(feature = "qa-session")]
+        if let Ok(text) = std::env::var("MIXEL_RATE_TUNE") {
+            for part in text.split(',') {
+                let Some((key, value)) = part.split_once('=') else { continue };
+                let Ok(number) = value.trim().parse::<f64>() else { continue };
+                match key.trim() {
+                    "cutfloor" => tune.cut_floor = number.clamp(0.0, 1.0),
+                    "holdoff" => tune.holdoff = Duration::from_millis(number.clamp(0.0, 60_000.0) as u64),
+                    "probe" => tune.probe_every = Duration::from_millis(number.clamp(500.0, 60_000.0) as u64),
+                    "probemul" => tune.probe_mul = number.clamp(1.0, 4.0),
+                    "qhigh" => tune.queue_high = Duration::from_millis(number.clamp(60.0, 2000.0) as u64),
+                    "growth" => tune.growth = number.clamp(1.0, 2.0),
+                    _ => {}
+                }
+            }
+            eprintln!("QA rate tune: {tune:?}");
+        }
+        tune
+    }
 }
 
 impl RateControl {
@@ -194,6 +242,7 @@ impl RateControl {
             cuts: 0,
             softs: 0,
             max_queue: Duration::ZERO,
+            tune: Tune::new(),
         }
     }
     /// What the line carries at the moment, bytes a second.
@@ -295,11 +344,12 @@ impl RateControl {
         }
         let dt = now.saturating_duration_since(self.last_change).as_secs_f64().min(1.0);
         let since = |at: Option<Instant>| at.map_or(Duration::from_secs(3600), |at| now.saturating_duration_since(at));
-        if queue > QUEUE_HIGH {
+        if queue > self.tune.queue_high {
             // A pile-up that lasted a second: back to what was delivered, never by more than 15 % at once.
-            if since(self.last_cut) >= Duration::from_millis(1000) {
+            if since(self.last_cut) >= self.tune.holdoff {
                 let by_delivery = if self.delivered > 0.0 { self.delivered * 1.4 } else { self.limit };
-                let cut = by_delivery.min(self.limit * 0.85).max(MIN_LIMIT);
+                let before = self.limit.min(self.ceiling);
+                let cut = by_delivery.min(self.limit * 0.85).max(before * self.tune.cut_floor).max(MIN_LIMIT);
                 #[cfg(feature = "qa-session")]
                 eprintln!("QA rate cut: queue {} ms (lowest of the last second above the lowest of 30 s, {}), delivered {:.0} kB/s, in flight {} kB, limit {:.0} -> {:.0} kB/s", queue.as_millis(), if self.clocked { "one-way" } else { "round trip" }, self.delivered / 1000.0, self.in_flight() / 1000, self.limit / 1000.0, cut / 1000.0);
                 self.cuts += 1;
@@ -322,12 +372,12 @@ impl RateControl {
                 self.last_change = now;
             }
         } else if since(self.last_cut) >= Duration::from_millis(2000) && since(self.last_soft) >= Duration::from_millis(1000) {
-            if now.saturating_duration_since(self.last_probe) >= PROBE_EVERY && self.limit >= self.ceiling * 0.97 {
-                self.ceiling = (self.ceiling * 1.25).min(MAX_LIMIT);
+            if now.saturating_duration_since(self.last_probe) >= self.tune.probe_every && self.limit >= self.ceiling * 0.97 {
+                self.ceiling = (self.ceiling * self.tune.probe_mul).min(MAX_LIMIT);
                 self.last_probe = now;
             }
             let cap = (self.delivered * 3.0).clamp(START_LIMIT, MAX_LIMIT).min(self.ceiling.max(self.limit));
-            let growth: f64 = if self.slow_start { 2.0 } else { 1.10 };
+            let growth: f64 = if self.slow_start { 2.0 } else { self.tune.growth };
             self.limit = self.limit.max((self.limit * growth.powf(dt)).min(cap));
             self.last_change = now;
         }

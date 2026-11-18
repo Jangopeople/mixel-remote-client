@@ -519,6 +519,11 @@ mod tests {
     /// Returns (pictures per second, delivered kB/s, encoder restarts, pacer losses, final ceiling),
     /// measured over the last 240 s of 300.
     fn chain(line_clean_rule: bool, queue_bytes: f64, encode_ms: f64) -> (f64, f64, u32, u32, f64) {
+        chain_with(line_clean_rule, queue_bytes, encode_ms, 40_000)
+    }
+
+    /// Like `chain`, a complete picture of `key_bytes` (1080p60 test pictures: 150-300 kB in the lab).
+    fn chain_with(line_clean_rule: bool, queue_bytes: f64, encode_ms: f64, key_bytes: usize) -> (f64, f64, u32, u32, f64) {
         use crate::video_rate::{RateControl, Receiver, QUEUE_LOW};
         let t0 = Instant::now();
         let mut rng = 0x9E37_79B9_7F4A_7C15u64;
@@ -580,7 +585,7 @@ mod tests {
                     bitrate_set = now;
                 }
                 let complete = std::mem::take(&mut pending_keyframe);
-                let bytes = if complete { 40_000 } else { (f64::from(bitrate) / 8.0 / 30.0) as usize };
+                let bytes = if complete { key_bytes } else { (f64::from(bitrate) / 8.0 / 30.0) as usize };
                 let mut packets = Vec::new();
                 let mut left = bytes;
                 while left > 0 {
@@ -655,6 +660,18 @@ mod tests {
         }
         eprintln!("  (started {started_n} pictures) end: limit {:.0} kB/s queue {:?} delivered est {:.0}", control.limit() / 1000.0, control.queue_delay(), control.delivered() / 1000.0);
         (pictures_at.len() as f64 / 240.0, delivered as f64 / 240.0 / 1000.0, restarts, pacer.losses, pacer.own_rate().1)
+    }
+
+    #[test]
+    fn shallow_queue_with_big_key_pictures() {
+        let shallow = 60.0 * 1500.0;
+        let deep = 1000.0 * 1500.0;
+        for key in [40_000usize, 150_000, 300_000] {
+            let o = chain_with(false, shallow, 0.0, key);
+            let n = chain_with(true, shallow, 0.0, key);
+            let nd = chain_with(true, deep, 0.0, key);
+            eprintln!("SHALLOW key {key}: old pacer {o:?} | new {n:?} | new deep {nd:?}");
+        }
     }
 
     #[test]
