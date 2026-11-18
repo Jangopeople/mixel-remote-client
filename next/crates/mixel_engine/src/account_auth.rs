@@ -308,6 +308,21 @@ fn random() -> Result<Zeroizing<String>, String> {
 fn keep_saved_sign_in(remember: bool, phase: &str) -> bool {
     remember && phase == "authenticated"
 }
+/// Lists an operation that must end when the sign-in is revoked. An operation already listed (a registration
+/// that comes back with the same flag to resume a session) is not listed twice, and one that is over (flag set,
+/// or nobody holds it any more) takes no place: each reconnect used to add one more entry until 16 of them
+/// refused every later registration for good ("Too many protected account operations").
+fn protect_operation(list: &mut Vec<Weak<AtomicBool>>, cancel: &Arc<AtomicBool>) -> Result<(), String> {
+    list.retain(|item| item.upgrade().is_some_and(|flag| !flag.load(Ordering::Acquire)));
+    if list.iter().any(|item| std::ptr::eq(item.as_ptr(), Arc::as_ptr(cancel))) {
+        return Ok(());
+    }
+    if list.len() >= 16 {
+        return Err("Too many protected account operations".into());
+    }
+    list.push(Arc::downgrade(cancel));
+    Ok(())
+}
 fn revoke(inner: &mut Inner) {
     for weak in inner.protected.drain(..) {
         if let Some(flag) = weak.upgrade() {
@@ -364,12 +379,8 @@ impl AccountAuth {
         if inner.status.phase != "authenticated" || now()? >= inner.expires_at {
             return Err("A current, verified Mixel sign-in is required".into());
         }
-        inner.protected.retain(|item| item.strong_count() > 0);
         if let Some(cancel) = protect {
-            if inner.protected.len() >= 16 {
-                return Err("Too many protected account operations".into());
-            }
-            inner.protected.push(Arc::downgrade(cancel));
+            protect_operation(&mut inner.protected, cancel)?;
         }
         Ok(Credential {
             token: Zeroizing::new(
@@ -1366,6 +1377,27 @@ fn callback_code(
 mod tests {
 
     use super::*;
+
+    #[test]
+    fn the_same_operation_coming_back_and_finished_ones_do_not_fill_the_protected_list() {
+        let mut list = Vec::new();
+        let resumed = Arc::new(AtomicBool::new(false));
+        for _ in 0..40 {
+            protect_operation(&mut list, &resumed).unwrap();
+        }
+        assert_eq!(list.len(), 1, "one registration flag, listed once however often it reconnects");
+        for _ in 0..40 {
+            let over = Arc::new(AtomicBool::new(false));
+            protect_operation(&mut list, &over).unwrap();
+            over.store(true, Ordering::Release);
+        }
+        assert!(list.len() <= 2, "finished operations are dropped from the list");
+        let held: Vec<_> = (0..15).map(|_| Arc::new(AtomicBool::new(false))).collect();
+        for flag in &held {
+            protect_operation(&mut list, flag).unwrap();
+        }
+        assert!(protect_operation(&mut list, &Arc::new(AtomicBool::new(false))).is_err(), "16 live operations still stop a 17th");
+    }
 
     #[tokio::test]
     async fn native_callback_accepts_only_the_matching_browser_transaction() {
