@@ -559,7 +559,7 @@ type Negotiated = (
     (f64, f64),
     ControlPipe,
     // The picture track, when the first picture was taken before the control channel opened.
-    Option<RemoteTrack>,
+    Option<TrackReader>,
 );
 /// Both sides announce this in the offer/answer when the host may send the first complete picture
 /// as soon as the transport is encrypted and the peer's signed identity matches its certificate,
@@ -948,7 +948,7 @@ async fn negotiate(
     // against its signed identity at once and the host sends the first complete picture, the
     // technician shows it; the control channel opens meanwhile and takes over as before.
     let mut verified: Option<core_protocol::crypto::ControlChannel> = None;
-    let mut early_track: Option<RemoteTrack> = None;
+    let mut early_track: Option<TrackReader> = None;
     let mut opened = false;
     // Host: the first picture is captured and encoded while DTLS is still opening (nothing is sent before the peer is verified).
     let mut prepared: Option<EarlyPicture> = if early && config.host {
@@ -1542,6 +1542,43 @@ fn fit_frame(
         .map_err(|_| "Cannot scale the display image".into())
 }
 
+/// The picture track, read by a task of its own that stamps every event when it ARRIVES.
+///
+/// The technician's loop decodes a picture and hands it over before it polls the track again; on a
+/// slow computer a full-HD picture takes longer than the packets of the next one need to arrive, so
+/// a stamp taken at the poll was late by that decode and the rate control read it as a queue on the
+/// line (lab, 18 Nov 2026: queue readings of 200-1000 ms on a line whose queue holds 60 ms). Here
+/// the stamp comes from the task that waits on the track, not from the loop that is busy.
+struct TrackReader {
+    events: tokio::sync::mpsc::UnboundedReceiver<(TrackRemoteEvent, Instant)>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl TrackReader {
+    fn spawn(track: RemoteTrack) -> Self {
+        let (sender, events) = tokio::sync::mpsc::unbounded_channel();
+        let task = tokio::spawn(async move {
+            while let Some(event) = track.poll().await {
+                if sender.send((event, Instant::now())).is_err() {
+                    break;
+                }
+            }
+        });
+        Self { events, task }
+    }
+
+    /// The next event and the moment it arrived; `None` when the track has ended.
+    async fn next(&mut self) -> Option<(TrackRemoteEvent, Instant)> {
+        self.events.recv().await
+    }
+}
+
+impl Drop for TrackReader {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
 async fn host_media(
     config: &mut Config,
     consent: &mut Session,
@@ -2117,7 +2154,7 @@ async fn viewer_media(
     channel: &Arc<dyn NativeDataChannel>,
     transport: &mut NativeTransport,
     control: &mut Ctl<'_>,
-    track_slot: &mut Option<RemoteTrack>,
+    track_slot: &mut Option<TrackReader>,
 ) -> Result<(), String> {
     // A renewed transport records from the moment it takes over (the one before records until then). The host can
     // close the transport before as soon as its side has switched: that end must not finish a running recording.
@@ -2136,8 +2173,8 @@ async fn viewer_media(
     #[cfg(feature = "qa-session")]
     let qa_started = Instant::now();
     let track_deadline = Instant::now() + Duration::from_secs(8);
-    let track = match track_slot.take() {
-        Some(track) => track,
+    let mut track = match track_slot.take() {
+        Some(reader) => reader,
         None => loop {
             if config.stopped() {
                 return Ok(());
@@ -2157,7 +2194,7 @@ async fn viewer_media(
             {
                 Ok(Some(track)) => {
                     crate::qa_timeline::mark("video track open");
-                    break track;
+                    break TrackReader::spawn(track);
                 }
                 Ok(None) => return Err("Remote video transport closed".into()),
                 Err(_) => {}
@@ -2286,13 +2323,13 @@ async fn viewer_media(
             taken += 1;
             let event = match in_order.pop_front() {
                 Some(packet) => Ok(Some(TrackRemoteEvent::OnRtpPacket(packet))),
-                None => match tokio::time::timeout(packet_wait(taken), track.poll()).await {
-                    Ok(Some(TrackRemoteEvent::OnRtpPacket(packet))) => {
+                None => match tokio::time::timeout(packet_wait(taken), track.next()).await {
+                    Ok(Some((TrackRemoteEvent::OnRtpPacket(packet), arrived))) => {
                         let sequence = packet.header.sequence_number;
                         // The rate report counts a packet when it ARRIVES: behind a gap the reorder buffer
                         // holds the following packets for up to REPEAT_WAIT, and that wait is not a queue.
                         if raw_arrival {
-                            report_rx.packet(Instant::now(), sequence, 12 + packet.payload.len());
+                            report_rx.packet(arrived, sequence, 12 + packet.payload.len());
                         }
                         in_order.extend(reorder.push(sequence, packet, Instant::now()));
                         match in_order.pop_front() {
@@ -2301,7 +2338,9 @@ async fn viewer_media(
                             None => continue,
                         }
                     }
-                    other => other,
+                    Ok(Some((other, _))) => Ok(Some(other)),
+                    Ok(None) => Ok(None),
+                    Err(elapsed) => Err(elapsed),
                 },
             };
             match event {
