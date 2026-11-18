@@ -39,6 +39,7 @@ const ENDING: &str = signaling_server::protocol::FEATURE_ENDING;
 const POLICY: &str = signaling_server::protocol::FEATURE_POLICY;
 const RESUME: &str = signaling_server::protocol::FEATURE_RESUME;
 const SIGNED: &str = signaling_server::protocol::FEATURE_SIGNED;
+const EARLY_ICE: &str = signaling_server::protocol::FEATURE_EARLY_ICE;
 /// `macos-arm64`, `windows-x64`, `linux-x64`: what the Devices list shows next to the version.
 fn app_platform() -> String {
     let arch = match std::env::consts::ARCH {
@@ -3312,7 +3313,7 @@ async fn run(
         let mut features:Vec<String>=if own_ticket.unattended_host_only() || crate::service_config::controller_only() {vec![JOIN.into()]} else {vec![JOIN.into(),SWITCH.into()]};
         // Password-session warnings, the administrator's device policy, resuming a session after the connection
         // service restarted, and signed remote commands (verified in `agent_verify`).
-        features.extend([ENDING.into(),POLICY.into(),RESUME.into(),SIGNED.into()]);
+        features.extend([ENDING.into(),POLICY.into(),RESUME.into(),SIGNED.into(),EARLY_ICE.into()]);
         send(&mut socket,ClientMessage::Capabilities{features}).await?;
         send(&mut socket,ClientMessage::AppVersion{version:crate::agent::APP_VERSION.into(),platform:app_platform()}).await?;
         // An older connection service answers "invalid": then these features are simply not offered.
@@ -3349,6 +3350,12 @@ async fn run(
     let mut presence_asked: std::collections::VecDeque<Vec<u32>> = std::collections::VecDeque::new();
         // The connection service limits relay-credential asks per session, so sessions that start together ask back to back.
         let mut ice_queue=IceQueue::default();
+        // Relay credentials before consent (connection service feature `earlyice`): asked when the request is sent
+        // (technician) or arrives (host), kept until the session is accepted, then used as if they had just come.
+        let mut early_ok=false;
+        let mut early_asked:std::collections::HashMap<Uuid,std::time::Instant>=std::collections::HashMap::new();
+        let mut early_leases:std::collections::HashMap<Uuid,signaling_server::turn::IceLease>=std::collections::HashMap::new();
+        let mut injected:std::collections::VecDeque<ServerMessage>=std::collections::VecDeque::new();
         let mut tick=tokio::time::interval(Duration::from_millis(250));
         let mut last_activity=std::time::Instant::now();
         let mut heartbeat=std::time::Instant::now();
@@ -3356,6 +3363,8 @@ async fn run(
             tokio::select! {
                 _=tick.tick()=>{
                     if cancel.load(Ordering::Acquire){return Err(Failure::network("Registration authorization expired; reconnecting"));}
+                    // Early relay credentials of requests that never got accepted are dropped after two minutes.
+                    if !early_asked.is_empty(){early_asked.retain(|_,at|at.elapsed()<Duration::from_secs(120));early_leases.retain(|id,_|early_asked.contains_key(id));}
                     // A session that ended while it waited needs no relay credentials.
                     while let Some(next)=ice_queue.due(|id|peer.iter().chain(ctrl.iter()).chain(joined.iter()).any(|active|active.id==id && !active.cancel.load(Ordering::Acquire))){
                         send(&mut socket,ClientMessage::Ice{session:next}).await?;
@@ -3687,7 +3696,7 @@ async fn run(
                     }
                     if peer.as_ref().is_some_and(|peer|peer.id==session && !peer.close_sent){peer=None;send(&mut socket,ClientMessage::Close{session}).await?;state.change(generation,|status|{status.phase="ready".into();status.session=None;status.peer=None;status.requester=None;status.message=result.err().unwrap_or_else(||"Session closed; ready for a new connection".into());}).await;}},
                 }},
-                incoming=event(&mut socket)=>{
+                incoming=async{match injected.pop_front(){Some(message)=>Ok(Some(message)),None=>event(&mut socket).await}}=>{
                     let message=incoming?;last_activity=std::time::Instant::now();
                     let Some(message)=message else{continue;};
                     // Lab builds only: what the connection service sent (kind only, never contents).
@@ -3860,7 +3869,13 @@ async fn run(
                                 continue;
                             }
                             ctrl.push(started);
+                            if early_ok && !joined_request && early_asked.len()<32 {
+                                crate::qa_timeline::mark("relay credentials asked before consent");
+                                send(&mut socket,ClientMessage::Ice{session}).await?;
+                                early_asked.insert(session,std::time::Instant::now());
+                            }
                         },
+                        ServerMessage::EarlyIce=>{early_ok=true;},
                         ServerMessage::Consent{session,requester_connection,requester,requester_identity,unattended,joining:Some(join),..}=>{
                             // A colleague of the technician asks to join the running session.
                             let primary=peer.as_ref().filter(|active|active.host && active.id==join.session && active.remote==join.inviter_connection && active.signals.is_some() && !active.cancel.load(Ordering::Acquire));
@@ -3944,6 +3959,10 @@ async fn run(
                         },
                         ServerMessage::Consent{session,requester_connection,requester,requester_identity,unattended,..}=>{
                             crate::qa_timeline::begin(if unattended {"request came in (unattended)"} else {"request came in"});
+                            if early_ok && early_asked.len()<32 && !crate::service_config::controller_only() && peer.is_none() && ctrl.is_empty() && outgoing.is_empty(){
+                                send(&mut socket,ClientMessage::Ice{session}).await?;
+                                early_asked.insert(session,std::time::Instant::now());
+                            }
                             if crate::service_config::controller_only() || peer.is_some() || !ctrl.is_empty() || !outgoing.is_empty(){send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;continue;}
                             let ticket=requester_identity.ok_or("The invitation has no signed requester identity")?;
                             let key=peer_identity(&ticket,requester_connection,&principal,true,&roots)?;
@@ -4023,14 +4042,25 @@ async fn run(
                                 if host_role{state.change(generation,|status|{status.phase="negotiating".into();status.message="Accepted; obtaining authenticated short-lived relay configuration".into();}).await;}
                                 else{state.slot_change(generation,active_ui,|view|{view.phase="negotiating".into();view.message="Accepted; obtaining authenticated short-lived relay configuration".into();}).await;}
                             }
-                            ice_queue.ask(session);
+                            if let Some(lease)=early_leases.remove(&session){
+                                early_asked.remove(&session);
+                                injected.push_back(ServerMessage::Ice{session,lease});
+                            } else if !early_asked.contains_key(&session){
+                                ice_queue.ask(session);
+                            }
                             // Ask for the relay credentials now, not at the next 250 ms tick: on a line with a long round trip
                             // every wait on the way to the offer is added to the connect time (speed pass, 18 Nov 2026).
                             while let Some(next)=ice_queue.due(|id|peer.iter().chain(ctrl.iter()).chain(joined.iter()).any(|active|active.id==id && !active.cancel.load(Ordering::Acquire))){
                                 send(&mut socket,ClientMessage::Ice{session:next}).await?;
                             }
                         },
+                        ServerMessage::Ice{session,lease} if early_asked.contains_key(&session) && !peer.iter().chain(ctrl.iter()).any(|active|active.id==session && active.nonce.is_some())=>{
+                            // Before the session is accepted: kept for the Accepted message.
+                            crate::qa_timeline::mark("relay credentials received before consent");
+                            early_leases.insert(session,lease);
+                        },
                         ServerMessage::Ice{session,lease}=>{
+                            early_asked.remove(&session);
                             let Some(active)=find_peer(&mut peer,&mut ctrl,session).filter(|peer|peer.signals.is_none()) else {if recently_gone(&recent,session){continue;}return Err("Unexpected relay configuration".into());};
                             let nonce=active.nonce.take().ok_or("Missing accepted session binding")?;
                             let now=SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_|"System clock is unavailable")?.as_secs();

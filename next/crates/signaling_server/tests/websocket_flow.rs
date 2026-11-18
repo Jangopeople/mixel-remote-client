@@ -2706,6 +2706,60 @@ async fn relay_credentials_are_limited_per_session_not_per_computer() {
     broker.abort();
 }
 
+/// Early relay credentials on a real broker: only with the gate on and the feature announced, to both sides of
+/// a live request; a refused request and an app that did not announce get nothing.
+#[tokio::test]
+async fn relay_credentials_before_consent_only_with_the_gate_and_the_announcement() {
+    use ed25519_dalek::SigningKey;
+    use signaling_server::{delegated_auth::TicketAuth, turn::TurnConfig};
+
+    let signer = SigningKey::from_bytes(&[82; 32]);
+    let state = AppState::new(Arc::new(TicketAuth::new(vec![signer.verifying_key()]).unwrap()), HashSet::new())
+        .with_turn(Some(TurnConfig::LanOnly))
+        .with_early_ice(true);
+    let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/v1/ws", socket.local_addr().unwrap());
+    let broker = tokio::spawn(async move { axum::serve(socket, router(state)).await.unwrap() });
+    let identity = |profile: u128, device: u128, connection_id: u32, key_byte: u8| SignedPeer {
+        profile: Uuid::from_u128(profile),
+        device: Uuid::from_u128(device),
+        tenant: None,
+        connection_id,
+        generation: 1,
+        key_byte,
+    };
+    let mut viewer = signed_peer(&url, &signer, identity(11, 30, 234_567_890, 90)).await;
+    let mut host = signed_peer(&url, &signer, identity(10, 40, 123_456_800, 91)).await;
+    let mut plain = signed_peer(&url, &signer, identity(12, 50, 345_678_901, 92)).await;
+    // An app that did not announce the feature is not told about it and gets nothing before consent.
+    send(&mut plain, ClientMessage::Capabilities { features: vec!["join".into()] }).await;
+    assert!(quiet(&mut plain).await);
+    let session = request(&mut viewer, &mut host, 123_456_800).await;
+    send(&mut viewer, ClientMessage::Ice { session }).await;
+    assert!(matches!(event(&mut viewer).await, ServerMessage::Error { code: ErrorCode::Forbidden }));
+    // Announcing the feature: the broker says it is on, and both sides of the live request get a lease.
+    for socket in [&mut viewer, &mut host] {
+        send(socket, ClientMessage::Capabilities { features: vec!["earlyice".into()] }).await;
+        assert!(matches!(event(socket).await, ServerMessage::EarlyIce));
+    }
+    send(&mut viewer, ClientMessage::Ice { session }).await;
+    assert!(matches!(event(&mut viewer).await, ServerMessage::Ice { session: answered, .. } if answered == session));
+    send(&mut host, ClientMessage::Ice { session }).await;
+    assert!(matches!(event(&mut host).await, ServerMessage::Ice { session: answered, .. } if answered == session));
+    // A stranger that announced the feature gets nothing for somebody else's session.
+    send(&mut plain, ClientMessage::Capabilities { features: vec!["earlyice".into()] }).await;
+    assert!(matches!(event(&mut plain).await, ServerMessage::EarlyIce));
+    send(&mut plain, ClientMessage::Ice { session }).await;
+    assert!(matches!(event(&mut plain).await, ServerMessage::Error { code: ErrorCode::Forbidden }));
+    // A refused request: no lease for the new session either.
+    let refused = request(&mut viewer, &mut host, 123_456_800).await;
+    send(&mut host, ClientMessage::Decide { session: refused, accept: false }).await;
+    let _ = event(&mut viewer).await;
+    send(&mut viewer, ClientMessage::Ice { session: refused }).await;
+    assert!(matches!(event(&mut viewer).await, ServerMessage::Error { code: ErrorCode::Forbidden }));
+    broker.abort();
+}
+
 /// D4 phase 3: with MIXEL_AGENT_REQUIRE_SIGNED on, `device_policy` carries `require_signed_commands: true`,
 /// but only for apps that announced `signed`; an app that announced only `policy` gets the old shape.
 #[tokio::test]
