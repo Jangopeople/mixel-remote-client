@@ -132,6 +132,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             let app = AppModel(engine: engine)
             app.devices.admin = EngineDeviceAdminService(engine: engine)
             app.section = .devices
+            // A ready transport is kept only while the app is in front and visible (`remote_prewarm`).
+            let center = NotificationCenter.default
+            for (name, active) in [(NSApplication.didBecomeActiveNotification, true), (NSApplication.didResignActiveNotification, false),
+                                   (NSApplication.didHideNotification, false), (NSApplication.didUnhideNotification, true)] {
+                center.addObserver(forName: name, object: nil, queue: .main) { _ in MainActor.assumeIsolated { app.appActive = active && NSApp.isActive } }
+            }
+            app.appActive = NSApp.isActive
             app.checksForUpdates = true
             app.quit = { [weak self] in
                 self?.quitting = true

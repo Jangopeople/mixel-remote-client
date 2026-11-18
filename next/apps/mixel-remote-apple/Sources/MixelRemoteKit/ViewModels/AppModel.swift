@@ -32,7 +32,13 @@ public enum AppSection: String, CaseIterable, Identifiable, Sendable {
 @MainActor
 public final class AppModel: ObservableObject {
     public let engine: EngineAPI
-    @Published public var section: AppSection = .remote
+    @Published public var section: AppSection = .remote {
+        didSet { if section != oldValue { Task { await devices.updatePrewarm() } } }
+    }
+    /// The window is in front and the app not hidden (the Mac app sets it; a ready transport is kept only while true).
+    @Published public var appActive = true {
+        didSet { if appActive != oldValue { Task { await devices.updatePrewarm() } } }
+    }
     @Published public private(set) var account = AccountStatus(phase: "signed_out", message: "Sign in with your Mixel account")
     @Published public private(set) var remote = RemoteStatus.offline
     /// The engine has answered about the account once (so the window does not flash the sign-in screen at launch).

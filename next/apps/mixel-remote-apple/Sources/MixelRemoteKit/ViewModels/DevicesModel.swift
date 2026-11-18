@@ -29,6 +29,8 @@ public final class DevicesModel: ObservableObject {
     private var nextCursor: UInt32?
     private var companyAll: [Device] = []
     private var lastPresence = Date.distantPast
+    private var prewarmOn = false
+    private var prewarmSent = Date.distantPast
     static let pageSize = 50
 
     init(app: AppModel) { self.app = app }
@@ -402,6 +404,37 @@ public final class DevicesModel: ObservableObject {
         }
         if next.connected, !previous.connected { lastPresence = .distantPast }
         if next.connected { Task { await checkPresence() } }
+        Task { await updatePrewarm() }
+    }
+
+    // MARK: Transport kept ready (pre-warm)
+
+    /// A relay transport made ready before Connect is wanted only while a technician looks at the Devices list
+    /// with a device online, the app is in front, and signing in, the plan and the role allow a connection.
+    nonisolated static func prewarmWanted(devicesShown: Bool, appActive: Bool, signedIn: Bool, connected: Bool,
+                                          allowed: Bool, blockedBySession: Bool, anyOnline: Bool) -> Bool {
+        devicesShown && appActive && signedIn && connected && allowed && !blockedBySession && anyOnline
+    }
+
+    /// Plan and role allow a connection: a read-only company or a role that does not manage devices does not.
+    var mayConnect: Bool { tenant == nil ? true : (!app.company.readOnly && manages) }
+
+    var prewarmWantedNow: Bool {
+        Self.prewarmWanted(devicesShown: app.section == .devices, appActive: app.appActive, signedIn: app.signedIn,
+                           connected: app.remote.connected, allowed: mayConnect,
+                           blockedBySession: app.remote.connectBlockedBySession,
+                           anyOnline: allDevices.contains { isOnline($0) && $0.connectionId != app.remote.host })
+    }
+
+    /// Tells the engine when the wish changes, and every 30 s while it holds (the engine lets a ready transport
+    /// go after 2 minutes without a refresh).
+    func updatePrewarm() async {
+        let wanted = prewarmWantedNow
+        let now = Date()
+        if wanted == prewarmOn, !wanted || now.timeIntervalSince(prewarmSent) < 30 { return }
+        prewarmOn = wanted
+        prewarmSent = now
+        try? await app.engine.perform("remote_prewarm", ["on": wanted])
     }
 
     // MARK: What a row shows
