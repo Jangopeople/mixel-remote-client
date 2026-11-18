@@ -84,8 +84,17 @@ pub struct AppState {
     require_signed: bool,
     /// Relay credentials before consent for apps that announced `earlyice` (MIXEL_EARLY_ICE=1).
     early_ice: bool,
+    /// Relay leases without a session for apps that announced `prewarm` (MIXEL_PREWARM=1).
+    prewarm: bool,
 }
 impl AppState {
+    pub fn with_prewarm(mut self, enabled: bool) -> Self {
+        self.prewarm = enabled;
+        if let Ok(mut registry) = self.registry.lock() {
+            registry.set_prewarm(enabled);
+        }
+        self
+    }
     pub fn with_early_ice(mut self, enabled: bool) -> Self {
         self.early_ice = enabled;
         if let Ok(mut registry) = self.registry.lock() {
@@ -163,6 +172,7 @@ impl AppState {
             shutting_down: Arc::new(AtomicBool::new(false)),
             require_signed: false,
             early_ice: false,
+            prewarm: false,
         }
     }
 }
@@ -585,10 +595,11 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                         }
                         let announces_policy = matches!(&parsed, Ok(ClientMessage::Capabilities { features }) if features.iter().any(|name| name == crate::protocol::FEATURE_POLICY));
                         let announces_early_ice = matches!(&parsed, Ok(ClientMessage::Capabilities { features }) if features.iter().any(|name| name == crate::protocol::FEATURE_EARLY_ICE));
+                        let announces_prewarm = matches!(&parsed, Ok(ClientMessage::Capabilities { features }) if features.iter().any(|name| name == crate::protocol::FEATURE_PREWARM));
                         let result = match parsed {
                             Ok(ClientMessage::Ice{session})=>{
-                                let permission=if enrolled.is_some(){match state.registry.lock(){Ok(mut registry)=>registry.ice_permission(id,generation,session,now,unix_now()),Err(_)=>break}}else{Err(ErrorCode::Forbidden)};
-                                let response=permission.and_then(|expiry|state.turn.as_ref().ok_or(ErrorCode::Unavailable)?.issue(session,id,expiry.min(unix_now().saturating_add(Duration::from_secs(900).saturating_sub(now.duration_since(authorized_at)).as_secs())),unix_now()).map_err(|_|ErrorCode::Forbidden));
+                                let permission=if enrolled.is_some(){match state.registry.lock(){Ok(mut registry)=>if session.is_nil(){registry.warm_permission(id,generation,now,unix_now())}else{registry.ice_permission(id,generation,session,now,unix_now())},Err(_)=>break}}else{Err(ErrorCode::Forbidden)};
+                                let response=permission.and_then(|expiry|state.turn.as_ref().ok_or(ErrorCode::Unavailable)?.issue(if session.is_nil(){uuid::Uuid::new_v4()}else{session},id,expiry.min(unix_now().saturating_add(Duration::from_secs(900).saturating_sub(now.duration_since(authorized_at)).as_secs())),unix_now()).map_err(|_|ErrorCode::Forbidden));
                                 match response{Ok(lease)=>{if !send(&mut socket,&ServerMessage::Ice{session,lease}).await{break;}Ok(())},Err(code)=>Err(code)}
                             },
                             Ok(message) => match state.registry.lock() { Ok(mut r) => r.handle(id, generation, message, now), Err(_) => break },
@@ -596,6 +607,9 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                         };
                         if result.is_ok() && announces_early_ice && state.early_ice {
                             let _ = own_tx.try_send(ServerMessage::EarlyIce);
+                        }
+                        if result.is_ok() && announces_prewarm && state.prewarm {
+                            let _ = own_tx.try_send(ServerMessage::Prewarm);
                         }
                         if result.is_ok() && announces_policy && device_policy_sent.is_none() {
                             device_policy_sent = Some(Instant::now());

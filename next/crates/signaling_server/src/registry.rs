@@ -115,12 +115,28 @@ impl IceLimiter {
         true
     }
 }
+/// Leases for a transport that waits for a request: one every 10 s, at most 8 in 10 minutes per connection.
+#[derive(Default)]
+struct WarmLimiter {
+    issued: VecDeque<Instant>,
+}
+impl WarmLimiter {
+    fn allow(&mut self, now: Instant) -> bool {
+        self.issued.retain(|at| now.duration_since(*at) < Duration::from_secs(600));
+        if self.issued.back().is_some_and(|last| now.duration_since(*last) < Duration::from_secs(10)) || self.issued.len() >= 8 {
+            return false;
+        }
+        self.issued.push_back(now);
+        true
+    }
+}
 struct Peer {
     generation: Uuid,
     principal: Principal,
     tx: mpsc::Sender<ServerMessage>,
     stop: watch::Sender<bool>,
     ice: IceLimiter,
+    warm: WarmLimiter,
     identity: Option<core_protocol::delegation::DeviceTicket>,
     code_gate: Option<CodeGate>,
     unattended_enabled: bool,
@@ -289,6 +305,8 @@ pub struct Registry {
     force_attended: bool,
     /// Relay credentials before consent, only for apps that announced `early_ice` (`MIXEL_EARLY_ICE=1`).
     early_ice: bool,
+    /// Relay leases without a session for apps that announced `prewarm` (`MIXEL_PREWARM=1`).
+    prewarm: bool,
 }
 impl Default for Registry {
     fn default() -> Self {
@@ -585,6 +603,27 @@ impl Registry {
     pub fn set_early_ice(&mut self, enabled: bool) {
         self.early_ice = enabled;
     }
+    /// Switch for relay leases without a session (a transport kept ready while the Devices list is shown).
+    pub fn set_prewarm(&mut self, enabled: bool) {
+        self.prewarm = enabled;
+    }
+    /// A relay lease for a transport that waits for a request: the gate, the announcement, a live
+    /// authenticated and enrolled connection (checked by the caller), its own limiter and the sign-in
+    /// expiry bound. No session, no peer and no address is involved.
+    pub fn warm_permission(&mut self, id: u32, generation: Uuid, now: Instant, unix: u64) -> Result<u64, ErrorCode> {
+        let peer = self.peers.get_mut(&id).ok_or(ErrorCode::Forbidden)?;
+        if !self.prewarm
+            || peer.generation != generation
+            || !peer.features.iter().any(|name| name == crate::protocol::FEATURE_PREWARM)
+            || peer.principal.expires_at.saturating_sub(unix) < 30
+        {
+            return Err(ErrorCode::Forbidden);
+        }
+        if !peer.warm.allow(now) {
+            return Err(ErrorCode::Busy);
+        }
+        Ok(peer.principal.expires_at)
+    }
     pub fn ice_permission(
         &mut self,
         id: u32,
@@ -629,6 +668,7 @@ impl Registry {
             journal: SessionJournal::default(),
             force_attended: false,
             early_ice: false,
+            prewarm: false,
         }
     }
     /// Changes the limits; connections and sessions already open stay.
@@ -680,6 +720,7 @@ impl Registry {
                 tx,
                 stop,
                 ice: IceLimiter::default(),
+                warm: WarmLimiter::default(),
                 identity: None,
                 code_gate: None,
                 unattended_enabled: false,
@@ -2407,6 +2448,37 @@ mod rotation_tests {
         assert_eq!(registry.ice_permission(111_111_111, technician, Uuid::from_u128(99), now, 100), Err(ErrorCode::Forbidden));
         // Abuse limit kept: the same session again within 5 s is Busy.
         assert_eq!(registry.ice_permission(111_111_111, technician, session, now, 100), Err(ErrorCode::Busy));
+    }
+
+    #[test]
+    fn a_relay_lease_without_a_session_needs_the_gate_the_announcement_and_stays_limited() {
+        let now = Instant::now();
+        let mut registry = Registry::default();
+        let (technician, _events) = peer(&mut registry, 111_111_111, 10);
+        // Gate off (production today): nothing.
+        assert_eq!(registry.warm_permission(111_111_111, technician, now, 100), Err(ErrorCode::Forbidden));
+        registry.set_prewarm(true);
+        // Gate on, feature not announced: nothing.
+        assert_eq!(registry.warm_permission(111_111_111, technician, now, 100), Err(ErrorCode::Forbidden));
+        registry
+            .handle(111_111_111, technician, ClientMessage::Capabilities { features: vec![FEATURE_PREWARM.into()] }, now)
+            .unwrap();
+        // A wrong connection generation and an unknown connection get nothing.
+        assert_eq!(registry.warm_permission(111_111_111, Uuid::from_u128(5), now, 100), Err(ErrorCode::Forbidden));
+        assert_eq!(registry.warm_permission(333_333_333, technician, now, 100), Err(ErrorCode::Forbidden));
+        // The announced, signed-in connection gets one, then must wait 10 s, then at most 8 in 10 minutes.
+        assert!(registry.warm_permission(111_111_111, technician, now, 100).is_ok());
+        assert_eq!(registry.warm_permission(111_111_111, technician, now + Duration::from_secs(5), 100), Err(ErrorCode::Busy));
+        let mut granted = 1;
+        for step in 1..20u64 {
+            if registry.warm_permission(111_111_111, technician, now + Duration::from_secs(11 * step), 100).is_ok() {
+                granted += 1;
+            }
+        }
+        assert_eq!(granted, 8, "at most 8 leases in 10 minutes");
+        // Its sign-in about to expire: nothing.
+        let later = now + Duration::from_secs(2000);
+        assert_eq!(registry.warm_permission(111_111_111, technician, later, u64::MAX / 2), Err(ErrorCode::Forbidden));
     }
 
     #[test]

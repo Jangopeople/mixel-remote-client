@@ -336,6 +336,9 @@ pub enum ServerMessage {
     /// Relay credentials may be asked for before the session is accepted (feature `early_ice`, broker gate
     /// `MIXEL_EARLY_ICE=1`). Sent once, after the app announced the feature.
     EarlyIce,
+    /// A relay lease without a session (`ice` with the nil session) may be asked for to keep a transport ready
+    /// before Connect (feature `prewarm`, broker gate `MIXEL_PREWARM=1`). Sent once, after the app announced it.
+    Prewarm,
     /// The session is known again after a broker restart and this side is back in it (feature `resume`).
     Resumed {
         session: Uuid,
@@ -371,6 +374,9 @@ pub const FEATURE_SIGNED: &str = "signed";
 /// Broker feature: relay credentials (`ice`) may be asked for while the session still waits for consent;
 /// the broker sends `early_ice` (message) to apps that announced it when its `MIXEL_EARLY_ICE=1` gate is on.
 pub const FEATURE_EARLY_ICE: &str = "earlyice";
+/// Broker feature: a relay lease for a transport that waits for a request (`ice` with the nil session);
+/// the broker sends `prewarm` (message) to apps that announced it when its `MIXEL_PREWARM=1` gate is on.
+pub const FEATURE_PREWARM: &str = "prewarm";
 #[derive(Clone, Copy, Deserialize, Serialize, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Joining {

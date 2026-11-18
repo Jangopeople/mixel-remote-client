@@ -2760,6 +2760,55 @@ async fn relay_credentials_before_consent_only_with_the_gate_and_the_announcemen
     broker.abort();
 }
 
+/// A relay lease for a transport that waits for a request (nil session): only with the gate on and the feature
+/// announced; the answer carries the nil session; the limiter answers Busy for a second one at once.
+#[tokio::test]
+async fn a_relay_lease_without_a_session_only_with_the_gate_and_the_announcement() {
+    use ed25519_dalek::SigningKey;
+    use signaling_server::{delegated_auth::TicketAuth, turn::TurnConfig};
+
+    let signer = SigningKey::from_bytes(&[82; 32]);
+    let socket_of = |gate: bool| {
+        let state = AppState::new(Arc::new(TicketAuth::new(vec![signer.verifying_key()]).unwrap()), HashSet::new())
+            .with_turn(Some(TurnConfig::LanOnly))
+            .with_prewarm(gate);
+        async move {
+            let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("ws://{}/v1/ws", socket.local_addr().unwrap());
+            (tokio::spawn(async move { axum::serve(socket, router(state)).await.unwrap() }), url)
+        }
+    };
+    let identity = |connection_id: u32, key_byte: u8| SignedPeer {
+        profile: Uuid::from_u128(11),
+        device: Uuid::from_u128(30),
+        tenant: None,
+        connection_id,
+        generation: 1,
+        key_byte,
+    };
+    // Gate off: the broker does not announce it and refuses the lease.
+    let (off, url) = socket_of(false).await;
+    let mut technician = signed_peer(&url, &signer, identity(234_567_890, 90)).await;
+    send(&mut technician, ClientMessage::Capabilities { features: vec!["prewarm".into()] }).await;
+    assert!(quiet(&mut technician).await);
+    send(&mut technician, ClientMessage::Ice { session: Uuid::nil() }).await;
+    assert!(matches!(event(&mut technician).await, ServerMessage::Error { code: ErrorCode::Forbidden }));
+    off.abort();
+    // Gate on: not announced, nothing; announced, one lease, the second at once is Busy.
+    let (on, url) = socket_of(true).await;
+    let mut technician = signed_peer(&url, &signer, identity(234_567_891, 91)).await;
+    send(&mut technician, ClientMessage::Ice { session: Uuid::nil() }).await;
+    assert!(matches!(event(&mut technician).await, ServerMessage::Error { code: ErrorCode::Forbidden }));
+    send(&mut technician, ClientMessage::Capabilities { features: vec!["prewarm".into()] }).await;
+    assert!(matches!(event(&mut technician).await, ServerMessage::Prewarm));
+    send(&mut technician, ClientMessage::Ice { session: Uuid::nil() }).await;
+    let lease = event(&mut technician).await;
+    assert!(matches!(&lease, ServerMessage::Ice { session, .. } if session.is_nil()), "{lease:?}");
+    send(&mut technician, ClientMessage::Ice { session: Uuid::nil() }).await;
+    assert!(matches!(event(&mut technician).await, ServerMessage::Error { code: ErrorCode::Busy }));
+    on.abort();
+}
+
 /// D4 phase 3: with MIXEL_AGENT_REQUIRE_SIGNED on, `device_policy` carries `require_signed_commands: true`,
 /// but only for apps that announced `signed`; an app that announced only `policy` gets the old shape.
 #[tokio::test]
