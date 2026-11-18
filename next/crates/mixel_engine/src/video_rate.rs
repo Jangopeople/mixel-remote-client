@@ -172,6 +172,7 @@ pub struct RateControl {
     /// Bytes the reports covered / bytes that arrived, decaying (about 1 s): the loss share.
     loss_covered: f64,
     loss_arrived: f64,
+    loss_since: Option<Instant>,
 }
 
 /// Lab knobs of the controller (defaults = the shipped behaviour). Only a `qa-session` build reads
@@ -190,6 +191,12 @@ struct Tune {
     /// Share of the sent bytes that did not arrive (smoothed, ~1 s) above which the line counts as
     /// overfull like a queue does: a SHALLOW buffer drops instead of delaying (0 = off).
     loss_cut: f64,
+    /// The loss share must stay above `loss_cut` this long before it counts (bursts of lost key-picture
+    /// packets are short, an overflowing buffer keeps dropping).
+    loss_hold: Duration,
+    /// Climb target: delivered rate times this (never below the start limit when `cap_floor`).
+    cap_mul: f64,
+    cap_floor: bool,
 }
 
 impl Tune {
@@ -203,6 +210,9 @@ impl Tune {
             queue_high: QUEUE_HIGH,
             growth: 1.10,
             loss_cut: 0.0,
+            loss_hold: Duration::ZERO,
+            cap_mul: 3.0,
+            cap_floor: true,
         };
         #[cfg(feature = "qa-session")]
         if let Ok(text) = std::env::var("MIXEL_RATE_TUNE") {
@@ -217,6 +227,9 @@ impl Tune {
                     "qhigh" => tune.queue_high = Duration::from_millis(number.clamp(60.0, 2000.0) as u64),
                     "growth" => tune.growth = number.clamp(1.0, 2.0),
                     "loss" => tune.loss_cut = number.clamp(0.0, 0.9),
+                    "losshold" => tune.loss_hold = Duration::from_millis(number.clamp(0.0, 10_000.0) as u64),
+                    "capmul" => tune.cap_mul = number.clamp(1.0, 6.0),
+                    "capfloor" => tune.cap_floor = number != 0.0,
                     _ => {}
                 }
             }
@@ -253,6 +266,7 @@ impl RateControl {
             tune: Tune::new(),
             loss_covered: 0.0,
             loss_arrived: 0.0,
+            loss_since: None,
         }
     }
     /// What the line carries at the moment, bytes a second.
@@ -357,9 +371,15 @@ impl RateControl {
         }
         let dt = now.saturating_duration_since(self.last_change).as_secs_f64().min(1.0);
         let since = |at: Option<Instant>| at.map_or(Duration::from_secs(3600), |at| now.saturating_duration_since(at));
-        let lossy = self.tune.loss_cut > 0.0
+        let over = self.tune.loss_cut > 0.0
             && self.loss_covered > 30_000.0
             && 1.0 - self.loss_arrived / self.loss_covered > self.tune.loss_cut;
+        if over {
+            self.loss_since.get_or_insert(now);
+        } else {
+            self.loss_since = None;
+        }
+        let lossy = over && self.loss_since.is_some_and(|at| now.saturating_duration_since(at) >= self.tune.loss_hold);
         if queue > self.tune.queue_high || lossy {
             // A pile-up that lasted a second: back to what was delivered, never by more than 15 % at once.
             if since(self.last_cut) >= self.tune.holdoff {
@@ -371,6 +391,7 @@ impl RateControl {
                 self.cuts += 1;
                 self.loss_covered = 0.0;
                 self.loss_arrived = 0.0;
+                self.loss_since = None;
                 self.limit = cut;
                 self.ceiling = (self.delivered * HOLD_FACTOR).clamp(MIN_LIMIT, MAX_LIMIT).max(cut);
                 self.last_probe = now;
@@ -394,7 +415,9 @@ impl RateControl {
                 self.ceiling = (self.ceiling * self.tune.probe_mul).min(MAX_LIMIT);
                 self.last_probe = now;
             }
-            let cap = (self.delivered * 3.0).clamp(START_LIMIT, MAX_LIMIT).min(self.ceiling.max(self.limit));
+            let cap = (self.delivered * self.tune.cap_mul)
+                .clamp(if self.tune.cap_floor { START_LIMIT } else { MIN_LIMIT }, MAX_LIMIT)
+                .min(self.ceiling.max(self.limit));
             let growth: f64 = if self.slow_start { 2.0 } else { self.tune.growth };
             self.limit = self.limit.max((self.limit * growth.powf(dt)).min(cap));
             self.last_change = now;
