@@ -1136,6 +1136,9 @@ impl Registry {
                 self.send(from, ServerMessage::Resumed { session });
                 Ok(())
             }
+            // 2.2 remote tools: the broker side (keeping the option for the next request, writing the audit
+            // record to the session timeline) is the server agent's; until then they are accepted and ignored.
+            ClientMessage::SessionOptions { .. } | ClientMessage::ToolsAudit { .. } => Ok(()),
             ClientMessage::AppVersion { version, platform } => {
                 if !valid_app_version(&version, &platform) {
                     return Err(ErrorCode::Invalid);
@@ -1491,6 +1494,7 @@ impl Registry {
                             .and_then(|peer| peer.identity.clone()),
                         joining: None,
                         switched: None,
+                        terminal_only: false,
                     },
                 );
                 Ok(())
@@ -1653,6 +1657,7 @@ impl Registry {
                         requester_identity: self.peers.get(&from).and_then(|peer| peer.identity.clone()),
                         joining: Some(Joining { session: primary, inviter, inviter_connection, control }),
                         switched: None,
+                        terminal_only: false,
                     },
                 );
                 Ok(())
@@ -1719,6 +1724,7 @@ impl Registry {
                         requester_identity: self.peers.get(&host).and_then(|peer| peer.identity.clone()),
                         joining: None,
                         switched: Some(SwitchedFrom { previous: session, by: from }),
+                        terminal_only: false,
                     },
                 );
                 Ok(())

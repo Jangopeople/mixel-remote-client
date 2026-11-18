@@ -119,6 +119,11 @@ pub enum ClientMessage {
     /// The app's version and platform, reported with presence (Devices list). Sent once after
     /// `capabilities`; an older broker answers `invalid`, which the app ignores.
     AppVersion { version: String, platform: String },
+    /// 2.2: options of the NEXT request from this connection (`terminal_only`: the screen is not shared).
+    SessionOptions { terminal_only: bool },
+    /// 2.2: host to broker, one audit record of a remote tool (terminal, task manager, script run, quality).
+    /// `data` is a small JSON object (see the engine contract, section 7). Sent only after `tools_policy`.
+    ToolsAudit { session: Uuid, kind: String, data: serde_json::Value },
 }
 pub const MAX_AGENT_INVENTORY: usize = 8192;
 pub const MAX_AGENT_OUTPUT: usize = 16384;
@@ -130,6 +135,12 @@ pub struct AgentResult {
     pub exit_code: i32,
     pub output: String,
 }
+#[derive(Clone, Deserialize, Serialize, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ScriptParam {
+    pub name: String,
+    pub value: String,
+}
 #[derive(Clone, Deserialize, Serialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct AgentCommand {
@@ -138,6 +149,12 @@ pub struct AgentCommand {
     pub shell: String,
     pub script: String,
     pub timeout_seconds: u16,
+    /// 2.2: script parameters (typed by the console; passed as environment and arguments, never pasted into the script).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub params: Vec<ScriptParam>,
+    /// 2.2: `<script id>@<version>` of the library script (audit; covered by a `v2` signature).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script_ref: Option<String>,
     /// D4: the console's signature. Sent only to apps that announced `signed`; apps of 2.0.18 and
     /// older parse this struct strictly and never receive the field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -154,6 +171,9 @@ pub struct CommandSignature {
     pub expires_at: u64,
     pub nonce: String,
     pub signature: String,
+    /// 2.2: absent = the `v1` message; `"v2"` also covers the parameters and `script_ref`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheme: Option<String>,
 }
 impl CommandSignature {
     /// Shape check only (the app verifies the signature with its pinned key).
@@ -289,6 +309,9 @@ pub enum ServerMessage {
         /// The sides of the running session `switched.previous` were switched.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         switched: Option<SwitchedFrom>,
+        /// 2.2: the technician asked for a terminal-only session (the screen is not shared).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        terminal_only: bool,
     },
     Accepted {
         session: Uuid,
@@ -335,6 +358,20 @@ pub enum ServerMessage {
         /// `signed`; absent for the others. Follows the broker setting `MIXEL_AGENT_REQUIRE_SIGNED`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         require_signed_commands: Option<bool>,
+    },
+    /// 2.2: company switches for the remote tools of this device (default all off when never sent).
+    /// Sent to apps that announced `tools`.
+    ToolsPolicy {
+        #[serde(default)]
+        terminal: bool,
+        #[serde(default)]
+        terminal_elevate: bool,
+        #[serde(default)]
+        tasks: bool,
+        #[serde(default)]
+        tasks_unattended: bool,
+        #[serde(default)]
+        scripts: bool,
     },
     /// Relay credentials may be asked for before the session is accepted (feature `early_ice`, broker gate
     /// `MIXEL_EARLY_ICE=1`). Sent once, after the app announced the feature.

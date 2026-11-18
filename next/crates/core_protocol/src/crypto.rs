@@ -213,6 +213,14 @@ impl Handshake {
             &hkdf,
             b"Mixel Remote chat directional AES256GCM v1",
             chat_binding,
+            verified.clone(),
+        )?));
+        let tools_binding =
+            Sha256::digest([binding.as_slice(), b"Mixel Remote tools records v1"].concat()).into();
+        control.tools = Some(Box::new(ControlChannel::derived(
+            &hkdf,
+            b"Mixel Remote tools directional AES256GCM v1",
+            tools_binding,
             verified,
         )?));
         Ok(control)
@@ -230,6 +238,7 @@ pub struct ControlChannel {
     verified: VerifiedSession,
     bulk: Option<Box<ControlChannel>>,
     chat: Option<Box<ControlChannel>>,
+    tools: Option<Box<ControlChannel>>,
 }
 fn nonce(sequence: u64) -> [u8; 12] {
     let mut bytes = [0; 12];
@@ -264,6 +273,7 @@ impl ControlChannel {
             verified,
             bulk: None,
             chat: None,
+            tools: None,
         })
     }
     /// May be taken exactly once from the authenticated parent. Repeated calls
@@ -279,6 +289,13 @@ impl ControlChannel {
     /// Independent keys and counters for the optional in-session chat stream.
     pub fn take_chat_channel(&mut self) -> Result<Self, CryptoError> {
         self.chat
+            .take()
+            .map(|channel| *channel)
+            .ok_or(CryptoError::Exhausted)
+    }
+    /// Independent keys and counters for the remote tools stream (terminal, tasks, scripts, quality).
+    pub fn take_tools_channel(&mut self) -> Result<Self, CryptoError> {
+        self.tools
             .take()
             .map(|channel| *channel)
             .ok_or(CryptoError::Exhausted)
