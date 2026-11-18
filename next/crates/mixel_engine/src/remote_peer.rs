@@ -563,7 +563,8 @@ type Negotiated = (
 );
 /// Both sides announce this in the offer/answer when the host may send the first complete picture
 /// as soon as the transport is encrypted and the peer's signed identity matches its certificate,
-/// without waiting for the control channel to open. Switched off by `MIXEL_NO_FASTPIC`.
+/// without waiting for the control channel to open. Switched off by `MIXEL_NO_FASTPIC`
+/// (`MIXEL_NO_EARLYPIC` on the host switches off only the early capture/encode, for measurements).
 const FASTPIC_ATTRIBUTE: &str = "a=x-mixel-fastpic:1";
 fn fastpic_enabled() -> bool {
     std::env::var_os("MIXEL_NO_FASTPIC").is_none()
@@ -951,7 +952,7 @@ async fn negotiate(
     let mut early_track: Option<RemoteTrack> = None;
     let mut opened = false;
     // Host: the first picture is captured and encoded while DTLS is still opening (nothing is sent before the peer is verified).
-    let mut prepared: Option<EarlyPicture> = if early && config.host {
+    let mut prepared: Option<EarlyPicture> = if early && config.host && std::env::var_os("MIXEL_NO_EARLYPIC").is_none() {
         let full_hd = peer_features.iter().any(|name| name == crate::remote_control::FULL_HD);
         let early_size = if full_hd { source_size_within(config, (1920.0, 1080.0))? } else { size };
         Some(EarlyPicture::start(config, early_size))
