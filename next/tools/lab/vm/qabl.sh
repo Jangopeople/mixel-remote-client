@@ -5,6 +5,9 @@ export HOME=/root PATH=/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin
 X=http://${LAB_BIND:-10.124.1.97}:${LAB_PORT:-8771}
 LABEL=$1; S=/root/lab/src-$LABEL; rm -rf $S; mkdir -p $S /root/sp
 curl -fsS $X/src-$LABEL.tgz | tar -xz -C $S || { echo "BUILD FAILED (download)"; echo LN_DONE; exit 1; }
+# every file gets the time of the download: cargo compares source times with the times of an older build in the same target
+# directory, and a file whose time lies before that build (an edit made after the pack of the build before) was taken as unchanged
+find $S -type f -exec touch {} +
 cd $S/next
 # LAB_SIGNAL: the connection service this lab build talks to (a second broker), instead of the production one
 [ -n "${LAB_SIGNAL:-}" ] && sed -i "s#wss://rs.mixel.ch:9444/v1/ws#$LAB_SIGNAL#" deployment/public-service-config.json
