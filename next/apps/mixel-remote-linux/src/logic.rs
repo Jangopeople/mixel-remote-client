@@ -848,7 +848,7 @@ mod tests {
         assert_eq!(rows.iter().map(|row| row.user_id.as_str()).collect::<Vec<_>>(), ["u1", "u4", "u2"], "viewers left out, sorted by name, the e-mail stands in for no name");
         assert_eq!(rows.iter().map(|row| row.granted).collect::<Vec<_>>(), [false, false, true]);
         assert_eq!(rows.iter().map(|row| row.automatic).collect::<Vec<_>>(), [false, true, false]);
-        assert_eq!(grant_rows(&members, &[UnattendedGrant { user_id: "u1".into(), ..Default::default() }])[0].granted, true, "no source reads as a grant");
+        assert!(grant_rows(&members, &[UnattendedGrant { user_id: "u1".into(), ..Default::default() }])[0].granted, "no source reads as a grant");
     }
 
     #[test]
