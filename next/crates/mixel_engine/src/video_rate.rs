@@ -141,9 +141,12 @@ impl Receiver {
 /// Host side.
 pub struct RateControl {
     /// (sequence number, when sent, bytes sent up to and including it).
-    sent: VecDeque<(u16, Instant, u64)>,
+    sent: VecDeque<(u16, Instant, u64, u64)>,
     sent_total: u64,
+    /// Bytes of complete (key) pictures among `sent_total`.
+    key_total: u64,
     acked_total: u64,
+    acked_key: u64,
     epoch: Instant,
     /// Round trip of the newest packet of every report (the line's round trip, with the report's way back).
     delays: VecDeque<(Instant, Duration)>,
@@ -197,6 +200,15 @@ struct Tune {
     /// Climb target: delivered rate times this (never below the start limit when `cap_floor`).
     cap_mul: f64,
     cap_floor: bool,
+    /// Window the loss share is measured over (decay per report).
+    loss_window: Duration,
+    /// Leave out the reports that cover packets of a complete picture when measuring loss.
+    key_skip: bool,
+    /// Where a hard cut lands: delivered times this (1.4), and never more than `cut_step` of the limit at once.
+    cut_mul: f64,
+    cut_step: f64,
+    /// Climb per second once the limit has reached the cap (delivered x `cap_mul`), up to the ceiling (1.0 = stop at the cap).
+    slow_growth: f64,
 }
 
 impl Tune {
@@ -213,9 +225,23 @@ impl Tune {
             loss_hold: Duration::ZERO,
             cap_mul: 3.0,
             cap_floor: true,
+            loss_window: Duration::from_millis(1000),
+            key_skip: false,
+            cut_mul: 1.4,
+            cut_step: 0.85,
+            slow_growth: 1.0,
         };
         #[cfg(feature = "qa-session")]
         if let Ok(text) = std::env::var("MIXEL_RATE_TUNE") {
+            tune.apply(&text);
+            eprintln!("QA rate tune: {tune:?}");
+        }
+        tune
+    }
+    /// Lab knobs from a comma list (`key=value`); unknown keys are ignored.
+    fn apply(&mut self, text: &str) {
+        let tune = self;
+        {
             for part in text.split(',') {
                 let Some((key, value)) = part.split_once('=') else { continue };
                 let Ok(number) = value.trim().parse::<f64>() else { continue };
@@ -230,21 +256,32 @@ impl Tune {
                     "losshold" => tune.loss_hold = Duration::from_millis(number.clamp(0.0, 10_000.0) as u64),
                     "capmul" => tune.cap_mul = number.clamp(1.0, 6.0),
                     "capfloor" => tune.cap_floor = number != 0.0,
+                    "losswin" => tune.loss_window = Duration::from_millis(number.clamp(300.0, 20_000.0) as u64),
+                    "keyskip" => tune.key_skip = number != 0.0,
+                    "cutmul" => tune.cut_mul = number.clamp(0.8, 3.0),
+                    "cutstep" => tune.cut_step = number.clamp(0.3, 1.0),
+                    "slowgrowth" => tune.slow_growth = number.clamp(1.0, 1.5),
                     _ => {}
                 }
             }
-            eprintln!("QA rate tune: {tune:?}");
         }
-        tune
     }
 }
 
 impl RateControl {
+    /// A control with lab knobs from a comma list (tests and the simulation).
+    pub fn tuned(now: Instant, knobs: &str) -> Self {
+        let mut control = Self::new(now);
+        control.tune.apply(knobs);
+        control
+    }
     pub fn new(now: Instant) -> Self {
         Self {
             sent: VecDeque::new(),
             sent_total: 0,
+            key_total: 0,
             acked_total: 0,
+            acked_key: 0,
             epoch: now,
             delays: VecDeque::new(),
             signal: VecDeque::new(),
@@ -291,8 +328,16 @@ impl RateControl {
     }
     /// A picture packet left.
     pub fn sent(&mut self, now: Instant, seq: u16, size: usize) {
+        self.sent_marked(now, seq, size, false);
+    }
+    /// A picture packet left; `key`: it belongs to a complete picture (a burst of 100-300 packets, whose
+    /// losses are the burst's, not a sign of an overfull line).
+    pub fn sent_marked(&mut self, now: Instant, seq: u16, size: usize, key: bool) {
         self.sent_total += size as u64;
-        self.sent.push_back((seq, now, self.sent_total));
+        if key {
+            self.key_total += size as u64;
+        }
+        self.sent.push_back((seq, now, self.sent_total, self.key_total));
         if self.sent.len() > HISTORY {
             self.sent.pop_front();
         }
@@ -321,14 +366,21 @@ impl RateControl {
         }
     }
     pub fn report(&mut self, now: Instant, report: Report) {
-        let Some(&(_, sent_at, total)) = self.sent.iter().rev().find(|(seq, _, _)| *seq == report.seq) else {
+        let Some(&(_, sent_at, total, key_total)) = self.sent.iter().rev().find(|(seq, _, _, _)| *seq == report.seq) else {
             return;
         };
         self.last_report = Some(now);
         let covered = total.saturating_sub(self.acked_total);
         self.acked_total = self.acked_total.max(total);
-        self.loss_covered = self.loss_covered * 0.8 + covered as f64;
-        self.loss_arrived = self.loss_arrived * 0.8 + f64::from(report.bytes).min(covered as f64);
+        let key_covered = key_total.saturating_sub(self.acked_key);
+        self.acked_key = self.acked_key.max(key_total);
+        // Loss over a window (decaying per report); reports that cover a complete picture's packets are left out
+        // when `key_skip` is on (their losses are the burst's).
+        if !(self.tune.key_skip && key_covered > 0) {
+            let keep = 1.0 - REPORT_EVERY.as_secs_f64() / self.tune.loss_window.as_secs_f64().max(0.2);
+            self.loss_covered = self.loss_covered * keep + covered as f64;
+            self.loss_arrived = self.loss_arrived * keep + f64::from(report.bytes).min(covered as f64);
+        }
         let round_trip = now.saturating_duration_since(sent_at).saturating_sub(report.age);
         self.delays.push_back((now, round_trip));
         while self.delays.front().is_some_and(|(at, _)| now.saturating_duration_since(*at) > BASE_WINDOW) {
@@ -383,9 +435,9 @@ impl RateControl {
         if queue > self.tune.queue_high || lossy {
             // A pile-up that lasted a second: back to what was delivered, never by more than 15 % at once.
             if since(self.last_cut) >= self.tune.holdoff {
-                let by_delivery = if self.delivered > 0.0 { self.delivered * 1.4 } else { self.limit };
+                let by_delivery = if self.delivered > 0.0 { self.delivered * self.tune.cut_mul } else { self.limit };
                 let before = self.limit.min(self.ceiling);
-                let cut = by_delivery.min(self.limit * 0.85).max(before * self.tune.cut_floor).max(MIN_LIMIT);
+                let cut = by_delivery.min(self.limit * self.tune.cut_step).max(before * self.tune.cut_floor).max(MIN_LIMIT);
                 #[cfg(feature = "qa-session")]
                 eprintln!("QA rate cut: queue {} ms (lowest of the last second above the lowest of 30 s, {}), delivered {:.0} kB/s, in flight {} kB, limit {:.0} -> {:.0} kB/s", queue.as_millis(), if self.clocked { "one-way" } else { "round trip" }, self.delivered / 1000.0, self.in_flight() / 1000, self.limit / 1000.0, cut / 1000.0);
                 self.cuts += 1;
@@ -419,7 +471,11 @@ impl RateControl {
                 .clamp(if self.tune.cap_floor { START_LIMIT } else { MIN_LIMIT }, MAX_LIMIT)
                 .min(self.ceiling.max(self.limit));
             let growth: f64 = if self.slow_start { 2.0 } else { self.tune.growth };
-            self.limit = self.limit.max((self.limit * growth.powf(dt)).min(cap));
+            let mut next = self.limit.max((self.limit * growth.powf(dt)).min(cap));
+            if self.tune.slow_growth > 1.0 && !self.slow_start && self.limit >= cap {
+                next = next.max((self.limit * self.tune.slow_growth.powf(dt)).min(self.ceiling.max(self.limit)));
+            }
+            self.limit = next;
             self.last_change = now;
         }
     }

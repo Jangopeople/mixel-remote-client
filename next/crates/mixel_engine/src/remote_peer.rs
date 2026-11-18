@@ -1953,7 +1953,7 @@ async fn send_picture(
             let (seq, size) = (packet.sequence(), packet.size());
             sender.write(consent, packet).await.map_err(|error| error.to_string())?;
             if let Some(rate) = rate.as_deref_mut() {
-                rate.sent(Instant::now(), seq, size);
+                rate.sent_marked(Instant::now(), seq, size, complete);
             }
             Ok(())
         },

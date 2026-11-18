@@ -530,6 +530,11 @@ mod tests {
     /// `netem_limit` > 0: the packet limit of tc netem counts every packet inside it, the ones waiting for
     /// their 140 ms of delay too (the lab's `limit 60`); a packet over it is dropped.
     fn chain_netem(line_clean_rule: bool, queue_bytes: f64, encode_ms: f64, key_bytes: usize, netem_limit: usize) -> (f64, f64, u32, u32, f64) {
+        chain_tuned(line_clean_rule, queue_bytes, encode_ms, key_bytes, netem_limit, "").0
+    }
+
+    /// The whole chain with lab knobs: returns (the usual tuple, median and p10 pictures a second, cuts, key requests).
+    fn chain_tuned(line_clean_rule: bool, queue_bytes: f64, encode_ms: f64, key_bytes: usize, netem_limit: usize, knobs: &str) -> ((f64, f64, u32, u32, f64), f64, f64, u32, usize) {
         use crate::video_rate::{RateControl, Receiver, QUEUE_LOW};
         let t0 = Instant::now();
         let mut rng = 0x9E37_79B9_7F4A_7C15u64;
@@ -542,7 +547,7 @@ mod tests {
         let (line_rate, latency, jitter, loss) = (500_000.0f64, 0.140, 0.020, 0.01);
         let size = (1920usize, 1080usize);
         let mut pacer = Pacer::new(t0);
-        let mut control = RateControl::new(t0);
+        let mut control = RateControl::tuned(t0, knobs);
         let mut receiver = Receiver::new(t0);
         receiver.clocked(true);
         let mut bitrate = crate::remote_peer::encoder_bitrate(size, pacer.rate());
@@ -563,6 +568,7 @@ mod tests {
         let mut last_of_picture: std::collections::HashMap<u16, (bool, bool)> = std::collections::HashMap::new();
         let (mut delivered, mut restarts) = (0usize, 0u32);
         let mut requests: Vec<f64> = Vec::new();
+        let mut asked = 0usize;
         while now < 300.0 {
             let instant = t0 + Duration::from_secs_f64(now);
             control.tick(instant);
@@ -609,7 +615,7 @@ mod tests {
                         break;
                     }
                     packets.remove(0);
-                    control.sent(instant, seq, first);
+                    control.sent_marked(instant, seq, first, *complete);
                     let dropped = rand() < loss;
                     let start = free_at.max(now);
                     let queued = (start - now) * line_rate;
@@ -634,6 +640,7 @@ mod tests {
                     // a complete one lost a packet, or a repair of an ordinary one failed (1 in 20).
                     if (complete && lost) || (lost && rand() < 0.05) {
                         requests.push(now + 0.9);
+                        asked += 1;
                     }
                     current = None;
                 }
@@ -666,7 +673,19 @@ mod tests {
             now += 0.01;
         }
         eprintln!("  (started {started_n} pictures) end: limit {:.0} kB/s queue {:?} delivered est {:.0}", control.limit() / 1000.0, control.queue_delay(), control.delivered() / 1000.0);
-        (pictures_at.len() as f64 / 240.0, delivered as f64 / 240.0 / 1000.0, restarts, pacer.losses, pacer.own_rate().1)
+        let mut per_second = vec![0u32; 240];
+        for at in &pictures_at {
+            per_second[((*at - 60.0) as usize).min(239)] += 1;
+        }
+        per_second.sort_unstable();
+        let (median, p10) = (f64::from(per_second[120]), f64::from(per_second[24]));
+        (
+            (pictures_at.len() as f64 / 240.0, delivered as f64 / 240.0 / 1000.0, restarts, pacer.losses, pacer.own_rate().1),
+            median,
+            p10,
+            control.cuts,
+            asked,
+        )
     }
 
     #[test]
@@ -680,6 +699,38 @@ mod tests {
             let on = chain_netem(false, deep, 0.0, key, 60);
             let nn = chain_netem(true, deep, 0.0, key, 60);
             eprintln!("SHALLOW key {key}: old pacer {o:?} | new {n:?} | new deep {nd:?} | NETEM-LIMIT-60 old {on:?} new {nn:?}");
+        }
+    }
+
+    /// Lab failure 1 (shallow, netem `limit 60`, raw arrival, no delay signal): without a loss rule the limit
+    /// runs far above what the line carries. Lab failure 2 (deep, `limit 1000`): a loss rule without
+    /// protection fires on lost packets of key-picture bursts. Run with `-- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn rate_tuning_sweep() {
+        let deep = 1000.0 * 1500.0;
+        let settings = [
+            "",
+            "loss=0.04",
+            "loss=0.04,keyskip=1",
+            "loss=0.04,keyskip=1,losswin=2000",
+            "loss=0.04,losshold=1500,keyskip=1",
+            "loss=0.04,keyskip=1,capmul=1.3,capfloor=0",
+            "loss=0.04,keyskip=1,capmul=1.3,capfloor=0,slowgrowth=1.03",
+            "loss=0.04,keyskip=1,losswin=2000,capmul=1.5,capfloor=0",
+            "loss=0.06,keyskip=1,losswin=2000,capmul=1.3,capfloor=0",
+            "capmul=1.3,capfloor=0",
+            "capmul=1.3,capfloor=0,slowgrowth=1.03",
+        ];
+        for key in [40_000usize, 200_000] {
+            for knobs in settings {
+                let (sh, m1, p1, c1, r1) = chain_tuned(true, deep, 0.0, key, 60, knobs);
+                let (dp, m2, p2, c2, r2) = chain_tuned(true, deep, 0.0, key, 1000, knobs);
+                eprintln!(
+                    "SWEEP key {key:>6} [{knobs}] SHALLOW med {m1} p10 {p1} {:.0} kB/s cuts {c1} req {r1} | DEEP med {m2} p10 {p2} {:.0} kB/s cuts {c2} req {r2}",
+                    sh.1, dp.1
+                );
+            }
         }
     }
 
