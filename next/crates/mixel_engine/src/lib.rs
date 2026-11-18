@@ -72,6 +72,7 @@ pub mod remote_sessions;
 pub mod remote_sound;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod video_pacing;
+pub mod picture_activity;
 pub mod video_rate;
 #[cfg(target_os = "macos")]
 pub mod macos_startup_host;

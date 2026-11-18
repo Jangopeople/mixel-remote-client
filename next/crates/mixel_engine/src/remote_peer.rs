@@ -1948,6 +1948,7 @@ async fn send_picture(
     control: &mut ControlPipe,
     channel: &Arc<dyn NativeDataChannel>,
 ) -> Result<bool, String> {
+    crate::picture_activity::picture(Instant::now());
     // Lab builds only: the old way (the whole picture in one burst), to measure against.
     #[cfg(feature = "qa-session")]
     if std::env::var_os("MIXEL_QA_UNPACED").is_some() {
@@ -2391,6 +2392,7 @@ async fn viewer_media(
                             waiting_for_key = false;
                             if compressed {
                                 received += 1;
+                                crate::picture_activity::picture(Instant::now());
                         #[cfg(feature = "qa-session")]
                         {
                             qa_shown.0 += 1;
@@ -2470,6 +2472,7 @@ async fn viewer_media(
                             );
                         }
                         received += 1;
+                        crate::picture_activity::picture(Instant::now());
                         #[cfg(feature = "qa-session")]
                         {
                             qa_shown.0 += 1;

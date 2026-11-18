@@ -27,6 +27,8 @@ type Reply = oneshot::Sender<Result<(), String>>;
 /// transfer at 85 kB/s on a 280 ms line (speed pass, 18 Nov 2026); 24 chunks = 72 kB. Sender side only: a receiver of 2.0.18 and older
 /// acknowledges each chunk as before and queues at most 32 commands for its file thread, so the window must stay below 32.
 const WINDOW: usize = 24;
+/// While a moving picture is on the session the file takes less of the line (what it was before 2.1.1).
+const WINDOW_MOVING: usize = 8;
 const OFFER_LIFETIME: Duration = Duration::from_secs(90);
 #[derive(Clone, Serialize)]
 pub struct Transfer {
@@ -905,6 +907,7 @@ impl Worker {
         Ok(())
     }
     fn pump(&mut self) -> Result<(), String> {
+        let window = if crate::picture_activity::moving(Instant::now()) { WINDOW_MOVING } else { WINDOW };
         for _ in 0..WINDOW {
             let Some(job) = self
                 .sending
@@ -929,7 +932,7 @@ impl Worker {
                 }
                 return Ok(());
             }
-            if job.checkpoints.len() > WINDOW {
+            if job.checkpoints.len() > window {
                 return Ok(());
             }
             let bytes = job
