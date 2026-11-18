@@ -68,6 +68,7 @@ internal sealed partial class MainWindow : Window
             if (allowClose) return;
             args.Cancel = true;
             AppWindow.Hide();
+            app.AppActive = false;
         };
         AppWindow.Changed += (sender, args) =>
         {
@@ -161,6 +162,7 @@ internal sealed partial class MainWindow : Window
         {
             // The tab in front is the focused session while this window is the active one.
             if (args.WindowActivationState != WindowActivationState.Deactivated) app.Workspace.MainActivated();
+            app.AppActive = args.WindowActivationState != WindowActivationState.Deactivated && AppWindow.IsVisible;
         };
         Closed += (_, _) =>
         {

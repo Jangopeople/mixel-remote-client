@@ -75,7 +75,10 @@ public sealed class AppModel : Observable
     public WorkspaceModel Workspace { get; }
     public ReportsModel Reports { get; }
 
-    public AppSection Section { get => section; set => Set(ref section, value); }
+    public AppSection Section { get => section; set { if (Set(ref section, value)) _ = Devices.UpdatePrewarm(); } }
+    private bool appActive = true;
+    /// <summary>The window is in front and not hidden (the shell sets it; a ready transport is kept only while true).</summary>
+    public bool AppActive { get => appActive; set { if (Set(ref appActive, value)) _ = Devices.UpdatePrewarm(); } }
     public AccountStatus Account { get => account; private set => Set(ref account, value); }
     public RemoteStatus Remote { get => remote; private set => Set(ref remote, value); }
     /// <summary>The last failure of an action, shown near the action.</summary>

@@ -176,10 +176,36 @@ public sealed partial class DevicesModel : Observable
         Raise(nameof(Devices));
     }
 
+    // A relay transport made ready before Connect is wanted only while a technician looks at the Devices list with a device
+    // online, the app is in front and signing in, the plan and the role allow a connection.
+    internal static bool PrewarmWanted(bool devicesShown, bool appActive, bool signedIn, bool connected, bool allowed, bool blockedBySession, bool anyOnline)
+        => devicesShown && appActive && signedIn && connected && allowed && !blockedBySession && anyOnline;
+
+    /// <summary>Plan and role allow a connection: a read-only company or a role that does not manage devices does not.</summary>
+    internal bool MayConnect => Tenant is null || (!app.Company.ReadOnly && Manages);
+
+    internal bool PrewarmWantedNow => PrewarmWanted(app.Section == AppSection.Devices, app.AppActive, app.SignedIn, app.Remote.Connected, MayConnect,
+        !app.CanStartConnection, AllDevices.Any(device => device.ConnectionId != app.Remote.Host && app.Remote.Online.Contains(device.ConnectionId)));
+
+    private bool prewarmOn;
+    private DateTimeOffset prewarmSent = DateTimeOffset.MinValue;
+
+    /// <summary>Tells the engine when the wish changes, and every 30 s while it holds (a ready transport goes after 2 minutes without a refresh).</summary>
+    internal async Task UpdatePrewarm()
+    {
+        var wanted = PrewarmWantedNow;
+        var now = DateTimeOffset.UtcNow;
+        if (wanted == prewarmOn && (!wanted || now - prewarmSent < TimeSpan.FromSeconds(30))) return;
+        prewarmOn = wanted;
+        prewarmSent = now;
+        try { await app.Engine.PerformAsync("remote_prewarm", ("on", wanted)); } catch (EngineFailure) { }
+    }
+
     internal void StatusChanged(RemoteStatus previous, RemoteStatus next)
     {
         if (next.Connected && !previous.Connected) lastPresence = DateTimeOffset.MinValue;
         if (next.Connected) _ = CheckPresence();
+        _ = UpdatePrewarm();
         if (!next.Online.SequenceEqual(previous.Online) || next.Connected != previous.Connected || next.Host != previous.Host) Raise(nameof(Devices));
     }
 
