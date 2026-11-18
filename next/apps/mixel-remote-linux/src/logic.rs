@@ -335,6 +335,10 @@ impl Company {
     pub fn manages_devices(&self) -> bool {
         self.tenant().is_some() && matches!(self.role().as_str(), "owner" | "admin" | "technician")
     }
+    /// The plan and the role allow a connection: a read-only company or a role that does not manage devices does not.
+    pub fn may_connect(&self) -> bool {
+        self.tenant().is_none() || (!self.read_only() && self.manages_devices())
+    }
     pub fn deploys(&self) -> bool {
         self.tenant().is_some() && self.administers()
     }
@@ -835,6 +839,32 @@ pub fn unattended_refusal_advice(engine_message: &str) -> Option<String> {
     })
 }
 
+/// A relay transport made ready before Connect is wanted only while a technician looks at the Devices list with a device
+/// online, the app is in front, and signing in, the plan, the role and the session limit allow a connection.
+pub fn prewarm_wanted(devices_shown: bool, app_active: bool, signed_in: bool, connected: bool, allowed: bool, blocked_by_session: bool, any_online: bool) -> bool {
+    devices_shown && app_active && signed_in && connected && allowed && !blocked_by_session && any_online
+}
+
+/// Tells the engine (`remote_prewarm`) when the wish changes, and every 30 s while it holds (a ready transport goes after
+/// 2 minutes without a refresh).
+#[derive(Clone, Debug, Default)]
+pub struct PrewarmTracker {
+    on: bool,
+    sent: f64,
+}
+
+impl PrewarmTracker {
+    /// `Some(on)` when the engine has to be told now.
+    pub fn next(&mut self, wanted: bool, now: f64) -> Option<bool> {
+        if wanted == self.on && (!wanted || now - self.sent < 30.0) {
+            return None;
+        }
+        self.on = wanted;
+        self.sent = now;
+        Some(wanted)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1205,5 +1235,29 @@ mod tests {
         let unattended = RemoteStatus { unattended_session: true, ..RemoteStatus::default() };
         assert!(session_mode_notes(&unattended).iter().any(|line| line.contains("nobody at that computer was asked")));
         assert!(session_mode_notes(&RemoteStatus::default()).is_empty());
+    }
+
+    #[test]
+    fn prewarm_is_wanted_only_on_the_devices_list_with_an_online_device_in_front() {
+        let wanted = |shown, active, signed_in, connected, allowed, blocked, online| prewarm_wanted(shown, active, signed_in, connected, allowed, blocked, online);
+        assert!(wanted(true, true, true, true, true, false, true));
+        assert!(!wanted(false, true, true, true, true, false, true), "Devices list not shown");
+        assert!(!wanted(true, false, true, true, true, false, true), "app hidden or not in front");
+        assert!(!wanted(true, true, false, true, true, false, true));
+        assert!(!wanted(true, true, true, false, true, false, true));
+        assert!(!wanted(true, true, true, true, false, false, true), "plan or role does not allow connecting");
+        assert!(!wanted(true, true, true, true, true, true, true), "session limit or being helped");
+        assert!(!wanted(true, true, true, true, true, false, false), "no device online");
+    }
+
+    #[test]
+    fn the_prewarm_tracker_tells_the_engine_on_change_and_refreshes_every_30_seconds() {
+        let mut tracker = PrewarmTracker::default();
+        assert_eq!(tracker.next(false, 0.0), None, "nothing to release at the start");
+        assert_eq!(tracker.next(true, 1.0), Some(true));
+        assert_eq!(tracker.next(true, 20.0), None);
+        assert_eq!(tracker.next(true, 31.5), Some(true), "refresh");
+        assert_eq!(tracker.next(false, 33.0), Some(false));
+        assert_eq!(tracker.next(false, 90.0), None, "no repeated off");
     }
 }

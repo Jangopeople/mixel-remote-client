@@ -196,7 +196,10 @@ impl Ui {
         });
         // The window in front decides which session gets input, clipboard and toolbar actions.
         let (a, weak) = (app.clone(), Rc::downgrade(&ui));
-        ui.window.connect_is_active_notify(move |_| {
+        ui.window.connect_is_active_notify(move |window| {
+            let active = window.is_active();
+            a.state.borrow_mut().app_hidden = !active;
+            a.update_prewarm();
             let (a, ui) = (a.clone(), weak.clone());
             glib::idle_add_local_once(move || {
                 if ui.upgrade().is_some() {

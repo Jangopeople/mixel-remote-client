@@ -186,6 +186,9 @@ impl SessionState {
 #[derive(Clone, Debug, Default)]
 pub struct State {
     pub section: Section,
+    /// The main window is not the one in front (set from the window; a ready transport is kept only while it is).
+    pub app_hidden: bool,
+    prewarm: logic::PrewarmTracker,
     pub workspace: Workspace,
     /// "Stay signed in on this computer" as chosen on the sign-in screen; applied once after sign-in.
     pub signin_stay: Option<bool>,
@@ -1276,6 +1279,33 @@ impl App {
         if next.connected() {
             let app = self.clone();
             self.spawn(async move { app.check_presence(false).await });
+        }
+        self.update_prewarm();
+    }
+
+    /// A transport kept ready for the next Connect (`remote_prewarm`): wanted only while the Devices list is shown with a device
+    /// online and the app is in front; the engine is told when that changes and every 30 s while it holds.
+    pub fn update_prewarm(self: &Rc<Self>) {
+        let tell = {
+            let mut state = self.state.borrow_mut();
+            let own = state.remote.host;
+            let any_online = state.devices.devices.iter().any(|device| Some(device.connection_id) != own && state.remote.online.contains(&device.connection_id));
+            let wanted = logic::prewarm_wanted(
+                state.section == Section::Devices,
+                !state.app_hidden,
+                state.signed_in(),
+                state.remote.connected(),
+                state.company.data.may_connect(),
+                !state.remote.can_request(),
+                any_online,
+            );
+            state.prewarm.next(wanted, clock())
+        };
+        if let Some(on) = tell {
+            let app = self.clone();
+            self.spawn(async move {
+                let _ = app.perform("remote_prewarm", json!({ "on": on })).await;
+            });
         }
     }
 
