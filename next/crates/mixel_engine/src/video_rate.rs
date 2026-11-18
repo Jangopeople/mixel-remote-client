@@ -169,6 +169,9 @@ pub struct RateControl {
     pub softs: u32,
     pub max_queue: Duration,
     tune: Tune,
+    /// Bytes the reports covered / bytes that arrived, decaying (about 1 s): the loss share.
+    loss_covered: f64,
+    loss_arrived: f64,
 }
 
 /// Lab knobs of the controller (defaults = the shipped behaviour). Only a `qa-session` build reads
@@ -184,6 +187,9 @@ struct Tune {
     probe_mul: f64,
     queue_high: Duration,
     growth: f64,
+    /// Share of the sent bytes that did not arrive (smoothed, ~1 s) above which the line counts as
+    /// overfull like a queue does: a SHALLOW buffer drops instead of delaying (0 = off).
+    loss_cut: f64,
 }
 
 impl Tune {
@@ -196,6 +202,7 @@ impl Tune {
             probe_mul: 1.25,
             queue_high: QUEUE_HIGH,
             growth: 1.10,
+            loss_cut: 0.0,
         };
         #[cfg(feature = "qa-session")]
         if let Ok(text) = std::env::var("MIXEL_RATE_TUNE") {
@@ -209,6 +216,7 @@ impl Tune {
                     "probemul" => tune.probe_mul = number.clamp(1.0, 4.0),
                     "qhigh" => tune.queue_high = Duration::from_millis(number.clamp(60.0, 2000.0) as u64),
                     "growth" => tune.growth = number.clamp(1.0, 2.0),
+                    "loss" => tune.loss_cut = number.clamp(0.0, 0.9),
                     _ => {}
                 }
             }
@@ -243,6 +251,8 @@ impl RateControl {
             softs: 0,
             max_queue: Duration::ZERO,
             tune: Tune::new(),
+            loss_covered: 0.0,
+            loss_arrived: 0.0,
         }
     }
     /// What the line carries at the moment, bytes a second.
@@ -301,7 +311,10 @@ impl RateControl {
             return;
         };
         self.last_report = Some(now);
+        let covered = total.saturating_sub(self.acked_total);
         self.acked_total = self.acked_total.max(total);
+        self.loss_covered = self.loss_covered * 0.8 + covered as f64;
+        self.loss_arrived = self.loss_arrived * 0.8 + f64::from(report.bytes).min(covered as f64);
         let round_trip = now.saturating_duration_since(sent_at).saturating_sub(report.age);
         self.delays.push_back((now, round_trip));
         while self.delays.front().is_some_and(|(at, _)| now.saturating_duration_since(*at) > BASE_WINDOW) {
@@ -344,7 +357,10 @@ impl RateControl {
         }
         let dt = now.saturating_duration_since(self.last_change).as_secs_f64().min(1.0);
         let since = |at: Option<Instant>| at.map_or(Duration::from_secs(3600), |at| now.saturating_duration_since(at));
-        if queue > self.tune.queue_high {
+        let lossy = self.tune.loss_cut > 0.0
+            && self.loss_covered > 30_000.0
+            && 1.0 - self.loss_arrived / self.loss_covered > self.tune.loss_cut;
+        if queue > self.tune.queue_high || lossy {
             // A pile-up that lasted a second: back to what was delivered, never by more than 15 % at once.
             if since(self.last_cut) >= self.tune.holdoff {
                 let by_delivery = if self.delivered > 0.0 { self.delivered * 1.4 } else { self.limit };
@@ -353,6 +369,8 @@ impl RateControl {
                 #[cfg(feature = "qa-session")]
                 eprintln!("QA rate cut: queue {} ms (lowest of the last second above the lowest of 30 s, {}), delivered {:.0} kB/s, in flight {} kB, limit {:.0} -> {:.0} kB/s", queue.as_millis(), if self.clocked { "one-way" } else { "round trip" }, self.delivered / 1000.0, self.in_flight() / 1000, self.limit / 1000.0, cut / 1000.0);
                 self.cuts += 1;
+                self.loss_covered = 0.0;
+                self.loss_arrived = 0.0;
                 self.limit = cut;
                 self.ceiling = (self.delivered * HOLD_FACTOR).clamp(MIN_LIMIT, MAX_LIMIT).max(cut);
                 self.last_probe = now;
