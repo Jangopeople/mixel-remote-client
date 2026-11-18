@@ -83,6 +83,9 @@ struct Grant {
     scope: u64,
     live: Authorization,
     job: Option<Job>,
+    /// A renewed transport of this session is on its way: until then the end of this scope's transport
+    /// (the host can close it as soon as its side has switched over) does not finish a running recording.
+    renewal_until: Option<Instant>,
 }
 
 #[derive(Clone, Default)]
@@ -104,7 +107,23 @@ impl Drop for RecordingScope {
             && let Some(grant) = entry.iter_mut().find(|grant| grant.scope == self.scope)
             && let Some(job) = grant.job.as_mut()
         {
-            job.finish();
+            let waiting = grant.renewal_until.filter(|until| *until > Instant::now());
+            let Some(until) = waiting else {
+                job.finish();
+                return;
+            };
+            // The renewed transport has not taken over yet: the recording waits for it (its attach carries the
+            // job over). If it never does, the recording is finished when the time is up.
+            let (hub, scope) = (self.hub.clone(), self.scope);
+            let _ = std::thread::Builder::new().name("mixel-recording-renewal-guard".into()).spawn(move || {
+                std::thread::sleep(until.saturating_duration_since(Instant::now()) + Duration::from_millis(200));
+                if let Ok(mut entry) = hub.grant.lock()
+                    && let Some(grant) = entry.iter_mut().find(|grant| grant.scope == scope)
+                    && let Some(job) = grant.job.as_mut()
+                {
+                    job.finish();
+                }
+            });
         }
     }
 }
@@ -112,6 +131,16 @@ impl Drop for RecordingScope {
 impl RecordingHub {
     pub fn attach(&self, session: Uuid, live: Authorization) -> Result<RecordingScope, String> {
         self.attach_inner(session, live, false)
+    }
+
+    /// A renewed transport of the session is being set up: for `window` the end of the transport before does not
+    /// finish a running recording (the renewed transport carries it on when it takes over).
+    pub fn renewal_expected(&self, session: Uuid, window: Duration) {
+        if let Ok(mut entry) = self.grant.lock() {
+            for grant in entry.iter_mut().filter(|grant| grant.session == session) {
+                grant.renewal_until = Some(Instant::now() + window);
+            }
+        }
     }
 
     /// The renewed transport takes over: attaches while the transport before may still be live and
@@ -153,6 +182,7 @@ impl RecordingHub {
             scope,
             live,
             job: carried,
+            renewal_until: None,
         });
         Ok(RecordingScope {
             hub: self.clone(),
@@ -649,6 +679,53 @@ mod renewal_tests {
         hub.finish().await.unwrap();
         assert_eq!(samples(&file).0, 3);
         drop(renewed);
+    }
+
+    /// The host closes the old transport as soon as its side has switched, which can be BEFORE the renewed
+    /// transport has taken over (seen live on a slow line): the recording waits for the takeover.
+    #[tokio::test]
+    async fn the_old_transport_ending_before_the_takeover_leaves_the_recording_waiting_for_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let hub = RecordingHub::default();
+        let session = Uuid::new_v4();
+        let old = hub.attach(session, Arc::new(|| true)).unwrap();
+        let file = directory.path().join("early.mp4");
+        hub.start(session, file.clone()).unwrap();
+        old.submit(&key(1), 0, (2, 2));
+        std::thread::sleep(Duration::from_millis(30));
+        hub.renewal_expected(session, Duration::from_secs(5));
+        drop(old);
+        assert!(matches!(hub.view(session), Some(View::Recording)), "the recording is not finished by the old end");
+        let renewed = hub.attach_renewal(session, Arc::new(|| true)).unwrap();
+        renewed.submit(&key(1), 10, (2, 2));
+        renewed.submit(&delta(), 3010, (2, 2));
+        std::thread::sleep(Duration::from_millis(30));
+        hub.stop(session).unwrap();
+        hub.finish().await.unwrap();
+        assert!(matches!(hub.last_view(), Some(View::Saved)));
+        assert_eq!(samples(&file).0, 3);
+        drop(renewed);
+    }
+
+    /// If the renewed transport never takes over, the waiting recording is finished when the time is up.
+    #[tokio::test]
+    async fn a_recording_waiting_for_a_renewal_that_never_comes_is_finished() {
+        let directory = tempfile::tempdir().unwrap();
+        let hub = RecordingHub::default();
+        let session = Uuid::new_v4();
+        let old = hub.attach(session, Arc::new(|| true)).unwrap();
+        let file = directory.path().join("never.mp4");
+        hub.start(session, file.clone()).unwrap();
+        old.submit(&key(1), 0, (2, 2));
+        old.submit(&delta(), 3000, (2, 2));
+        std::thread::sleep(Duration::from_millis(30));
+        hub.renewal_expected(session, Duration::from_millis(150));
+        drop(old);
+        assert!(matches!(hub.view(session), Some(View::Recording)));
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        hub.finish().await.unwrap();
+        assert!(matches!(hub.last_view(), Some(View::Saved)));
+        assert_eq!(samples(&file).0, 2);
     }
 
     /// A change of the picture size (a display switch) starts the next part, named clearly; the

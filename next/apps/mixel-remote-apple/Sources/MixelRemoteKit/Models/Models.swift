@@ -90,6 +90,8 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
     public var files: Bool
     public var recordingPermitted: Bool
     public var recording: RecordingView?
+    /// Files of the running or last recording, in order (more than one after a size change: `name-part2.mp4`, ...).
+    public var recordingParts: [String]? = nil
     public var previousRecording: RecordingView?
     public var inputAccess: Bool
     public var unattendedEnabled: Bool
@@ -196,7 +198,7 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
         if let sessions { return sessions }
         guard !sharing, let peer, let session, ["outgoing", "negotiating", "active", "closing"].contains(phase) else { return [] }
         return [RemoteSessionItem(id: session, session: session, peer: peer, phase: phase, message: message, consent: consent, received: received,
-                                  control: control, clipboard: clipboard, files: files, recordingPermitted: recordingPermitted, recording: recording,
+                                  control: control, clipboard: clipboard, files: files, recordingPermitted: recordingPermitted, recording: recording, recordingParts: recordingParts ?? [],
                                   displays: displays, display: display, displayAll: displayAll, printJobs: printJobs, hostActions: hostActions,
                                   signinId: signinId, hostMacs: hostMacs, meetingOffer: meetingOffer, peerFeatures: peerFeatures,
                                   joinedSession: joinedSession, switched: switched, passwordSession: passwordSession, unattendedSession: unattendedSession)]
@@ -238,6 +240,7 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
         copy.files = item.files
         copy.recordingPermitted = item.recordingPermitted
         copy.recording = item.recording
+        copy.recordingParts = item.recordingParts
         copy.displays = item.displays
         copy.display = item.display
         copy.displayAll = item.displayAll
@@ -275,6 +278,7 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
     public var files: Bool
     public var recordingPermitted: Bool
     public var recording: RecordingView?
+    public var recordingParts: [String]
     public var displays: UInt16
     public var display: UInt16
     public var displayAll: Bool
@@ -303,7 +307,7 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
 
     public init(id: String, session: String? = nil, peer: UInt32? = nil, phase: String = "active", message: String = "", consent: String? = nil,
                 received: UInt64 = 0, control: Bool = false, clipboard: Bool = false, files: Bool = false, recordingPermitted: Bool = false,
-                recording: RecordingView? = nil, displays: UInt16 = 0, display: UInt16 = 0, displayAll: Bool = false, printJobs: [String] = [],
+                recording: RecordingView? = nil, recordingParts: [String] = [], displays: UInt16 = 0, display: UInt16 = 0, displayAll: Bool = false, printJobs: [String] = [],
                 hostActions: [String] = [], signinId: UInt32? = nil, hostMacs: [String] = [], meetingOffer: [String]? = nil,
                 peerFeatures: [String] = [], joinedSession: Bool = false, switched: Bool = false, quality: SessionQuality? = nil, startedAt: Double? = nil,
                 reconnecting: Bool = false, reconnectFailed: Bool = false, passwordSession: PasswordSessionView? = nil, unattendedSession: Bool = false) {
@@ -311,14 +315,14 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
         self.passwordSession = passwordSession; self.unattendedSession = unattendedSession
         self.id = id; self.session = session; self.peer = peer; self.phase = phase; self.message = message; self.consent = consent
         self.received = received; self.control = control; self.clipboard = clipboard; self.files = files
-        self.recordingPermitted = recordingPermitted; self.recording = recording; self.displays = displays; self.display = display
+        self.recordingPermitted = recordingPermitted; self.recording = recording; self.recordingParts = recordingParts; self.displays = displays; self.display = display
         self.displayAll = displayAll; self.printJobs = printJobs; self.hostActions = hostActions; self.signinId = signinId
         self.hostMacs = hostMacs; self.meetingOffer = meetingOffer; self.peerFeatures = peerFeatures
         self.joinedSession = joinedSession; self.switched = switched; self.quality = quality; self.startedAt = startedAt
     }
 
     private enum Key: String, CodingKey {
-        case id, session, peer, device, phase, message, consent, received, control, clipboard, files, recordingPermitted, recording, displays, display
+        case id, session, peer, device, phase, message, consent, received, control, clipboard, files, recordingPermitted, recording, recordingParts, displays, display
         case displayAll, printJobs, hostActions, signinId, hostMacs, meetingOffer, peerFeatures, joinedSession, switched, quality, startedAt
         case reconnecting, reconnectFailed, passwordSession, unattendedSession, unattendedRefused
     }
@@ -337,6 +341,7 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
         files = (try? c.decodeIfPresent(Bool.self, forKey: .files)) ?? false
         recordingPermitted = (try? c.decodeIfPresent(Bool.self, forKey: .recordingPermitted)) ?? false
         recording = try? c.decodeIfPresent(RecordingView.self, forKey: .recording)
+        recordingParts = (try? c.decodeIfPresent([String].self, forKey: .recordingParts)) ?? []
         displays = (try? c.decodeIfPresent(UInt16.self, forKey: .displays)) ?? 0
         display = (try? c.decodeIfPresent(UInt16.self, forKey: .display)) ?? 0
         displayAll = (try? c.decodeIfPresent(Bool.self, forKey: .displayAll)) ?? false
@@ -372,6 +377,7 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
         try c.encode(files, forKey: .files)
         try c.encode(recordingPermitted, forKey: .recordingPermitted)
         try c.encode(recording, forKey: .recording)
+        try c.encode(recordingParts, forKey: .recordingParts)
         try c.encode(displays, forKey: .displays)
         try c.encode(display, forKey: .display)
         try c.encode(displayAll, forKey: .displayAll)

@@ -1468,6 +1468,9 @@ msgstr "Le persone autorizzate a collegarsi a questo computer sono gestite nella
 msgid "The person opens Mixel Quick Support on their phone and tells you the ID it shows."
 msgstr "La persona apre Mixel Quick Support sul telefono e Le comunica l’ID mostrato."
 
+msgid "The recording is in %d files: name, then name-part2, ..."
+msgstr "La registrazione è divisa in %d file: name, poi name-part2, ..."
+
 msgid "The recording stopped early. The playable portion was saved."
 msgstr "La registrazione si è interrotta prima. La parte riproducibile è stata salvata."
 

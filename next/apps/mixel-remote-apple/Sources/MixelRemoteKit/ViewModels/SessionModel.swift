@@ -548,6 +548,12 @@ public final class SessionModel: ObservableObject {
 
     // MARK: Recording
 
+    /// "The recording is in 2 files: ..." once a picture size change started `name-part2.mp4`; empty otherwise.
+    public var recordingPartsText: String {
+        let parts = remote.recordingParts ?? []
+        return parts.count > 1 ? L("The recording is in %d files: name, then name-part2, ...", parts.count) : ""
+    }
+
     public var recordingText: String {
         switch remote.recording?.phase {
         case "waiting_for_video": L("Waiting for a complete video frame…")

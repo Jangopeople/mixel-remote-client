@@ -12431,6 +12431,28 @@
         }
       }
     },
+    "The recording is in %d files: name, then name-part2, ...": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Aufzeichnung liegt in %d Dateien: name, dann name-part2, ..."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’enregistrement est réparti en %d fichiers : name, puis name-part2, ..."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La registrazione è divisa in %d file: name, poi name-part2, ..."
+          }
+        }
+      }
+    },
     "The recording stopped early. The playable portion was saved.": {
       "localizations": {
         "de": {

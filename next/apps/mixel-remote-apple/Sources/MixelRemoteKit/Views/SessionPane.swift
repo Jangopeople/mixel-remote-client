@@ -135,11 +135,12 @@ struct SessionStage: View {
                 }
                 .padding(14)
                 Spacer()
-                if !session.notice.isEmpty || !session.error.isEmpty || !session.meetingNotice.isEmpty || !session.recordingText.isEmpty && remote.recording?.running != true {
+                if !session.notice.isEmpty || !session.error.isEmpty || !session.meetingNotice.isEmpty || !session.recordingText.isEmpty && remote.recording?.running != true || !session.recordingPartsText.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         if !session.notice.isEmpty { Text(verbatim: session.notice) }
                         if !session.meetingNotice.isEmpty { Text(verbatim: session.meetingNotice) }
                         if !session.recordingText.isEmpty, remote.recording?.running != true { Text(verbatim: session.recordingText) }
+                        if !session.recordingPartsText.isEmpty { Text(verbatim: session.recordingPartsText) }
                         if !session.error.isEmpty { Text(verbatim: session.error).foregroundStyle(Color(light: 0xFFB4BD, dark: 0xFFB4BD)) }
                     }
                     .font(.callout)

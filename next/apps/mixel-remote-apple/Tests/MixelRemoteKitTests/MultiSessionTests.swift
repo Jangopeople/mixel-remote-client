@@ -106,6 +106,17 @@ final class MultiSessionTests: XCTestCase {
         XCTAssertFalse(sparse.control)
     }
 
+    func testRecordingPartsDecodeAndTheSecondFileIsAnnounced() throws {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let item = try decoder.decode(RemoteSessionItem.self, from: Data(#"{"id":"s1","phase":"active","peer":7,"recording":{"phase":"recording"},"recording_parts":["/r/a.mp4","/r/a-part2.mp4"]}"#.utf8))
+        XCTAssertEqual(item.recordingParts, ["/r/a.mp4", "/r/a-part2.mp4"])
+        XCTAssertEqual(try decoder.decode(RemoteSessionItem.self, from: Data(#"{"id":"s1","phase":"active","peer":7}"#.utf8)).recordingParts, [])
+        let status = try decoder.decode(RemoteStatus.self, from: Data(#"{"controller_only":false,"platform":"macos","phase":"active","message":"","received":0,"sharing":false,"control":false,"clipboard":false,"files":false,"recording_permitted":true,"recording":null,"previous_recording":null,"input_access":true,"unattended_enabled":false,"unattended_session":false,"code_required":false,"online":[],"displays":1,"display":0,"display_all":false,"print_jobs":[],"host_actions":[],"host_macs":[],"colleagues":[],"invitations":[],"joined_session":false,"switched":false,"peer_features":[]}"#.utf8))
+        XCTAssertEqual(status.describing(item).recordingParts, ["/r/a.mp4", "/r/a-part2.mp4"])
+        XCTAssertTrue(L("The recording is in %d files: name, then name-part2, ...", 2).contains("2"))
+    }
+
     // MARK: Focus
 
     func testFocusSwitchingRoutesInputClipboardAndToolbarToTheFocusedSessionOnly() async throws {

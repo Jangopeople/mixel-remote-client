@@ -1608,7 +1608,11 @@ async fn viewer_media(
     transport: &mut NativeTransport,
     control: &mut ControlPipe,
 ) -> Result<(), String> {
-    // A renewed transport records from the moment it takes over (the one before records until then).
+    // A renewed transport records from the moment it takes over (the one before records until then). The host can
+    // close the transport before as soon as its side has switched: that end must not finish a running recording.
+    if control.recording_allowed && config.previous.is_some() {
+        config.state.recording_hub().renewal_expected(config.session, PICTURE_HANDOVER + Duration::from_secs(20));
+    }
     let mut recording = (control.recording_allowed && config.previous.is_none())
         .then(|| {
             config
