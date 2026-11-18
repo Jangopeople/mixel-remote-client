@@ -44,6 +44,11 @@ pub mod ai_assistant;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod agent_verify;
 pub mod tools_proto;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub mod tools_host;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[allow(unsafe_code)] // killing a timed-out script's process group.
+pub mod tools_scripts;
 pub mod tools_policy;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod host_pty;

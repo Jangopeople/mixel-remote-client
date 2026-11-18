@@ -235,12 +235,13 @@ mod imp {
         command.env_clear();
         command.env("TERM", "xterm-256color").env("LANG", std::env::var("LANG").unwrap_or_else(|_| "en_US.UTF-8".into()));
         command.env("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin");
-        let account = if spec.elevated { passwd(0) } else { user.cloned() };
+        let real = privileged();
+        let account = if spec.elevated && real { passwd(0) } else { user.cloned() };
         if let Some(account) = &account {
             command.env("HOME", &account.home).env("USER", &account.name).env("LOGNAME", &account.name);
             command.env("SHELL", &spec.shell.path);
             command.current_dir(&account.home);
-            if privileged() && account.uid != 0 {
+            if real && account.uid != 0 {
                 command.uid(account.uid).gid(account.gid);
             }
         }

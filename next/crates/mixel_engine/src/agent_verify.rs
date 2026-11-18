@@ -13,6 +13,9 @@ use uuid::Uuid;
 
 /// Pinned console keys: (key id, raw Ed25519 public key as hex). The private key never leaves mixel-vps.
 pub const PINNED: &[(&str, &str)] = &[("58b522e9976086ec", "10896242e49de888c657bd4f634b87abfb64e3cd13ba55c93822f60c0c8fc2a1")];
+/// Tests: keys used instead of the pinned console key.
+#[cfg(test)]
+pub static TEST_PINNED: Mutex<Option<Vec<(String, VerifyingKey)>>> = Mutex::new(None);
 /// Ids and nonces of run commands are kept this long.
 const KEEP_SECONDS: u64 = 30 * 24 * 3600;
 /// A command may be this much older than "now" than its `issued_at` (clock difference).
@@ -61,24 +64,50 @@ pub fn script_sha256(script: &str) -> String {
     to_hex(&Sha256::digest(script.as_bytes()))
 }
 
-/// The signed message (UTF-8, `\n` separated, no trailing newline).
+/// Parameter names a library script may take: `[A-Za-z_][A-Za-z0-9_]{0,31}`; at most 16, values up to 1024 bytes.
+pub fn valid_params(params: &[signaling_server::protocol::ScriptParam]) -> bool {
+    params.len() <= 16
+        && params.iter().all(|param| {
+            let mut chars = param.name.chars();
+            chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && param.name.len() <= 32
+                && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && param.value.len() <= 1024
+                && !param.value.contains('\0')
+        })
+}
+
+/// SHA-256 of the compact JSON array of `[name, value]` pairs (empty list: `[]`).
+pub fn params_sha256(params: &[signaling_server::protocol::ScriptParam]) -> String {
+    let pairs: Vec<[&str; 2]> = params.iter().map(|param| [param.name.as_str(), param.value.as_str()]).collect();
+    to_hex(&Sha256::digest(serde_json::to_string(&pairs).unwrap_or_default().as_bytes()))
+}
+
+/// The signed message (UTF-8, `\n` separated, no trailing newline). `v1` (scheme absent) is the ad-hoc console
+/// command and carries no parameters; `v2` (library scripts) also covers the parameters and the script reference.
 pub fn signed_message(command: &AgentCommand) -> Option<String> {
     let signed = command.signed.as_ref()?;
-    Some(format!(
-        "mixel-remote/agent-command/v1\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
-        command.id.hyphenated().to_string().to_lowercase(),
-        signed.device.hyphenated().to_string().to_lowercase(),
-        signed.connection_id,
-        command.shell,
-        command.timeout_seconds,
-        script_sha256(&command.script),
-        signed.issued_at,
-        signed.expires_at,
-        signed.nonce,
-    ))
+    let id = command.id.hyphenated().to_string().to_lowercase();
+    let device = signed.device.hyphenated().to_string().to_lowercase();
+    match signed.scheme.as_deref() {
+        None if command.params.is_empty() && command.script_ref.is_none() => Some(format!(
+            "mixel-remote/agent-command/v1\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+            id, device, signed.connection_id, command.shell, command.timeout_seconds, script_sha256(&command.script), signed.issued_at, signed.expires_at, signed.nonce,
+        )),
+        Some("v2") if valid_params(&command.params) => Some(format!(
+            "mixel-remote/script-run/v2\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+            id, device, signed.connection_id, command.shell, command.timeout_seconds, script_sha256(&command.script), params_sha256(&command.params),
+            command.script_ref.as_deref().unwrap_or(""), signed.issued_at, signed.expires_at, signed.nonce,
+        )),
+        _ => None,
+    }
 }
 
 pub fn pinned_keys() -> Vec<(String, VerifyingKey)> {
+    #[cfg(test)]
+    if let Some(keys) = TEST_PINNED.lock().ok().and_then(|keys| keys.clone()) {
+        return keys;
+    }
     PINNED
         .iter()
         .filter_map(|(id, key)| {
