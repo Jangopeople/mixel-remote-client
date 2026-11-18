@@ -19,10 +19,22 @@ pub fn picture(now: Instant) {
     }
 }
 
+/// Pictures a second below which a moving picture counts as suffering.
+const FULL: usize = 15;
+
+fn count(now: Instant) -> usize {
+    let Ok(recent) = RECENT.lock() else { return 0 };
+    recent.iter().filter(|at| now.duration_since(**at) <= SPAN).count()
+}
+
 /// At least [`MOVING`] pictures in the last second.
 pub fn moving(now: Instant) -> bool {
-    let Ok(recent) = RECENT.lock() else { return false };
-    recent.iter().filter(|at| now.duration_since(**at) <= SPAN).count() >= MOVING
+    count(now) >= MOVING
+}
+
+/// The picture moves but fewer than [`FULL`] pictures a second get through: the file gives way.
+pub fn suffering(now: Instant) -> bool {
+    (MOVING..FULL).contains(&count(now))
 }
 
 #[cfg(test)]
@@ -36,6 +48,7 @@ mod tests {
             picture(start + Duration::from_millis(step * 100));
         }
         assert!(moving(start + Duration::from_millis(800)));
+        assert!(suffering(start + Duration::from_millis(800)));
         assert!(!moving(start + Duration::from_millis(3000)));
         let mut recent = RECENT.lock().unwrap();
         recent.clear();
