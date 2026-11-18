@@ -43,6 +43,10 @@ pub mod agent;
 pub mod ai_assistant;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android"))]
 pub mod agent_verify;
+pub mod tools_proto;
+pub mod tools_policy;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub mod host_pty;
 pub mod reconnect;
 pub mod self_update;
 pub mod update_gate;

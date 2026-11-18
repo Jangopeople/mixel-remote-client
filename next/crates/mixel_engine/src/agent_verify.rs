@@ -241,6 +241,8 @@ mod tests {
             shell: "sh".into(),
             script: "uname -a\n".into(),
             timeout_seconds: 300,
+            params: vec![],
+            script_ref: None,
             signed: Some(CommandSignature {
                 key_id: "fe812c12f3ab4ce6".into(),
                 device: DEVICE.parse().unwrap(),
@@ -249,6 +251,7 @@ mod tests {
                 expires_at: 1_794_986_400,
                 nonce: "ab".repeat(32),
                 signature: signature.into(),
+                scheme: None,
             }),
         }
     }
