@@ -283,6 +283,10 @@ public sealed partial class DevicesModel : Observable
         ? Change(() => app.Engine.PerformAsync("saas_remove_device", ("tenant", tenant.TenantId), ("device", device.DeviceId)))
         : Task.FromResult(false);
 
+    public Task<bool> DeleteGroup(SaasGroup group) => Tenant is { } tenant
+        ? Change(() => app.Engine.PerformAsync("saas_delete_group", ("tenant", tenant.TenantId), ("group", group.GroupId)))
+        : Task.FromResult(false);
+
     public Task<bool> CreateGroup(string name) => Tenant is { } tenant
         ? Change(() => app.Engine.PerformAsync("saas_create_group", ("tenant", tenant.TenantId), ("name", name)))
         : Task.FromResult(false);

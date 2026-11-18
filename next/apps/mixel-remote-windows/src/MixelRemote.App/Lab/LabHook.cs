@@ -131,6 +131,24 @@ internal static class LabHook
                 if (device is null) return "no such device";
                 return (await app.Devices.SetUnattendedGrant(device, args[2], args[3] == "on")) ? "ok" : "error=" + app.Devices.Error;
             }
+            case "devlist":
+                return string.Join(" ;; ", app.Devices.AllDevices.Select(d => $"{d.Name}|{d.DeviceId}|{d.ConnectionId}|{d.Os}|{d.GroupName}")) + " ## groups: " + string.Join(" ;; ", app.Devices.Groups.Select(g => $"{g.Name}|{g.GroupId}|{g.Devices}"));
+            case "rmdev":
+            {
+                // rmdev <connection id>: removes that device of the QA company (lab cleanup only)
+                var device = app.Devices.AllDevices.FirstOrDefault(d => d.ConnectionId == uint.Parse(parts[1]));
+                if (device is null) return "no such device";
+                var done = await app.Devices.Remove(device);
+                return $"removed {device.Name} ok={done} error={app.Devices.Error}";
+            }
+            case "rmgroup":
+            {
+                // rmgroup <group name>: deletes that device group of the QA company (lab cleanup only)
+                var group = app.Devices.Groups.FirstOrDefault(g => g.Name == line[8..]);
+                if (group is null) return "no such group";
+                var done = await app.Devices.DeleteGroup(group);
+                return $"group {group.Name} deleted ok={done} error={app.Devices.Error}";
+            }
             default: return "unknown command";
         }
     }
