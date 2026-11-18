@@ -1239,9 +1239,10 @@ impl Registry {
                 Ok(())
             }
             ClientMessage::RenewalFailed { session } => {
-                // Only the replacement of a running session that is still negotiating, reported by one of its sides.
+                // Only the replacement of a running session, reported by one of its sides. In any phase: the attempt often fails AFTER the
+                // offer and answer went through (the new transport itself does not open), and a refusal here ended the session (lab, 18 Nov).
                 let current = self.sessions.get(&session).ok_or(ErrorCode::Forbidden)?;
-                if (from != current.controller && from != current.host) || !matches!(current.phase, Phase::Offer) || current.renewed_from.is_none() {
+                if (from != current.controller && from != current.host) || current.renewed_from.is_none() {
                     return Err(ErrorCode::Forbidden);
                 }
                 let (controller, host) = (current.controller, current.host);
@@ -2627,6 +2628,18 @@ mod rotation_tests {
         assert_eq!(registry.counts().1, 1);
         // The new attempt can fail and be reported again.
         registry.handle(technician.0, technician.1, ClientMessage::RenewalFailed { session: next }, again).unwrap();
+        assert_eq!(registry.counts().1, 1);
+    }
+
+    #[test]
+    fn a_failed_renewal_is_taken_back_after_the_offer_and_answer_went_through() {
+        let (mut registry, (session, replacement), technician, host, mut technician_events, _, later) = renewal_after_a_failed_attempt(true);
+        // The attempt got as far as the answer (the new transport itself did not open).
+        registry.sessions.get_mut(&replacement).unwrap().phase = Phase::Connected;
+        registry.handle(host.0, host.1, ClientMessage::RenewalFailed { session: replacement }, later).unwrap();
+        assert!(drain(&mut technician_events).iter().any(|event| matches!(event, ServerMessage::Closed { session: closed, .. } if *closed == replacement)));
+        let again = later + Duration::from_secs(6);
+        registry.handle(technician.0, technician.1, ClientMessage::Restart { session }, again).unwrap();
         assert_eq!(registry.counts().1, 1);
     }
 
