@@ -524,6 +524,12 @@ mod tests {
 
     /// Like `chain`, a complete picture of `key_bytes` (1080p60 test pictures: 150-300 kB in the lab).
     fn chain_with(line_clean_rule: bool, queue_bytes: f64, encode_ms: f64, key_bytes: usize) -> (f64, f64, u32, u32, f64) {
+        chain_netem(line_clean_rule, queue_bytes, encode_ms, key_bytes, 0)
+    }
+
+    /// `netem_limit` > 0: the packet limit of tc netem counts every packet inside it, the ones waiting for
+    /// their 140 ms of delay too (the lab's `limit 60`); a packet over it is dropped.
+    fn chain_netem(line_clean_rule: bool, queue_bytes: f64, encode_ms: f64, key_bytes: usize, netem_limit: usize) -> (f64, f64, u32, u32, f64) {
         use crate::video_rate::{RateControl, Receiver, QUEUE_LOW};
         let t0 = Instant::now();
         let mut rng = 0x9E37_79B9_7F4A_7C15u64;
@@ -607,7 +613,8 @@ mod tests {
                     let dropped = rand() < loss;
                     let start = free_at.max(now);
                     let queued = (start - now) * line_rate;
-                    if dropped || queued > queue_bytes {
+                    let inside = arrivals.len().saturating_sub(seen);
+                    if dropped || queued > queue_bytes || (netem_limit > 0 && inside >= netem_limit) {
                         *lost |= dropped;
                     } else {
                         free_at = start + first as f64 / line_rate;
@@ -670,7 +677,9 @@ mod tests {
             let o = chain_with(false, shallow, 0.0, key);
             let n = chain_with(true, shallow, 0.0, key);
             let nd = chain_with(true, deep, 0.0, key);
-            eprintln!("SHALLOW key {key}: old pacer {o:?} | new {n:?} | new deep {nd:?}");
+            let on = chain_netem(false, deep, 0.0, key, 60);
+            let nn = chain_netem(true, deep, 0.0, key, 60);
+            eprintln!("SHALLOW key {key}: old pacer {o:?} | new {n:?} | new deep {nd:?} | NETEM-LIMIT-60 old {on:?} new {nn:?}");
         }
     }
 

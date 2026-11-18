@@ -2173,6 +2173,8 @@ async fn viewer_media(
     let mut in_order = std::collections::VecDeque::new();
     // What arrives is reported to the host five times a second (`video_rate`).
     let mut report_rx = crate::video_rate::Receiver::new(Instant::now());
+    // Lab switch (qa-session builds): MIXEL_NO_RAW_ARRIVAL puts the report timestamp back after the reorder wait.
+    let raw_arrival = !cfg!(feature = "qa-session") || std::env::var_os("MIXEL_NO_RAW_ARRIVAL").is_none();
     let mut decoder =
         session_platform::H264Decoder::new(1920, 1920).map_err(|error| error.to_string())?;
     let mut previous_rtp: Option<u32> = None;
@@ -2287,6 +2289,11 @@ async fn viewer_media(
                 None => match tokio::time::timeout(packet_wait(taken), track.poll()).await {
                     Ok(Some(TrackRemoteEvent::OnRtpPacket(packet))) => {
                         let sequence = packet.header.sequence_number;
+                        // The rate report counts a packet when it ARRIVES: behind a gap the reorder buffer
+                        // holds the following packets for up to REPEAT_WAIT, and that wait is not a queue.
+                        if raw_arrival {
+                            report_rx.packet(Instant::now(), sequence, 12 + packet.payload.len());
+                        }
                         in_order.extend(reorder.push(sequence, packet, Instant::now()));
                         match in_order.pop_front() {
                             Some(packet) => Ok(Some(TrackRemoteEvent::OnRtpPacket(packet))),
@@ -2299,7 +2306,9 @@ async fn viewer_media(
             };
             match event {
                 Ok(Some(TrackRemoteEvent::OnRtpPacket(packet))) => {
-                    report_rx.packet(Instant::now(), packet.header.sequence_number, 12 + packet.payload.len());
+                    if !raw_arrival {
+                        report_rx.packet(Instant::now(), packet.header.sequence_number, 12 + packet.payload.len());
+                    }
                     #[cfg(feature = "qa-session")]
                     {
                         qa_rtp.0 += 1;
