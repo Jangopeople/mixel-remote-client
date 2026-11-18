@@ -47,6 +47,9 @@ pub mod tools_proto;
 pub mod tools_policy;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod host_pty;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[allow(unsafe_code)] // kill(2) on a validated pid.
+pub mod host_tasks;
 pub mod reconnect;
 pub mod self_update;
 pub mod update_gate;
