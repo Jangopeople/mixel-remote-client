@@ -213,7 +213,11 @@ impl ServiceConfig {
             .signaling_url
             .parse()
             .map_err(|_| "Invalid connection-service URL")?;
-        if signaling.scheme() != "wss"
+        // Lab builds only: a plain ws:// connection service on a private address (a second broker for speed checks).
+        let lab_plain = cfg!(feature = "qa-session")
+            && signaling.scheme() == "ws"
+            && signaling.host_str().is_some_and(|host| host.parse::<std::net::Ipv4Addr>().is_ok_and(|ip| ip.is_private() || ip.is_loopback()));
+        if (signaling.scheme() != "wss" && !lab_plain)
             || signaling.host_str().is_none()
             || !signaling.username().is_empty()
             || signaling.password().is_some()

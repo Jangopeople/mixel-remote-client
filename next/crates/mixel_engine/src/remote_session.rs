@@ -3595,7 +3595,7 @@ async fn run(
                     Command::Warm=>{
                         // Refreshed before it runs out; one question in flight; only technician apps that are not being helped.
                         if let Some(ready)=&warm && ready.age()>=Duration::from_secs(90){warm=None;}
-                        if prewarm_ok && warm.is_none() && pending_warm.is_none() && peer.is_none() && warm_asked.is_none_or(|at|at.elapsed()>Duration::from_secs(12)) && ctrl.len()+outgoing.len()<crate::remote_sessions::MAX_SESSIONS{
+                        if prewarm_ok && std::env::var_os("MIXEL_NO_PREWARM").is_none() && warm.is_none() && pending_warm.is_none() && peer.is_none() && warm_asked.is_none_or(|at|at.elapsed()>Duration::from_secs(12)) && ctrl.len()+outgoing.len()<crate::remote_sessions::MAX_SESSIONS{
                             crate::qa_timeline::mark("ready transport asked for (relay lease without a session)");
                             send(&mut socket,ClientMessage::Ice{session:Uuid::nil()}).await?;
                             warm_asked=Some(std::time::Instant::now());
