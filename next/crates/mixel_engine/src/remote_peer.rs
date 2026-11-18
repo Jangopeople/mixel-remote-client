@@ -563,10 +563,10 @@ type Negotiated = (
 );
 /// Both sides announce this in the offer/answer when the host may send the first complete picture
 /// as soon as the transport is encrypted and the peer's signed identity matches its certificate,
-/// without waiting for the control channel to open. Switched off by `MIXEL_NO_FASTPIC`.
+/// without waiting for the control channel to open. Release 2.1.0: off unless `MIXEL_FASTPIC=1`.
 const FASTPIC_ATTRIBUTE: &str = "a=x-mixel-fastpic:1";
 fn fastpic_enabled() -> bool {
-    std::env::var_os("MIXEL_NO_FASTPIC").is_none()
+    crate::remote_control::lab_flag("MIXEL_FASTPIC")
 }
 /// The peer's signed identity against the certificate the encrypted transport actually has. Only
 /// a peer that passes this is `authenticated` for the session (pictures are sent to it and shown
@@ -2706,6 +2706,16 @@ mod early_peer_tests {
         let theirs = Handshake::new(context, Role::Controller, &technician, [1; 32]).unwrap().hello();
         assert!(verify_peer(&mut consent, Some(mine), Some(theirs), [1; 32]).is_err());
         assert!(!consent.can_share_local_screen());
+    }
+
+    /// Release default 2.1.0: the first picture before the control channel is a lab switch.
+    #[test]
+    fn the_fast_picture_is_off_by_default() {
+        assert!(!crate::remote_control::lab_flag_value(None));
+        assert!(crate::remote_control::lab_flag_value(Some("1")));
+        if std::env::var_os("MIXEL_FASTPIC").is_none() {
+            assert!(!fastpic_enabled());
+        }
     }
 
     /// An old peer announces nothing: today's order (the control channel first) stays.
