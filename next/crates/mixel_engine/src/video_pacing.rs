@@ -68,6 +68,9 @@ pub struct Pacer {
     last_loss: Option<Instant>,
     /// No complete picture was lost yet: the rate grows fourfold instead of twofold.
     untroubled: bool,
+    /// The delay on the line is low (`video_rate`: no queue): a lost picture is then loss on the
+    /// way (random, or a burst), not a line that is too full, and must not cut the ceiling.
+    line_clean: bool,
     /// Lab statistics: complete pictures counted as lost.
     pub losses: u32,
 }
@@ -85,8 +88,13 @@ impl Pacer {
             latest_complete: None,
             last_loss: None,
             untroubled: true,
+            line_clean: false,
             losses: 0,
         }
+    }
+    /// The line holds no queue at the moment (the delay is low): see `line_clean`.
+    pub fn set_line_clean(&mut self, clean: bool) {
+        self.line_clean = clean;
     }
     /// Bytes a second at the moment.
     pub fn rate(&self) -> f64 {
@@ -150,6 +158,11 @@ impl Pacer {
         self.last_loss = Some(now);
         self.untroubled = false;
         self.losses += 1;
+        if self.line_clean {
+            // No queue: the picture was hit by loss on the way. Step back a little, the ceiling stays.
+            self.rate = (self.rate * 0.7).max(MIN_RATE);
+            return;
+        }
         self.ceiling = (self.rate * 0.75).max(MIN_RATE);
         self.rate = (self.rate / 3.0).max(MIN_RATE);
     }
@@ -472,5 +485,193 @@ mod tests {
         assert_eq!(pacer.rate(), MIN_RATE);
         pacer.set_cap(MAX_RATE);
         assert_eq!(pacer.rate(), START_RATE, "lifting the cap does not raise the pace by itself");
+    }
+
+    #[test]
+    fn a_lost_picture_on_a_line_without_queue_keeps_the_ceiling() {
+        let mut now = Instant::now();
+        let mut pacer = Pacer::new(now);
+        pacer.set_line_clean(true);
+        for _ in 0..12 {
+            send(&mut pacer, &mut now, 120_000, true);
+            now += Duration::from_secs(1);
+            pacer.complete_picture_requested(now);
+            // a sound picture follows and counts as arrived
+            send(&mut pacer, &mut now, 30_000, true);
+            now += Duration::from_secs(3);
+            pacer.begin(now, 1_000);
+        }
+        let (rate, ceiling) = pacer.own_rate();
+        assert_eq!(ceiling, MAX_RATE, "twelve random losses do not lower the ceiling");
+        assert!(rate > 3.0 * MIN_RATE, "and the pace is back up: {rate}");
+        pacer.set_line_clean(false);
+        send(&mut pacer, &mut now, 120_000, true);
+        now += Duration::from_secs(1);
+        pacer.complete_picture_requested(now);
+        assert!(pacer.own_rate().1 < MAX_RATE, "a loss with a queue still cuts the ceiling");
+    }
+
+    /// The whole chain on a simulated long line (500 kB/s, 140 ms each way +- 20, 1 % random loss, FIFO
+    /// queue of `queue_bytes`): delay controller + pacer + encoder bit-rate steps. A picture is sent when
+    /// the one before has left and the controller does not hold things back; the encoder aims at
+    /// `encoder_bitrate`; a new encoder (bit-rate step) and a lost complete picture each cost a
+    /// complete picture of 40 kB. Any lost packet of a complete picture loses it (no repair: worst case).
+    /// Returns (pictures per second, delivered kB/s, encoder restarts, pacer losses, final ceiling),
+    /// measured over the last 240 s of 300.
+    fn chain(line_clean_rule: bool, queue_bytes: f64, encode_ms: f64) -> (f64, f64, u32, u32, f64) {
+        use crate::video_rate::{RateControl, Receiver, QUEUE_LOW};
+        let t0 = Instant::now();
+        let mut rng = 0x9E37_79B9_7F4A_7C15u64;
+        let mut rand = move || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            (rng >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let (line_rate, latency, jitter, loss) = (500_000.0f64, 0.140, 0.020, 0.01);
+        let size = (1920usize, 1080usize);
+        let mut pacer = Pacer::new(t0);
+        let mut control = RateControl::new(t0);
+        let mut receiver = Receiver::new(t0);
+        receiver.clocked(true);
+        let mut bitrate = crate::remote_peer::encoder_bitrate(size, pacer.rate());
+        let mut bitrate_set = 0.0f64;
+        let (mut now, mut free_at, mut seq) = (0.0f64, 0.0f64, 0u16);
+        // packets in flight: (arrives, seq, bytes, picture id or none)
+        let mut arrivals: Vec<(f64, u16, usize)> = Vec::new();
+        let mut seen = 0;
+        let mut reports: Vec<(f64, crate::video_rate::Report)> = Vec::new();
+        let mut next_report = 0.2f64;
+        // the picture being sent: (packets left, bytes, complete, lost packets, picture's last seq)
+        let mut current: Option<(Vec<usize>, bool, bool)> = None;
+        let mut pending_keyframe = true;
+        let mut busy_until = 0.0f64;
+        let mut last_arrival = 0.0f64;
+        let mut started_n = 0u32;
+        let mut pictures_at: Vec<f64> = Vec::new();
+        let mut last_of_picture: std::collections::HashMap<u16, (bool, bool)> = std::collections::HashMap::new();
+        let (mut delivered, mut restarts) = (0usize, 0u32);
+        let mut requests: Vec<f64> = Vec::new();
+        while now < 300.0 {
+            let instant = t0 + Duration::from_secs_f64(now);
+            control.tick(instant);
+            pacer.set_cap(control.limit());
+            if line_clean_rule {
+                pacer.set_line_clean(control.clocked() && control.queue_delay() < QUEUE_LOW);
+            }
+            requests.retain(|at| {
+                if *at <= now {
+                    pacer.complete_picture_requested(instant);
+                    pending_keyframe = true;
+                    false
+                } else {
+                    true
+                }
+            });
+            // a new picture: the encoder takes `encode_ms` (CPU) and the picture goes when the last one left
+            if current.is_none() && now >= busy_until && !control.backlogged(instant) {
+                if now - bitrate_set >= 4.0 {
+                    let wanted = crate::remote_peer::next_bitrate(bitrate, crate::remote_peer::encoder_bitrate(size, pacer.rate()));
+                    if wanted != bitrate {
+                        bitrate = wanted;
+                        restarts += 1;
+                        pending_keyframe = true;
+                    }
+                    bitrate_set = now;
+                }
+                let complete = std::mem::take(&mut pending_keyframe);
+                let bytes = if complete { 40_000 } else { (f64::from(bitrate) / 8.0 / 30.0) as usize };
+                let mut packets = Vec::new();
+                let mut left = bytes;
+                while left > 0 {
+                    packets.push(left.min(PACKET));
+                    left -= left.min(PACKET);
+                }
+                pacer.begin(instant, bytes);
+                busy_until = now + (encode_ms / 1000.0).max(1.0 / 30.0);
+                started_n += 1;
+                current = Some((packets, complete, false));
+            }
+            if let Some((packets, complete, lost)) = &mut current {
+                while let Some(first) = packets.first().copied() {
+                    if pacer.take(instant, first).is_err() {
+                        break;
+                    }
+                    packets.remove(0);
+                    control.sent(instant, seq, first);
+                    let dropped = rand() < loss;
+                    let start = free_at.max(now);
+                    let queued = (start - now) * line_rate;
+                    if dropped || queued > queue_bytes {
+                        *lost |= dropped;
+                    } else {
+                        free_at = start + first as f64 / line_rate;
+                        let at = (free_at + latency + jitter * rand()).max(last_arrival);
+                        last_arrival = at;
+                        arrivals.push((at, seq, first));
+                    }
+                    if packets.is_empty() {
+                        last_of_picture.insert(seq, (*complete, *lost));
+                    }
+                    seq = seq.wrapping_add(1);
+                }
+                if packets.is_empty() {
+                    let (complete, lost) = (*complete, *lost);
+                    pacer.finished(instant, complete);
+                    // The technician asks for a complete picture after a round trip and some waiting: when
+                    // a complete one lost a packet, or a repair of an ordinary one failed (1 in 20).
+                    if (complete && lost) || (lost && rand() < 0.05) {
+                        requests.push(now + 0.9);
+                    }
+                    current = None;
+                }
+            }
+            arrivals.sort_by(|a, b| a.0.total_cmp(&b.0));
+            while seen < arrivals.len() && arrivals[seen].0 <= now {
+                let (at, s, size) = arrivals[seen];
+                receiver.packet(t0 + Duration::from_secs_f64(at), s, size);
+                if at > 60.0 {
+                    delivered += size;
+                }
+                if let Some((complete, lost)) = last_of_picture.remove(&s)
+                    && (!lost || !complete)
+                    && at > 60.0
+                {
+                    pictures_at.push(at);
+                }
+                seen += 1;
+            }
+            if now >= next_report {
+                if let Some(report) = receiver.due(t0 + Duration::from_secs_f64(now)) {
+                    reports.push((now + latency + jitter * rand(), report));
+                }
+                next_report += 0.2;
+            }
+            while reports.first().is_some_and(|(at, _)| *at <= now) {
+                let (at, report) = reports.remove(0);
+                control.report(t0 + Duration::from_secs_f64(at), report);
+            }
+            now += 0.01;
+        }
+        eprintln!("  (started {started_n} pictures) end: limit {:.0} kB/s queue {:?} delivered est {:.0}", control.limit() / 1000.0, control.queue_delay(), control.delivered() / 1000.0);
+        (pictures_at.len() as f64 / 240.0, delivered as f64 / 240.0 / 1000.0, restarts, pacer.losses, pacer.own_rate().1)
+    }
+
+    #[test]
+    fn the_whole_chain_on_a_long_lossy_line() {
+        let deep = 1000.0 * 1500.0;
+        let shallow = 60.0 * 1500.0;
+        let old_deep = chain(false, deep, 0.0);
+        let new_deep = chain(true, deep, 0.0);
+        let new_shallow = chain(true, shallow, 0.0);
+        let new_slow_cpu = chain(true, deep, 200.0);
+        eprintln!("CHAIN old pacer deep:    {old_deep:?}");
+        eprintln!("CHAIN new pacer deep:    {new_deep:?}");
+        eprintln!("CHAIN new pacer shallow: {new_shallow:?}");
+        eprintln!("CHAIN new, 200 ms encode:{new_slow_cpu:?}");
+        assert!(new_deep.1 > old_deep.1 * 4.0 && new_deep.1 > 350.0, "delivered: {} vs {}", new_deep.1, old_deep.1);
+        assert!(new_shallow.1 > 350.0, "shallow queue: {}", new_shallow.1);
+        assert!(new_slow_cpu.0 < 8.0, "a host that needs 200 ms a picture cannot show more than 5 a second");
+        assert!(new_deep.0 >= 18.0, "pictures per second {}", new_deep.0);
     }
 }

@@ -1432,15 +1432,20 @@ struct EncodeReply {
 /// for complete pictures and repeats), at most the full rate for the picture size. On a slow or
 /// lossy line the encoder used to aim at 3 to 6 Mbit/s whatever the line carried, so the pace held
 /// big pictures back and the technician saw a few a second; smaller pictures come more often.
-fn encoder_bitrate(size: (usize, usize), pace_bytes_per_second: f64) -> u32 {
+pub(crate) fn encoder_bitrate(size: (usize, usize), pace_bytes_per_second: f64) -> u32 {
     let ceiling: u32 = if size.0 > 1280 || size.1 > 720 { 6_000_000 } else { 3_000_000 };
     let carried = (pace_bytes_per_second * 8.0 * 0.6).clamp(0.0, f64::from(ceiling)) as u32;
-    carried.clamp(ENCODER_MIN_BITRATE.min(ceiling), ceiling)
+    // Steps of 1.5x instead of every value: the encoder cannot change its bit rate while it runs
+    // (a new encoder, a complete picture each time), so small moves in the pace must not restart it.
+    let rung = ENCODER_LADDER.iter().copied().filter(|rung| *rung <= carried).max().unwrap_or(ENCODER_MIN_BITRATE);
+    if carried >= ceiling { ceiling } else { rung.clamp(ENCODER_MIN_BITRATE.min(ceiling), ceiling) }
 }
+/// The bit rates the encoder is set to (bit/s), 1.5x apart.
+const ENCODER_LADDER: [u32; 7] = [400_000, 600_000, 900_000, 1_350_000, 2_000_000, 3_000_000, 4_500_000];
 /// The encoder's next bit rate: down at once when the pace fell to less than two thirds of it, up
 /// by half at most when the pace allows 40 % more (the pace rises fast after a few complete
 /// pictures arrived, faster than a slow line can follow), otherwise unchanged.
-fn next_bitrate(current: u32, wanted: u32) -> u32 {
+pub(crate) fn next_bitrate(current: u32, wanted: u32) -> u32 {
     if u64::from(wanted) * 3 < u64::from(current) * 2 {
         wanted
     } else if u64::from(wanted) * 10 >= u64::from(current) * 14 {
@@ -1463,7 +1468,8 @@ mod bitrate_tests {
         let full_hd = (1920, 1080);
         assert_eq!(encoder_bitrate(full_hd, 12_000_000.0), 6_000_000, "a fast line: full rate");
         assert_eq!(encoder_bitrate((1280, 720), 12_000_000.0), 3_000_000);
-        assert_eq!(encoder_bitrate(full_hd, 500_000.0), 2_400_000, "the start pace (4 Mbit/s)");
+        assert_eq!(encoder_bitrate(full_hd, 500_000.0), 2_000_000, "the start pace (4 Mbit/s): the rung below 2.4 Mbit/s");
+        assert_eq!(encoder_bitrate(full_hd, 400_000.0), 1_350_000, "steps of 1.5x, so a small move in the pace does not restart the encoder");
         assert_eq!(encoder_bitrate(full_hd, 125_000.0), 600_000, "the slowest pace (1 Mbit/s)");
         assert_eq!(encoder_bitrate(full_hd, 10_000.0), ENCODER_MIN_BITRATE);
     }
@@ -1706,6 +1712,7 @@ async fn host_media(
             }
             rate.tick(Instant::now());
             pacer.set_cap(rate.limit());
+            pacer.set_line_clean(rate.clocked() && rate.queue_delay() < crate::video_rate::QUEUE_LOW);
             #[cfg(feature = "qa-session")]
             if qa_rate_logged.elapsed() >= Duration::from_secs(5) {
                 eprintln!("QA line limit {:.0} kB/s, in flight {} kB, base delay {} ms, queue {} ms, pace {:.0} kB/s | delivered {:.0} kB/s, max queue {} ms, cuts {} (soft steps {}), pacer own {:.0} kB/s ceiling {:.0} kB/s losses {}, keyframe requests {}, pictures {}, skipped loops {}", rate.limit() / 1000.0, rate.in_flight() / 1000, rate.base_delay().as_millis(), rate.queue_delay().as_millis(), pacer.rate() / 1000.0, rate.delivered() / 1000.0, rate.max_queue.as_millis(), rate.cuts, rate.softs, pacer.own_rate().0 / 1000.0, pacer.own_rate().1 / 1000.0, pacer.losses, qa_kf, sent, qa_skip);

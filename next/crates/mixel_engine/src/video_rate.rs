@@ -197,6 +197,10 @@ impl RateControl {
         }
     }
     /// What the line carries at the moment, bytes a second.
+    /// The reports carry the technician's clock (`vrate2`): the queue signal is a one-way delay.
+    pub fn clocked(&self) -> bool {
+        self.clocked
+    }
     pub fn limit(&self) -> f64 {
         self.limit
     }

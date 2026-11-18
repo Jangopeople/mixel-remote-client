@@ -26,6 +26,9 @@ DISPLAY=:$D xsetroot -solid "#2a6f97" 2>/dev/null
 if [ "${MOTION:-0}" = 2 ]; then
   # a real moving 1080p60 picture (ffmpeg testsrc2 in an ffplay window): the engine's own rate shows, not the source's
   (while [ ! -e $P/stop ]; do DISPLAY=:$D ffplay -loglevel quiet -noborder -x 1920 -y 1080 -left 0 -top 0 -window_title lab-$RUN -f lavfi -i "testsrc2=size=1920x1080:rate=60" >/dev/null 2>&1; sleep 1; done) &
+elif [ "${MOTION:-0}" = 3 ]; then
+  # lighter: a moving 720p30 window on an otherwise still 1080p desktop (what the controller does when CPU is not the limit)
+  (while [ ! -e $P/stop ]; do DISPLAY=:$D ffplay -loglevel quiet -noborder -x 1280 -y 720 -left 300 -top 200 -window_title lab-$RUN -f lavfi -i "testsrc2=size=1280x720:rate=30" >/dev/null 2>&1; sleep 1; done) &
 elif [ "${MOTION:-0}" = 1 ]; then
   (while [ ! -e $P/stop ]; do for c in "#2a6f97" "#97592a" "#2a9751" "#7a2a97" "#97912a"; do DISPLAY=:$D xsetroot -solid "$c" 2>/dev/null; sleep 0.12; done; done) &
 else
