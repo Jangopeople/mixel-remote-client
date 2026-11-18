@@ -837,7 +837,11 @@ public sealed class SessionModel : Observable
 
     // ---- Recording ----
 
-    public string RecordingText => Remote.Recording?.Phase switch
+    /// <summary>The recording notice, plus (when a picture size change split it) where the files are: name, then name-part2, ...</summary>
+    public string RecordingText => RecordingPhaseText + (Remote.RecordingParts.Count > 1 && RecordingPhaseText.Length > 0
+        ? "\n" + string.Format(System.Globalization.CultureInfo.InvariantCulture, L("The recording is in {0} files: name, then name-part2, ..."), Remote.RecordingParts.Count) : "");
+
+    private string RecordingPhaseText => Remote.Recording?.Phase switch
     {
         "waiting_for_video" => L("Waiting for a complete video frame…"),
         "recording" => L("Recording video"),

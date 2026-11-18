@@ -65,6 +65,8 @@ public sealed record RemoteStatus
     public bool Files { get; init; }
     public bool RecordingPermitted { get; init; }
     public RecordingView? Recording { get; init; }
+    /// <summary>Files of the running or last recording, in order (more than one after a size change).</summary>
+    public IReadOnlyList<string> RecordingParts { get; init; } = [];
     public RecordingView? PreviousRecording { get; init; }
     public bool InputAccess { get; init; } = true;
     public bool UnattendedEnabled { get; init; }
@@ -131,7 +133,7 @@ public sealed record RemoteStatus
             {
                 Id = Session ?? "", Session = Session, Peer = peer, Device = peer, Phase = Phase, Message = Message, Consent = Consent,
                 Received = Received, Control = Control, Clipboard = Clipboard, Files = Files, RecordingPermitted = RecordingPermitted,
-                Recording = Recording, Displays = Displays, Display = Display, DisplayAll = DisplayAll, PrintJobs = PrintJobs,
+                Recording = Recording, RecordingParts = RecordingParts, Displays = Displays, Display = Display, DisplayAll = DisplayAll, PrintJobs = PrintJobs,
                 HostActions = HostActions, SigninId = SigninId, HostMacs = HostMacs, MeetingOffer = MeetingOffer, PeerFeatures = PeerFeatures,
                 JoinedSession = JoinedSession, Switched = Switched, PasswordSession = PasswordSession, UnattendedSession = UnattendedSession, UnattendedRefused = UnattendedRefused,
             },
@@ -177,6 +179,7 @@ public sealed record SessionStatus
     public bool Files { get; init; }
     public bool RecordingPermitted { get; init; }
     public RecordingView? Recording { get; init; }
+    public IReadOnlyList<string> RecordingParts { get; init; } = [];
     public ushort Displays { get; init; }
     public ushort Display { get; init; }
     public bool DisplayAll { get; init; }
@@ -214,7 +217,7 @@ public sealed record SessionStatus
     {
         Phase = Phase, Message = Message, Session = Id.Length == 0 ? Session : Id, Consent = Consent, Peer = Peer, Sharing = false,
         Received = Received, Control = Control, Clipboard = Clipboard, Files = Files, RecordingPermitted = RecordingPermitted,
-        Recording = Recording, Displays = Displays, Display = Display, DisplayAll = DisplayAll, PrintJobs = PrintJobs,
+        Recording = Recording, RecordingParts = RecordingParts, Displays = Displays, Display = Display, DisplayAll = DisplayAll, PrintJobs = PrintJobs,
         HostActions = HostActions, SigninId = SigninId, HostMacs = HostMacs, MeetingOffer = MeetingOffer, PeerFeatures = PeerFeatures,
         JoinedSession = JoinedSession, Switched = Switched,
         // The engine reports these per session: the top-level values (one session) belong to an older engine only.

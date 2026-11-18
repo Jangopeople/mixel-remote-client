@@ -787,6 +787,21 @@ public sealed class ViewModelTests
     }
 
     [TestMethod]
+    public async Task A_recording_split_into_parts_says_so()
+    {
+        var engine = new MockEngine();
+        DemoFixtures.Viewing(engine);
+        var app = await DemoFixtures.App(engine);
+        engine.ReplyValue("remote_status", new RemoteStatus { Phase = "active", Host = DemoFixtures.ThisComputer, Session = DemoFixtures.SessionId, Recording = new RecordingView { Phase = "recording" }, RecordingParts = ["a.mp4"] });
+        await app.RefreshRemote();
+        Assert.IsFalse(app.Session.RecordingText.Contains("files"), app.Session.RecordingText);
+        engine.ReplyValue("remote_status", new RemoteStatus { Phase = "active", Host = DemoFixtures.ThisComputer, Session = DemoFixtures.SessionId, Recording = new RecordingView { Phase = "recording" }, RecordingParts = ["a.mp4", "a-part2.mp4"] });
+        await app.RefreshRemote();
+        StringAssert.Contains(app.Session.RecordingText, "The recording is in 2 files");
+        app.Session.Clear();
+    }
+
+    [TestMethod]
     public void A_packed_bgra_picture_is_copied_without_per_pixel_work()
     {
         var frame = VideoFrame.Decode(VideoFrame.Sample(16, 8, 1))!;

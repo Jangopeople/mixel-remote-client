@@ -56,6 +56,9 @@ internal static class LabHook
                 if (parts[1] == "push") { Shell.Clipboard.Copy(parts.Length > 2 ? parts[2] : "lab"); }
                 await session.Clipboard(parts[1] == "push");
                 return session.ClipboardResult;
+            case "record":
+                if (parts[1] == "stop") await session.StopRecording(); else await session.StartRecording(line[13..]);
+                return "record " + parts[1] + " phase=" + session.Remote.Recording?.Phase + " parts=" + string.Join("|", session.Remote.RecordingParts) + " error=" + session.Error;
             case "sendfile": await session.SendFile(line[9..]); return "error=" + session.Error;
             case "accept":
                 await session.ReadTools();

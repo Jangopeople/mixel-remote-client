@@ -137,11 +137,11 @@ impl RecordingHub {
         // part when the picture size changes); a finished one is dropped from the list as before.
         let mut carried = None;
         for before in entry.iter_mut().filter(|grant| grant.session == session) {
-            if let Some(job) = before.job.take() {
-                if job.output.is_some() {
-                    job.awaiting_key.store(true, Ordering::Release);
-                    carried = Some(job);
-                }
+            if let Some(job) = before.job.take()
+                && job.output.is_some()
+            {
+                job.awaiting_key.store(true, Ordering::Release);
+                carried = Some(job);
             }
         }
         entry.retain(|grant| grant.session != session);
