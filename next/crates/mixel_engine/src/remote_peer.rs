@@ -578,6 +578,10 @@ fn verify_peer(
     hello: Option<Hello>,
     observed: [u8; 32],
 ) -> Result<core_protocol::crypto::ControlChannel, String> {
+    // Lab only (qa-session builds): the certificate seen on the wire is replaced, to prove live that a peer whose
+    // certificate does not match its signed identity gets no picture.
+    #[cfg(feature = "qa-session")]
+    let observed = if std::env::var_os("MIXEL_QA_WRONG_FINGERPRINT").is_some() { [0xA5; 32] } else { observed };
     let control = handshake
         .ok_or("Local identity proof is unavailable")?
         .finish(&hello.ok_or("Remote identity proof is unavailable")?, observed)
