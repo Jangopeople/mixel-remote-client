@@ -534,6 +534,7 @@ mod tests {
     }
 
     /// The whole chain with lab knobs: returns (the usual tuple, median and p10 pictures a second, cuts, key requests).
+    #[allow(clippy::type_complexity)]
     fn chain_tuned(line_clean_rule: bool, queue_bytes: f64, encode_ms: f64, key_bytes: usize, netem_limit: usize, knobs: &str) -> ((f64, f64, u32, u32, f64), f64, f64, u32, usize) {
         use crate::video_rate::{RateControl, Receiver, QUEUE_LOW};
         let t0 = Instant::now();
