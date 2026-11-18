@@ -469,8 +469,9 @@ pub enum Command {
     },
     Pairing(Option<Uuid>),
     Presence(Vec<u32>),
-    /// Technician: the Devices list is shown (a device is online or selected): keep a transport ready.
-    Warm,
+    /// Technician: keep a transport ready. `true` = asked by the app (`remote_prewarm`): from then on the app decides and
+    /// the presence answers no longer start one; `false` = started by a presence answer with an online device.
+    Warm(bool),
     /// Technician: the Devices list was left or the app is idle: release the ready transport.
     Unwarm,
     Agent {
@@ -1344,7 +1345,7 @@ impl RemoteSession {
         }
         match inner.commands.as_ref() {
             Some(commands) => {
-                let _ = commands.try_send(Command::Warm);
+                let _ = commands.try_send(Command::Warm(true));
                 Ok(())
             }
             None => Ok(()),
@@ -3449,6 +3450,7 @@ async fn run(
         let mut prewarm_ok=false;
         let mut warm:Option<remote_peer::Warm>=None;
         let mut warm_asked:Option<std::time::Instant>=None;
+        let mut warm_managed=false;
         let mut pending_warm:Option<remote_peer::Warm>=None;
         // The questions asked in the last 10 minutes: the connection service allows 8, an answer "busy" would be taken for the answer to a request.
         let mut warm_log:std::collections::VecDeque<std::time::Instant>=std::collections::VecDeque::new();
@@ -3658,17 +3660,19 @@ async fn run(
                     Command::ConfigureUnattended{enabled}=>{
                         send(&mut socket,ClientMessage::ConfigureUnattended{enabled}).await?;
                     },
-                    Command::Warm=>{
+                    Command::Warm(by_app)=>{
+                        // Once an app has asked, it decides (an app that leaves the Devices list must not be re-armed by a presence answer).
+                        if by_app{warm_managed=true;}
                         // Refreshed before it runs out; one question in flight; only technician apps that are not being helped.
                         if let Some(ready)=&warm && ready.age()>=Duration::from_secs(90){warm=None;}
-                        if prewarm_ok && std::env::var_os("MIXEL_NO_PREWARM").is_none() && warm.is_none() && pending_warm.is_none() && peer.is_none() && warm_asked.is_none_or(|at|at.elapsed()>Duration::from_secs(12)) && outgoing.is_empty() && ctrl.len()<crate::remote_sessions::MAX_SESSIONS && {while warm_log.front().is_some_and(|at|at.elapsed()>Duration::from_secs(600)){warm_log.pop_front();}warm_log.len()<6}{
+                        if (by_app||!warm_managed) && prewarm_ok && std::env::var_os("MIXEL_NO_PREWARM").is_none() && warm.is_none() && pending_warm.is_none() && peer.is_none() && warm_asked.is_none_or(|at|at.elapsed()>Duration::from_secs(12)) && outgoing.is_empty() && ctrl.len()<crate::remote_sessions::MAX_SESSIONS && {while warm_log.front().is_some_and(|at|at.elapsed()>Duration::from_secs(600)){warm_log.pop_front();}warm_log.len()<6}{
                             warm_log.push_back(std::time::Instant::now());
                             crate::qa_timeline::mark("ready transport asked for (relay lease without a session)");
                             send(&mut socket,ClientMessage::Ice{session:Uuid::nil()}).await?;
                             warm_asked=Some(std::time::Instant::now());
                         }
                     },
-                    Command::Unwarm=>{warm=None;warm_asked=None;},
+                    Command::Unwarm=>{warm_managed=true;warm=None;warm_asked=None;},
                     Command::Presence(hosts)=>{
                         if presence_asked.len()>=16{presence_asked.pop_front();}
                         presence_asked.push_back(hosts.clone());
@@ -3943,7 +3947,7 @@ async fn run(
                             // Several parts of the window ask about different devices: keep what the others learned.
                             let asked=presence_asked.pop_front().unwrap_or_default();
                             // A device is online while the Devices list is asking: keep a transport ready for the Connect.
-                            if !online.is_empty(){let _=tx.try_send(Command::Warm);}
+                            if !online.is_empty(){let _=tx.try_send(Command::Warm(false));}
                             state.change(generation,|status|{
                                 status.online.retain(|id|!asked.contains(id) && !online.contains(id));
                                 status.online.extend(online);
@@ -4182,7 +4186,7 @@ async fn run(
                             }
                         },
                         ServerMessage::Ice{session,lease} if session.is_nil()=>{
-                            warm_asked=None;
+                            let still_wanted=warm_asked.take().is_some();
                             let now=SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_|"System clock is unavailable")?.as_secs();
                             if lease.expires_at<=now || lease.expires_at>now.saturating_add(3600) || lease.expires_at>authorized_until || lease.servers.len()>8{return Err("Relay configuration has invalid bounds or expiry".into());}
                             let mut ice_servers=Vec::new();
@@ -4191,7 +4195,7 @@ async fn run(
                                 ice_servers.push(core_protocol::transport::NativeIceServer{urls:server.urls.clone(),username:server.username.clone(),credential:server.credential.clone()});
                             }
                             // The person may have left the Devices list while the lease was on its way: then it is not used.
-                            if prewarm_ok && peer.is_none() && !cancel.load(Ordering::Acquire) && warm_asked.is_some(){
+                            if prewarm_ok && peer.is_none() && !cancel.load(Ordering::Acquire) && still_wanted{
                                 warm=remote_peer::start_warm(state,&cancel,ice_servers,service.relay_only,lease).ok();
                             }
                         },
