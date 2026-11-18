@@ -2394,6 +2394,13 @@ impl RemoteSession {
         }
     }
 }
+/// What a renewal replaced, kept until the renewed transport has taken over.
+struct Fallback {
+    id: Uuid,
+    link: remote_peer::TransportLink,
+    signals: Option<mpsc::Sender<Signal>>,
+    relay_expires: u64,
+}
 struct Peer {
     /// The connection service's ID of the current transport.
     id: Uuid,
@@ -2404,6 +2411,9 @@ struct Peer {
     link: remote_peer::TransportLink,
     /// A renewal under way: the transport before, which keeps sharing until the new one takes over.
     handover: Option<remote_peer::TransportLink>,
+    /// The transport before a renewal that has not taken over yet: if the renewed transport fails first, the
+    /// session goes back to this one (see `Peer::renewal_failed`).
+    fallback: Option<Fallback>,
     remote: u32,
     host: bool,
     key: ed25519_dalek::VerifyingKey,
@@ -2661,6 +2671,9 @@ impl Peer {
     fn begin_renewal(&mut self, session: Uuid) {
         let before = std::mem::take(&mut self.link);
         before.superseded.store(true, Ordering::Release);
+        if self.fallback.is_none() {
+            self.fallback = Some(Fallback { id: self.id, link: before.clone(), signals: self.signals.clone(), relay_expires: self.relay_expires });
+        }
         // A renewal whose transport never started: the one sharing stays the one before.
         if self.handover.is_none() {
             self.handover = Some(before);
@@ -2680,6 +2693,35 @@ impl Peer {
     /// negotiates (its picture, tools and input go on over the transport before).
     fn renewing(&self) -> bool {
         self.handover.is_some()
+    }
+    /// The renewed transport failed (or was closed) before it took over while the transport before still carries
+    /// the session: the session goes back to the one before, the failed attempt is dropped, and the renewal is
+    /// asked for again by the retry logic (after `RENEWAL_RETRY`, up to `RENEWAL_TRIES`, then the pause).
+    /// Returns the failed transport's id; `None` when there is nothing to go back to (the session ends).
+    fn renewal_failed(&mut self) -> Option<Uuid> {
+        let before = self.fallback.take()?;
+        if before.link.released.load(Ordering::Acquire) {
+            return None;
+        }
+        let failed = self.id;
+        std::mem::replace(&mut self.link, before.link).retire();
+        self.link.superseded.store(false, Ordering::Release);
+        self.id = before.id;
+        self.signals = before.signals;
+        self.relay_expires = before.relay_expires;
+        self.handover = None;
+        self.early.clear();
+        self.nonce = None;
+        self.close_sent = false;
+        self.restart_pending = Some(std::time::Instant::now());
+        self.restart_tries = 1;
+        Some(failed)
+    }
+    /// The transport before a renewal ended: nothing to go back to any more.
+    fn before_ended(&mut self, ended: Uuid) {
+        if self.fallback.as_ref().is_some_and(|before| before.id == ended) {
+            self.fallback = None;
+        }
     }
     fn take_close(&mut self) -> bool {
         self.cancel.store(true, Ordering::Release);
@@ -2894,6 +2936,24 @@ mod close_tests {
 fn closed_before_it_ran(reason: signaling_server::protocol::CloseReason) -> bool {
     use signaling_server::protocol::CloseReason;
     matches!(reason, CloseReason::Rejected | CloseReason::Requested | CloseReason::Disconnected)
+}
+
+/// A renewed transport (`session`) is the current one of a session that has not ended, and the transport before it
+/// still runs: the session can go back to it.
+fn can_go_back_to_transport_before(peer: &Option<Peer>, ctrl: &[Peer], session: Uuid) -> bool {
+    peer.iter().chain(ctrl.iter()).any(|active| {
+        active.id == session
+            && !active.close_sent
+            && !active.cancel.load(Ordering::Acquire)
+            && active.fallback.as_ref().is_some_and(|before| !before.link.released.load(Ordering::Acquire))
+    })
+}
+/// Goes back to the transport before a failed renewal (`Peer::renewal_failed`); the failed transport's ID, if so.
+fn go_back_to_transport_before(peer: &mut Option<Peer>, ctrl: &mut [Peer], session: Uuid) -> Option<Uuid> {
+    if !can_go_back_to_transport_before(peer, ctrl, session) {
+        return None;
+    }
+    peer.iter_mut().chain(ctrl.iter_mut()).find(|active| active.id == session).and_then(Peer::renewal_failed)
 }
 
 fn media_end_ends_session(current_transport: Uuid, ended_transport: Uuid) -> bool {
@@ -3719,7 +3779,16 @@ async fn run(
                         }
                     },
                     Command::Signal{session,signal}=>{if peer.as_ref().is_some_and(|peer|peer.id==session && !peer.cancel.load(Ordering::Acquire)) || ctrl.iter().any(|peer|peer.id==session && !peer.cancel.load(Ordering::Acquire)) || joined.iter().any(|colleague|colleague.id==session && !colleague.cancel.load(Ordering::Acquire)){send(&mut socket,ClientMessage::Signal{session,payload:signal}).await?;}},
-                    Command::Finished{session,result}=>{if let Some(index)=joined.iter().position(|colleague|colleague.id==session){
+                    Command::Finished{session,result}=>{
+                    // A renewed transport that fails before it took over does not end the session while the one before works.
+                    if let Some(error)=result.as_ref().err() && let Some(failed)=go_back_to_transport_before(&mut peer,&mut ctrl,session){
+                        remember_gone(&mut recent,failed);
+                        eprintln!("QA renewal attempt failed: {error}; the transport before carries on");
+                        send(&mut socket,ClientMessage::Close{session:failed}).await?;
+                        continue;
+                    }
+                    for active in peer.iter_mut().chain(ctrl.iter_mut()){active.before_ended(session);}
+                    if let Some(index)=joined.iter().position(|colleague|colleague.id==session){
                         let mut gone=joined.remove(index);
                         if gone.take_close(){send(&mut socket,ClientMessage::Close{session}).await?;}
                         if let Err(error)=&result{eprintln!("colleague session ended: {error}");}
@@ -3907,7 +3976,7 @@ async fn run(
                                 continue;
                             }
                             let Out{slot,host:remote,key,joined:joined_request,..}=waiting;
-                            let started=Peer{id:session,ui:session,link:Default::default(),handover:None,remote,host:false,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:None,expires:Arc::new(AtomicU64::new(0)),relay_expires:0,restart_pending:None,restart_tries:0,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:joined_request,switched:false,reversed:false};
+                            let started=Peer{id:session,ui:session,link:Default::default(),handover:None,fallback:None,remote,host:false,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:None,expires:Arc::new(AtomicU64::new(0)),relay_expires:0,restart_pending:None,restart_tries:0,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:joined_request,switched:false,reversed:false};
                             if started.track(state,generation,slot).await.is_err() {
                                 // Ended meanwhile: close it at the connection service, the others go on.
                                 remember_gone(&mut recent,session);
@@ -3936,7 +4005,7 @@ async fn run(
                             #[cfg(not(target_os = "linux"))]
                             let Some((key,ticket,source,confirm,primary_control))=checked else {send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;continue;};
                             let expires=Arc::new(AtomicU64::new(ticket.expires_at));
-                            let mut colleague=Peer{id:session,ui:session,link:Default::default(),handover:None,remote:requester_connection,host:true,key,source,#[cfg(target_os = "linux")] portal,confirm,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,restart_tries:0,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:true,switched:false,reversed:false};
+                            let mut colleague=Peer{id:session,ui:session,link:Default::default(),handover:None,fallback:None,remote:requester_connection,host:true,key,source,#[cfg(target_os = "linux")] portal,confirm,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,restart_tries:0,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:true,switched:false,reversed:false};
                             if unattended && !unattended_join_allowed(&state.status().await) {
                                 send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;continue;
                             }
@@ -3965,7 +4034,7 @@ async fn run(
                             let memory=memory.ok_or("Switch state unavailable")?;
                             let pressed=from.by==enrolled.connection_id && switch_pressed.take().is_some_and(|(previous,_)|previous==from.previous);
                             let expires=Arc::new(AtomicU64::new(ticket.expires_at));
-                            peer=Some(Peer{id:session,ui:session,link:Default::default(),handover:None,remote:requester_connection,host:true,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,restart_tries:0,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:false,switched:true,reversed:!memory.reversed});
+                            peer=Some(Peer{id:session,ui:session,link:Default::default(),handover:None,fallback:None,remote:requester_connection,host:true,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,restart_tries:0,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:false,switched:true,reversed:!memory.reversed});
                             peer.as_ref().ok_or("Invitation state unavailable")?.track(state,generation,session).await?;
                             state.change(generation,|status|{status.phase="incoming".into();status.message="The other side asks to switch sides: they would see this screen. Accept or Reject".into();status.peer=Some(requester_connection);status.requester=None;status.sharing=true;status.unattended_session=false;}).await;
                             // Switching back to the computer that was helped restores what its user allowed;
@@ -3986,7 +4055,7 @@ async fn run(
                             switch_pressed=None;
                             let expires=Arc::new(AtomicU64::new(memory.identity.expires_at));
                             let slot=state.slot_begin(generation,host).await?;
-                            ctrl.push(Peer{id:session,ui:session,link:Default::default(),handover:None,remote:host,host:false,key:memory.key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(memory.identity.clone()),expires,relay_expires:0,restart_pending:None,restart_tries:0,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:false,switched:true,reversed:!memory.reversed});
+                            ctrl.push(Peer{id:session,ui:session,link:Default::default(),handover:None,fallback:None,remote:host,host:false,key:memory.key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(memory.identity.clone()),expires,relay_expires:0,restart_pending:None,restart_tries:0,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:false,switched:true,reversed:!memory.reversed});
                             ctrl.last().ok_or("Invitation state unavailable")?.track(state,generation,slot).await?;
                             state.slot_change(generation,slot,|view|{view.phase="outgoing".into();view.message="Switching sides: waiting for the other computer's picture".into();}).await;
                         },
@@ -4035,7 +4104,7 @@ async fn run(
                                 Some(config)
                             }else{None};
                             let expires=Arc::new(AtomicU64::new(ticket.expires_at));
-                            peer=Some(Peer{id:session,ui:session,link:Default::default(),handover:None,remote:requester_connection,host:true,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,restart_tries:0,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:false,switched:false,reversed:false});
+                            peer=Some(Peer{id:session,ui:session,link:Default::default(),handover:None,fallback:None,remote:requester_connection,host:true,key,source:String::new(),#[cfg(target_os = "linux")] portal:None,confirm:false,control:false,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,restart_tries:0,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:None,accepted_at:None,consent_id:Uuid::new_v4(),joined:false,switched:false,reversed:false});
                             peer.as_ref().ok_or("Invitation state unavailable")?.track(state,generation,session).await?;
                             state.change(generation,|status|{status.phase="incoming".into();status.message="Incoming request: choose a source and Accept or Reject".into();status.peer=Some(requester_connection);status.requester=Some(requester);status.sharing=true;status.unattended_session=is_unattended;}).await;
                             if let Some(config)=auto {
@@ -4164,6 +4233,10 @@ async fn run(
                             switch_memory=Some(SwitchMemory{previous:session,remote:ended.remote,key:ended.key,identity:ended.identity.clone().ok_or("Peer identity unavailable")?,grants,reversed:ended.reversed,at:std::time::Instant::now()});
                             if ended.host{state.change(generation,|status|{status.phase="ready".into();status.message="Switching sides".into();status.session=None;status.peer=Some(ended.remote);status.requester=None;}).await;}
                             else{state.slot_end(generation,ended.ui,"Switching sides".into()).await;}
+                        },
+                        ServerMessage::Closed{session,..} if can_go_back_to_transport_before(&peer,&ctrl,session)=>{
+                            // The other side gave up the renewed transport before it took over.
+                            if let Some(failed)=go_back_to_transport_before(&mut peer,&mut ctrl,session){remember_gone(&mut recent,failed);eprintln!("QA renewal attempt closed by the other side; the transport before carries on");}
                         },
                         ServerMessage::Closed{session,reason} if matches!(reason,signaling_server::protocol::CloseReason::Disconnected|signaling_server::protocol::CloseReason::Requested) && ctrl.iter().any(|active|(active.id==session || active.ui==session) && !active.joined && !active.host && !active.close_sent && active.signals.is_some() && close_means_lost(reason,active.link.lost.load(std::sync::atomic::Ordering::Acquire)) && !retries.iter().any(|again|again.host==active.remote) && last_access.get(&active.remote).is_some_and(crate::reconnect::Access::repeatable))=>{
                             // The computer this session views went away: only this session asks again.
@@ -4553,6 +4626,7 @@ mod consent_tests {
             ui: Uuid::from_u128(1),
             link: Default::default(),
             handover: None,
+            fallback: None,
             remote: 123456789,
             host: true,
             key: ed25519_dalek::SigningKey::from_bytes(&[7; 32]).verifying_key(),
@@ -4627,6 +4701,67 @@ mod consent_tests {
         peer.restart_tries = 2;
         peer.begin_renewal(Uuid::from_u128(9));
         assert_eq!(peer.restart_tries, 0);
+    }
+    #[test]
+    fn a_renewal_attempt_that_fails_leaves_the_running_transport_and_the_next_renewal_succeeds() {
+        let mut peer = invitation();
+        peer.host = false;
+        peer.relay_expires = 1_000;
+        let first = peer.id;
+        let running = peer.link.clone();
+        let (signals, _kept) = mpsc::channel(1);
+        peer.signals = Some(signals);
+        let mut ctrl = vec![];
+        // Attempt 1: the renewed transport starts (the service's ID moves on) and fails before it took over.
+        let second = Uuid::from_u128(40);
+        peer.begin_renewal(second);
+        peer.handover = None; // as the media task started: it holds the transport before
+        let attempt = peer.link.clone();
+        assert!(running.superseded.load(Ordering::Acquire));
+        let mut peer = Some(peer);
+        assert!(can_go_back_to_transport_before(&peer, &ctrl, second));
+        assert_eq!(go_back_to_transport_before(&mut peer, &mut ctrl, second), Some(second));
+        let active = peer.as_mut().unwrap();
+        // The session is back on the transport that kept carrying pictures, and is still active.
+        assert_eq!(active.id, first);
+        assert!(Arc::ptr_eq(&active.link.retire, &running.retire));
+        assert!(!running.superseded.load(Ordering::Acquire), "its end ends the session again");
+        assert!(!running.retire.load(Ordering::Acquire), "it was never told to stop");
+        assert!(attempt.retire.load(Ordering::Acquire), "the failed attempt is dropped");
+        assert!(!active.cancel.load(Ordering::Acquire) && !active.close_sent);
+        assert!(active.signals.is_some() && active.relay_expires == 1_000 && active.fallback.is_none());
+        // The existing retry logic asks again after the retry time, then gives up after the tries and pauses.
+        assert_eq!((active.restart_tries, active.restart_pending.is_some()), (1, true));
+        assert_eq!(active.renewal_step(920, true), Renewal::Wait);
+        active.restart_pending = Some(std::time::Instant::now() - Duration::from_secs(7));
+        assert_eq!(active.renewal_step(920, true), Renewal::Retry);
+        // Nothing to go back to a second time, and a failure of the only transport ends the session.
+        assert!(!can_go_back_to_transport_before(&peer, &ctrl, first));
+        // Attempt 2 succeeds: the transport before ends, the new one is the session's.
+        let active = peer.as_mut().unwrap();
+        let third = Uuid::from_u128(41);
+        active.begin_renewal(third);
+        active.handover = None;
+        assert_eq!(active.id, third);
+        assert!(active.fallback.as_ref().is_some_and(|before| before.id == first));
+        active.before_ended(first);
+        assert!(active.fallback.is_none(), "taken over: nothing to go back to");
+        assert!(!can_go_back_to_transport_before(&peer, &ctrl, third));
+        ctrl.clear();
+    }
+    #[test]
+    fn a_renewal_attempt_fails_after_the_transport_before_ended_the_session_ends() {
+        let mut peer = invitation();
+        peer.host = false;
+        let running = peer.link.clone();
+        let second = Uuid::from_u128(42);
+        peer.begin_renewal(second);
+        running.released.store(true, Ordering::Release);
+        let mut peer = Some(peer);
+        let mut ctrl = vec![];
+        assert!(!can_go_back_to_transport_before(&peer, &ctrl, second));
+        assert_eq!(go_back_to_transport_before(&mut peer, &mut ctrl, second), None);
+        assert_eq!(peer.as_ref().unwrap().id, second, "the session ends the usual way");
     }
     #[test]
     fn a_renewal_keeps_the_running_transport_and_the_session_until_the_new_one_takes_over() {
@@ -5504,6 +5639,7 @@ mod per_session_recovery_tests {
             ui: session,
             link: Default::default(),
             handover: None,
+            fallback: None,
             remote,
             host: false,
             key: ed25519_dalek::SigningKey::from_bytes(&[7; 32]).verifying_key(),

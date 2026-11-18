@@ -239,6 +239,11 @@ pub fn start(mut config: Config) -> Result<(), String> {
     let renewal = config.previous.is_some();
     state.spawn_media(&cancel, mirror, slot, renewal, move || own_media(config, None, None))
 }
+/// A renewed transport that fails before it took over (`previous` is still there) does not end the session while
+/// the transport before still runs: the session layer goes back to it and asks for the renewal again.
+fn old_transport_carries_on(config: &Config, failed: bool) -> bool {
+    failed && config.previous.as_ref().is_some_and(|before| !before.released.load(Ordering::Acquire))
+}
 
 /// Everything a transport made ready in advance holds: the transport with its relay allocation, the
 /// control channel and the offer (candidates in it) made from them.
@@ -378,7 +383,7 @@ fn own_media(mut config: Config, runtime: Option<tokio::runtime::Runtime>, parts
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
     );
     // A transport that was replaced ends alone; any other end ends the session.
-    if !config.link.superseded.load(Ordering::Acquire) {
+    if !config.link.superseded.load(Ordering::Acquire) && !old_transport_carries_on(&config, result.is_err()) {
         config.session_cancel.store(true, Ordering::Release);
     }
     config.link.released.store(true, Ordering::Release);
@@ -479,7 +484,7 @@ async fn run(config: &mut Config, parts: Option<WarmParts>) -> Result<(), String
         } else {
             viewer_media(config, &mut consent, &channel, &mut transport, &mut Ctl::with(&mut control), &mut early_track).await
         };
-        if !config.link.superseded.load(Ordering::Acquire) {
+        if !config.link.superseded.load(Ordering::Acquire) && !old_transport_carries_on(config, result.is_err()) {
             config.session_cancel.store(true, Ordering::Release);
         }
         if let Some(chat) = chat {
