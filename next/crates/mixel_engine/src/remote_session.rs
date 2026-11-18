@@ -3786,6 +3786,9 @@ async fn run(
                         // accepted device/account/source and existing grants.
                         // Common Accepted validation below pins fresh tickets.
                         active.begin_renewal(session);
+                        // The host may close the transport before as soon as its side has switched, long before the renewed
+                        // one has its first picture: a running recording waits for the takeover (see RecordingHub).
+                        if !active.host{state.recording_hub().renewal_expected(active.ui,Duration::from_secs(60));}
                         if !active.host{match state.slot_video(active.ui).await{Some(own)=>own.expect_successor(active.ui,session)?,None=>return Err("This session has already closed".into())}}
                         #[cfg(feature = "qa-session")]
                         {QA_RENEWALS.fetch_add(1,Ordering::Relaxed);eprintln!("QA renewal: transport {previous} renewed as {session} at clock {}",crate::remote_control::qa_wall_clock());}
