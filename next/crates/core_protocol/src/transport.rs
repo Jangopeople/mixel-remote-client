@@ -15,6 +15,9 @@ use webrtc::{
     },
 };
 
+/// A video track received from the peer.
+pub type RemoteTrack = Arc<dyn TrackRemote>;
+
 /// How often the technician's side asks again for one lost packet (the stack's default is without
 /// limit: on a link that had just dropped a burst it asked for the same packets every 100 ms).
 const NACKS_PER_PACKET: u16 = 3;

@@ -13,7 +13,7 @@ use core_protocol::{
     session::Session,
     transport::{
         NativeDataChannel, NativeDataChannelEvent, NativeIceCandidate, NativeSessionDescription,
-        NativeTransport, local_fingerprint,
+        NativeTransport, RemoteTrack, local_fingerprint,
     },
 };
 use signaling_server::protocol::Signal;
@@ -306,7 +306,7 @@ async fn run(config: &mut Config) -> Result<(), String> {
     let mut transport = transport.map_err(|_| "Cannot create the native WebRTC transport")?;
     crate::qa_timeline::mark(if strict_relay { "transport created (relay only)" } else { "transport created (direct and relay)" });
     let result = async {
-        let (mut consent, channel, sender, size, limit, mut control) =
+        let (mut consent, channel, sender, size, limit, mut control, mut early_track) =
             negotiate(config, &mut transport).await?;
         let files = if let Some(bulk) = control.bulk.take() {
             Some(
@@ -336,7 +336,7 @@ async fn run(config: &mut Config) -> Result<(), String> {
             )
             .await
         } else {
-            viewer_media(config, &mut consent, &channel, &mut transport, &mut control).await
+            viewer_media(config, &mut consent, &channel, &mut transport, &mut Ctl::with(&mut control), &mut early_track).await
         };
         if !config.link.superseded.load(Ordering::Acquire) {
             config.session_cancel.store(true, Ordering::Release);
@@ -412,7 +412,60 @@ type Negotiated = (
     // The largest stream size the technician's app shows (a display switch scales into it).
     (f64, f64),
     ControlPipe,
+    // The picture track, when the first picture was taken before the control channel opened.
+    Option<RemoteTrack>,
 );
+/// Both sides announce this in the offer/answer when the host may send the first complete picture
+/// as soon as the transport is encrypted and the peer's signed identity matches its certificate,
+/// without waiting for the control channel to open. Switched off by `MIXEL_NO_FASTPIC`.
+const FASTPIC_ATTRIBUTE: &str = "a=x-mixel-fastpic:1";
+fn fastpic_enabled() -> bool {
+    std::env::var_os("MIXEL_NO_FASTPIC").is_none()
+}
+/// The peer's signed identity against the certificate the encrypted transport actually has. Only
+/// a peer that passes this is `authenticated` for the session (pictures are sent to it and shown
+/// from it): a different certificate, a wrong signature or an expired consent fail it.
+fn verify_peer(
+    consent: &mut Session,
+    handshake: Option<Handshake>,
+    hello: Option<Hello>,
+    observed: [u8; 32],
+) -> Result<core_protocol::crypto::ControlChannel, String> {
+    let control = handshake
+        .ok_or("Local identity proof is unavailable")?
+        .finish(&hello.ok_or("Remote identity proof is unavailable")?, observed)
+        .map_err(|_| "Remote identity or certificate verification failed")?;
+    consent
+        .authenticated_transport_ready(&control.verified_session(), Instant::now())
+        .map_err(|error| error.to_string())?;
+    Ok(control)
+}
+/// The peer's control channel as it arrives, if it did: it must be the ordered reliable channel.
+async fn take_control_channel(
+    transport: &mut NativeTransport,
+) -> Result<Option<Arc<dyn NativeDataChannel>>, String> {
+    let Ok(value) = transport.incoming_channels.try_recv() else {
+        return Ok(None);
+    };
+    let valid = tokio::time::timeout(Duration::from_secs(1), async {
+        Ok::<_, core_protocol::transport::TransportError>(
+            value.label().await? == "mixel-control-v1"
+                && value.ordered().await?
+                && value.max_packet_life_time().await?.is_none()
+                && value.max_retransmits().await?.is_none()
+                && value.protocol().await?.is_empty()
+                && !value.negotiated().await?,
+        )
+    })
+    .await
+    .map_err(|_| "Control channel configuration inspection timed out")?
+    .map_err(|_| "Cannot inspect the control channel configuration")?;
+    if !valid {
+        let _ = tokio::time::timeout(Duration::from_secs(2), value.close()).await;
+        return Err("The peer did not provide the expected ordered reliable control channel".into());
+    }
+    Ok(Some(value))
+}
 async fn negotiate(
     config: &mut Config,
     transport: &mut NativeTransport,
@@ -505,6 +558,7 @@ async fn negotiate(
                 .map_err(|_| "Cannot create the encrypted control channel")?,
         )
     };
+    let mut early = false;
     let mut handshake: Option<Handshake> = None;
     let mut hello: Option<Hello> = None;
     let mut remote_description = false;
@@ -534,8 +588,9 @@ async fn negotiate(
         )?;
         config.signal(Signal::Identity(proof.hello())).await?;
         let offer = format!(
-            "{}\r\n{RECORDING_ATTRIBUTE}\r\n{INPUT_RESULT_ATTRIBUTE}\r\n{DISPLAYS_ATTRIBUTE}\r\n{ACTIONS_ATTRIBUTE}\r\n{FEATURES_PREFIX}{own_features}\r\n",
-            offer.sdp.trim_end()
+            "{}\r\n{RECORDING_ATTRIBUTE}\r\n{INPUT_RESULT_ATTRIBUTE}\r\n{DISPLAYS_ATTRIBUTE}\r\n{ACTIONS_ATTRIBUTE}\r\n{FEATURES_PREFIX}{own_features}\r\n{}",
+            offer.sdp.trim_end(),
+            if fastpic_enabled() { format!("{FASTPIC_ATTRIBUTE}\r\n") } else { String::new() }
         );
         config.signal(Signal::Offer(offer)).await?;
         handshake = Some(proof);
@@ -555,30 +610,11 @@ async fn negotiate(
                 .await?;
         }
         if channel.is_none()
-            && let Ok(value) = transport.incoming_channels.try_recv()
+            && let Some(value) = take_control_channel(transport).await?
         {
-            let valid = tokio::time::timeout(Duration::from_secs(1), async {
-                Ok::<_, core_protocol::transport::TransportError>(
-                    value.label().await? == "mixel-control-v1"
-                        && value.ordered().await?
-                        && value.max_packet_life_time().await?.is_none()
-                        && value.max_retransmits().await?.is_none()
-                        && value.protocol().await?.is_empty()
-                        && !value.negotiated().await?,
-                )
-            })
-            .await
-            .map_err(|_| "Control channel configuration inspection timed out")?
-            .map_err(|_| "Cannot inspect the control channel configuration")?;
-            if !valid {
-                let _ = tokio::time::timeout(Duration::from_secs(2), value.close()).await;
-                return Err(
-                    "The peer did not provide the expected ordered reliable control channel".into(),
-                );
-            }
             channel = Some(value);
         }
-        if remote_description && hello.is_some() && channel.is_some() {
+        if remote_description && hello.is_some() && (channel.is_some() || early) {
             break;
         }
         let signal =
@@ -598,6 +634,11 @@ async fn negotiate(
                 peer_supports_recording = sdp.lines().any(|line| line == RECORDING_ATTRIBUTE);
                 peer_supports_input_result = sdp.lines().any(|line| line == INPUT_RESULT_ATTRIBUTE);
                 peer_features = parse_features(&sdp);
+                early = fastpic_enabled()
+                    && config.host
+                    && !config.mirror
+                    && config.previous.is_none()
+                    && sdp.lines().any(|line| line == FASTPIC_ATTRIBUTE);
                 if config.control && sdp.lines().any(|line| line == ACTIONS_ATTRIBUTE) {
                     actions = tokio::task::spawn_blocking(crate::host_actions::available)
                         .await
@@ -684,6 +725,9 @@ async fn negotiate(
                 if !peer_features.is_empty() {
                     answer_sdp = format!("{}\r\n{FEATURES_PREFIX}{own_features}\r\n", answer_sdp.trim_end());
                 }
+                if early {
+                    answer_sdp = format!("{}\r\n{FASTPIC_ATTRIBUTE}\r\n", answer_sdp.trim_end());
+                }
                 config.signal(Signal::Answer(answer_sdp)).await?;
                 handshake = Some(proof);
             }
@@ -696,6 +740,7 @@ async fn negotiate(
                     .filter(|(count, current)| (2..=16).contains(count) && current < count)
                     .unwrap_or((0, 0));
                 peer_features = parse_features(&sdp);
+                early = fastpic_enabled() && config.previous.is_none() && sdp.lines().any(|line| line == FASTPIC_ATTRIBUTE);
                 display_all = display_offer.0 >= 3 && sdp.lines().any(|line| line == DISPLAY_ALL_ATTRIBUTE);
                 actions = sdp
                     .lines()
@@ -741,8 +786,51 @@ async fn negotiate(
             _ => return Err("Unexpected peer negotiation transition".into()),
         }
     }
+    // Fast first picture: both sides agreed. The transport is encrypted (DTLS) before the control
+    // channel is (SCTP and the channel's opening take three more round trips): the peer is checked
+    // against its signed identity at once and the host sends the first complete picture, the
+    // technician shows it; the control channel opens meanwhile and takes over as before.
+    let mut verified: Option<core_protocol::crypto::ControlChannel> = None;
+    let mut early_track: Option<RemoteTrack> = None;
+    let mut opened = false;
+    if early {
+        let observed = loop {
+            if config.stopped() {
+                return Err("Session stopped during transport opening".into());
+            }
+            if Instant::now() >= deadline {
+                return Err("Control transport opening timed out".into());
+            }
+            pump_ice(config, transport).await?;
+            if channel.is_none() {
+                channel = take_control_channel(transport).await?;
+            }
+            if transport.connected()
+                && let Ok(observed) = transport.observed_fingerprint().await
+            {
+                break observed;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        };
+        verified = Some(verify_peer(&mut consent, handshake.take(), hello.take(), observed)?);
+        crate::qa_timeline::mark("peer verified on the encrypted transport (identity and certificate)");
+        if config.host {
+            let full_hd = peer_features.iter().any(|name| name == crate::remote_control::FULL_HD);
+            let early_size = if full_hd { source_size_within(config, (1920.0, 1080.0))? } else { size };
+            let early_sender = sender.as_ref().ok_or("Host video sender unavailable")?;
+            host_early_picture(config, transport, &consent, early_sender, &mut channel, early_size, deadline).await?;
+            opened = true;
+        } else if let Some(shown) = channel.clone() {
+            let mut before = Ctl::before_open();
+            viewer_media(config, &mut consent, &shown, transport, &mut before, &mut early_track).await?;
+            opened = before.opened;
+        }
+    }
     let channel = channel.ok_or("Control transport is unavailable")?;
     loop {
+        if opened {
+            break;
+        }
         if config.stopped() {
             return Err("Session stopped during transport opening".into());
         }
@@ -769,19 +857,16 @@ async fn negotiate(
     if config.stopped() {
         return Err("Session stopped before authentication".into());
     }
-    let control = handshake
-        .ok_or("Local identity proof is unavailable")?
-        .finish(
-            &hello.ok_or("Remote identity proof is unavailable")?,
-            transport
+    let control = match verified {
+        Some(control) => control,
+        None => {
+            let observed = transport
                 .observed_fingerprint()
                 .await
-                .map_err(|_| "The actual remote DTLS certificate is unavailable")?,
-        )
-        .map_err(|_| "Remote identity or certificate verification failed")?;
-    consent
-        .authenticated_transport_ready(&control.verified_session(), Instant::now())
-        .map_err(|error| error.to_string())?;
+                .map_err(|_| "The actual remote DTLS certificate is unavailable")?;
+            verify_peer(&mut consent, handshake.take(), hello.take(), observed)?
+        }
+    };
     let control = ControlPipe::create(
         config,
         control,
@@ -851,7 +936,151 @@ async fn negotiate(
     let full_hd = config.host && peer_features.iter().any(|name| name == crate::remote_control::FULL_HD);
     let limit = if full_hd { (1920.0, 1080.0) } else { (1280.0, 720.0) };
     let size = if full_hd { source_size_within(config, limit)? } else { size };
-    Ok((consent, channel, sender, size, limit, control))
+    Ok((consent, channel, sender, size, limit, control, early_track))
+}
+/// Host, fast first picture: the peer is verified on the encrypted transport, the control channel is
+/// not open yet. Opens the screen, encodes one complete picture and sends it (once more after
+/// 1.5 s if the channel is still not open: a packet lost beyond the stack's repeat requests would
+/// otherwise leave the technician without a picture until the channel opens), then waits for the
+/// channel to open and closes this capture again; the normal picture loop opens its own.
+async fn host_early_picture(
+    config: &mut Config,
+    transport: &mut NativeTransport,
+    consent: &Session,
+    sender: &H264VideoSender,
+    channel: &mut Option<Arc<dyn NativeDataChannel>>,
+    size: (usize, usize),
+    deadline: Instant,
+) -> Result<(), String> {
+    let mut capture = session_platform::capture(
+        &config.source,
+        size,
+        #[cfg(target_os = "linux")]
+        config.portal.clone(),
+    )
+    .ok();
+    crate::qa_timeline::mark("early: screen capture opened");
+    let encoder = if capture.is_some() {
+        start_encoder(size, encoder_bitrate(size, crate::video_pacing::START_RATE)).ok()
+    } else {
+        None
+    };
+    let mut encoding: Option<tokio::sync::oneshot::Receiver<Result<EncodeReply, String>>> = None;
+    let mut picture: Option<Vec<u8>> = None;
+    let (mut sequence, mut sends, mut sent_at) = (0, 0u32, Instant::now());
+    let started = Instant::now();
+    let result = loop {
+        if config.stopped() {
+            break Ok(());
+        }
+        if Instant::now() >= deadline {
+            break Err("Control transport opening timed out".to_owned());
+        }
+        if let Err(error) = pump_ice(config, transport).await {
+            break Err(error);
+        }
+        if channel.is_none() {
+            match take_control_channel(transport).await {
+                Ok(value) => *channel = value,
+                Err(error) => break Err(error),
+            }
+        }
+        if let Some(open) = channel.as_ref() {
+            match tokio::time::timeout(Duration::from_millis(5), open.poll()).await {
+                Ok(Some(NativeDataChannelEvent::OnOpen)) => {
+                    crate::qa_timeline::mark("control channel open (ICE and DTLS done)");
+                    break Ok(());
+                }
+                Ok(None | Some(NativeDataChannelEvent::OnMessage(_) | NativeDataChannelEvent::OnClose | NativeDataChannelEvent::OnError)) => {
+                    break Err("Control transport failed before authentication".to_owned());
+                }
+                _ => {}
+            }
+        } else {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        if picture.is_none() {
+            if let Some(reply) = &mut encoding {
+                match reply.try_recv() {
+                    Ok(Ok(EncodeReply { picture: Some(encoded), .. })) => {
+                        crate::qa_timeline::mark("early: first picture encoded");
+                        encoding = None;
+                        picture = Some(encoded.annex_b.to_vec());
+                    }
+                    Ok(_) | Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                        // Nothing came out (or the encoder stopped): the normal loop makes the picture.
+                        encoding = None;
+                        capture = None;
+                    }
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                }
+            } else if let (Some(grab), Some(encoder)) = (&capture, &encoder) {
+                match session_platform::frames(grab).next(sequence, Duration::from_millis(1)) {
+                    Ok((next, frame)) => {
+                        sequence = next;
+                        let frame = if frame.width() == size.0 && frame.height() == size.1 {
+                            frame
+                        } else {
+                            match fit_frame(&frame, size) {
+                                Ok(fitted) => Arc::new(fitted),
+                                Err(_) => {
+                                    capture = None;
+                                    continue;
+                                }
+                            }
+                        };
+                        let (reply, output) = tokio::sync::oneshot::channel();
+                        if encoder
+                            .try_send(EncodeRequest { frame, timestamp: started.elapsed().as_micros() as u64, keyframe: true, reply })
+                            .is_ok()
+                        {
+                            encoding = Some(output);
+                        } else {
+                            capture = None;
+                        }
+                    }
+                    Err(native_os_capture::stream::CaptureError::Timeout) => {}
+                    Err(_) => capture = None,
+                }
+            }
+        }
+        if let Some(annex_b) = &picture {
+            let due = match sends {
+                0 => true,
+                1 => sent_at.elapsed() >= Duration::from_millis(1500),
+                _ => false,
+            };
+            if due {
+                let packets = match sender.packets(consent, annex_b, Duration::from_millis(33)).await {
+                    Ok(packets) => packets,
+                    Err(error) => break Err(error.to_string()),
+                };
+                if sends == 0 {
+                    crate::qa_timeline::mark(&format!("early: first picture sent ({} packets)", packets.len()));
+                }
+                // About 2.4 Mbit/s: the handshake packets of the control channel go out between them.
+                let mut failed = None;
+                for (index, packet) in packets.into_iter().enumerate() {
+                    if let Err(error) = sender.write(consent, packet).await {
+                        failed = Some(error.to_string());
+                        break;
+                    }
+                    if index % 2 == 1 {
+                        tokio::time::sleep(Duration::from_millis(8)).await;
+                    }
+                }
+                if let Some(error) = failed {
+                    break Err(error);
+                }
+                sends += 1;
+                sent_at = Instant::now();
+            }
+        }
+    };
+    if let Some(mut capture) = capture {
+        let _ = capture.stop();
+    }
+    result
 }
 async fn pump_ice(config: &mut Config, transport: &mut NativeTransport) -> Result<(), String> {
     while let Ok(candidate) = transport.ice_candidates.try_recv() {
@@ -1577,9 +1806,67 @@ async fn mirror_media(
 }
 /// Technician: a renewed transport put its first picture on the screen (or waited long enough):
 /// the transport before stops now, and the recording, if allowed, goes on from this one.
+/// What the technician's picture loop uses of the control channel. Normally the real one; before
+/// the channel is open (fast first picture) there is none: the loop only waits for the opening.
+struct Ctl<'a> {
+    pipe: Option<&'a mut ControlPipe>,
+    /// The channel's opening was seen (only without a pipe).
+    opened: bool,
+}
+impl<'a> Ctl<'a> {
+    fn with(pipe: &'a mut ControlPipe) -> Self {
+        Self { pipe: Some(pipe), opened: false }
+    }
+    fn before_open() -> Self {
+        Self { pipe: None, opened: false }
+    }
+    fn early(&self) -> bool {
+        self.pipe.is_none()
+    }
+    fn recording_allowed(&self) -> bool {
+        self.pipe.as_ref().is_some_and(|pipe| pipe.recording_allowed)
+    }
+    fn video_idle_for(&self) -> Duration {
+        self.pipe.as_ref().map_or(Duration::ZERO, |pipe| pipe.last_video_idle.elapsed())
+    }
+    async fn poll(&mut self, config: &Config, channel: &Arc<dyn NativeDataChannel>) -> Result<(), String> {
+        if let Some(pipe) = &mut self.pipe {
+            return pipe.poll(config, channel).await;
+        }
+        match tokio::time::timeout(Duration::from_millis(5), channel.poll()).await {
+            Ok(Some(NativeDataChannelEvent::OnOpen)) => {
+                crate::qa_timeline::mark("control channel open (ICE and DTLS done)");
+                self.opened = true;
+            }
+            Ok(None | Some(NativeDataChannelEvent::OnMessage(_) | NativeDataChannelEvent::OnClose | NativeDataChannelEvent::OnError)) => {
+                return Err("Control transport failed before authentication".into());
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    async fn send_video_report(&mut self, channel: &Arc<dyn NativeDataChannel>, report: &crate::video_rate::Report) -> Result<(), String> {
+        match &mut self.pipe {
+            Some(pipe) => pipe.send_video_report(channel, report).await,
+            None => Ok(()),
+        }
+    }
+    async fn request_keyframe(&mut self, channel: &Arc<dyn NativeDataChannel>) -> Result<(), String> {
+        match &mut self.pipe {
+            Some(pipe) => pipe.request_keyframe(channel).await,
+            None => Ok(()),
+        }
+    }
+    fn take_sound(&mut self) -> Option<Vec<u8>> {
+        self.pipe.as_mut().and_then(|pipe| pipe.take_sound())
+    }
+    fn take_print_job(&mut self) -> Option<Vec<u8>> {
+        self.pipe.as_mut().and_then(|pipe| pipe.take_print_job())
+    }
+}
 fn hand_over(
     config: &mut Config,
-    control: &ControlPipe,
+    recording_allowed: bool,
     recording: &mut Option<crate::remote_recording::RecordingScope>,
 ) -> Result<(), String> {
     let Some(previous) = config.previous.take() else {
@@ -1589,7 +1876,7 @@ fn hand_over(
     eprintln!("QA renewal: the renewed transport took over the picture at clock {}", crate::remote_control::qa_wall_clock());
     // The recording goes on from this transport: attach BEFORE the one before is told to stop, so its
     // end cannot finish the running recording first.
-    let attached = if control.recording_allowed && recording.is_none() {
+    let attached = if recording_allowed && recording.is_none() {
         config
             .state
             .recording_hub()
@@ -1606,14 +1893,15 @@ async fn viewer_media(
     consent: &mut Session,
     channel: &Arc<dyn NativeDataChannel>,
     transport: &mut NativeTransport,
-    control: &mut ControlPipe,
+    control: &mut Ctl<'_>,
+    track_slot: &mut Option<RemoteTrack>,
 ) -> Result<(), String> {
     // A renewed transport records from the moment it takes over (the one before records until then). The host can
     // close the transport before as soon as its side has switched: that end must not finish a running recording.
-    if control.recording_allowed && config.previous.is_some() {
+    if control.recording_allowed() && config.previous.is_some() {
         config.state.recording_hub().renewal_expected(config.session, PICTURE_HANDOVER + Duration::from_secs(20));
     }
-    let mut recording = (control.recording_allowed && config.previous.is_none())
+    let mut recording = (control.recording_allowed() && config.previous.is_none())
         .then(|| {
             config
                 .state
@@ -1625,25 +1913,33 @@ async fn viewer_media(
     #[cfg(feature = "qa-session")]
     let qa_started = Instant::now();
     let track_deadline = Instant::now() + Duration::from_secs(8);
-    let track = loop {
-        if config.stopped() {
-            return Ok(());
-        }
-        if Instant::now() >= track_deadline {
-            return Err("No remote video track arrived".into());
-        }
-        pump_ice(config, transport).await?;
-        control.poll(config, channel).await?;
-        match tokio::time::timeout(Duration::from_millis(10), transport.incoming_tracks.recv())
-            .await
-        {
-            Ok(Some(track)) => {
-                crate::qa_timeline::mark("video track open");
-                break track;
+    let track = match track_slot.take() {
+        Some(track) => track,
+        None => loop {
+            if config.stopped() {
+                return Ok(());
             }
-            Ok(None) => return Err("Remote video transport closed".into()),
-            Err(_) => {}
-        }
+            // Before the control channel is open (first picture ahead of it) the picture may be
+            // late and the channel's opening ends this loop; otherwise the track must come.
+            if !control.early() && Instant::now() >= track_deadline {
+                return Err("No remote video track arrived".into());
+            }
+            pump_ice(config, transport).await?;
+            control.poll(config, channel).await?;
+            if control.opened {
+                return Ok(());
+            }
+            match tokio::time::timeout(Duration::from_millis(10), transport.incoming_tracks.recv())
+                .await
+            {
+                Ok(Some(track)) => {
+                    crate::qa_timeline::mark("video track open");
+                    break track;
+                }
+                Ok(None) => return Err("Remote video transport closed".into()),
+                Err(_) => {}
+            }
+        },
     };
     #[cfg(feature = "qa-session")]
     let mut qa_shown = (0u32, Instant::now());
@@ -1681,7 +1977,7 @@ async fn viewer_media(
             return Err("Remote-viewing authorization expired".into());
         }
         if config.previous.is_some() && stream_opened.elapsed() >= PICTURE_HANDOVER {
-            hand_over(config, control, &mut recording)?;
+            hand_over(config, control.recording_allowed(), &mut recording)?;
         }
         // Lab builds only: a part of this loop that took long (input and its confirmations wait meanwhile).
         #[cfg(feature = "qa-session")]
@@ -1690,6 +1986,10 @@ async fn viewer_media(
         #[cfg(feature = "qa-session")]
         let qa_ice = qa_turn.elapsed();
         control.poll(config, channel).await?;
+        if control.opened {
+            *track_slot = Some(track);
+            return Ok(());
+        }
         config.link.lost.store(
             !transport.connected(),
             Ordering::Release,
@@ -1880,7 +2180,7 @@ async fn viewer_media(
                                     waiting_for_key = true;
                                     control.request_keyframe(channel).await?;
                                 }
-                                hand_over(config, control, &mut recording)?;
+                                hand_over(config, control.recording_allowed(), &mut recording)?;
                                 #[cfg(feature = "qa-session")]
                                 if let Some(path) = std::env::var_os("MIXEL_QA_VIDEO_LOG") {
                                     qa_video.0 += 1;
@@ -1963,7 +2263,7 @@ async fn viewer_media(
                             timestamp,
                             &decoded,
                         )?.from_transport(config.transport))?;
-                        hand_over(config, control, &mut recording)?;
+                        hand_over(config, control.recording_allowed(), &mut recording)?;
                         // Lab builds only: decode and hand-over time, and how many pictures the window fetched.
                         #[cfg(feature = "qa-session")]
                         if let Some(path) = std::env::var_os("MIXEL_QA_VIDEO_LOG") {
@@ -2006,7 +2306,7 @@ async fn viewer_media(
             eprintln!("QA technician loop at clock {}: taking {taken} picture packets (decoding, handing over) took {} ms", crate::remote_control::qa_wall_clock(), qa_turn.elapsed().as_millis());
         }
         if last.elapsed() > Duration::from_secs(30)
-            && control.last_video_idle.elapsed() > Duration::from_secs(30)
+            && control.video_idle_for() > Duration::from_secs(30)
         {
             #[cfg(feature = "qa-session")]
             eprintln!("QA video timed out: {} RTP packets ({} bytes, {} with the end mark), {} pictures assembled, {} decoded, {} keyframe requests; {qa_keys} keyframe slices begun, {qa_gaps} gaps in the numbering ({qa_lost} numbers missing), {qa_late} packets late", qa_rtp.0, qa_rtp.1, qa_rtp.4, qa_rtp.2, received, qa_rtp.3);
@@ -2160,5 +2460,87 @@ mod renewal_tests {
         let stuck = TransportLink::default();
         assert!(!stuck.take_over(Duration::from_millis(40)).await);
         assert!(stuck.retire.load(Ordering::Acquire));
+    }
+}
+
+#[cfg(test)]
+mod early_peer_tests {
+    use super::*;
+    use ed25519_dalek::SigningKey;
+
+    fn pair() -> (SigningKey, SigningKey, Context) {
+        let (technician, host) = (SigningKey::from_bytes(&[7; 32]), SigningKey::from_bytes(&[9; 32]));
+        let context = Context { session_id: [41; 32], controller: technician.verifying_key(), host: host.verifying_key() };
+        (technician, host, context)
+    }
+    fn host_consent(context: &Context, decided: bool) -> Session {
+        let mut consent = Session::for_peer(Instant::now(), context.clone(), Role::Host, true);
+        if decided {
+            consent.decide(true, Instant::now()).unwrap();
+        }
+        consent
+    }
+
+    /// The technician's signed identity bound to the certificate the transport really has: the host
+    /// may send pictures, before the control channel exists.
+    #[test]
+    fn a_peer_whose_certificate_matches_its_signed_identity_is_verified_for_the_first_picture() {
+        let (technician, host, context) = pair();
+        let mut consent = host_consent(&context, true);
+        assert!(!consent.can_share_local_screen(), "nothing is sent before the peer is verified");
+        let mine = Handshake::new(context.clone(), Role::Host, &host, [2; 32]).unwrap();
+        let theirs = Handshake::new(context, Role::Controller, &technician, [1; 32]).unwrap().hello();
+        verify_peer(&mut consent, Some(mine), Some(theirs), [1; 32]).unwrap();
+        assert!(consent.can_share_local_screen());
+    }
+
+    /// A peer with another certificate than the one in its signed identity (a man in the middle, or a
+    /// replayed identity) gets no picture.
+    #[test]
+    fn a_peer_with_another_dtls_certificate_gets_no_picture() {
+        let (technician, host, context) = pair();
+        let mut consent = host_consent(&context, true);
+        let mine = Handshake::new(context.clone(), Role::Host, &host, [2; 32]).unwrap();
+        let theirs = Handshake::new(context, Role::Controller, &technician, [1; 32]).unwrap().hello();
+        assert!(verify_peer(&mut consent, Some(mine), Some(theirs), [5; 32]).is_err());
+        assert!(!consent.can_share_local_screen());
+        assert!(!consent.can_view());
+    }
+
+    /// A signature by another identity than the enrolled technician gets no picture either, and a
+    /// peer without any identity proof gets none.
+    #[test]
+    fn an_unenrolled_identity_or_a_missing_proof_gets_no_picture() {
+        let (_, host, context) = pair();
+        let stranger = SigningKey::from_bytes(&[3; 32]);
+        let mut consent = host_consent(&context, true);
+        let mine = Handshake::new(context.clone(), Role::Host, &host, [2; 32]).unwrap();
+        let mut forged = Handshake::new(Context { controller: stranger.verifying_key(), ..context.clone() }, Role::Controller, &stranger, [1; 32]).unwrap().hello();
+        forged.dtls_fingerprint = [1; 32];
+        assert!(verify_peer(&mut consent, Some(mine), Some(forged), [1; 32]).is_err());
+        assert!(!consent.can_share_local_screen());
+        let mine = Handshake::new(context, Role::Host, &host, [2; 32]).unwrap();
+        assert!(verify_peer(&mut consent, Some(mine), None, [1; 32]).is_err());
+        assert!(!consent.can_share_local_screen());
+    }
+
+    /// A request that was refused (or never accepted) gets no picture although the certificate fits.
+    #[test]
+    fn a_request_that_was_not_accepted_gets_no_picture() {
+        let (technician, host, context) = pair();
+        let mut consent = host_consent(&context, false);
+        let mine = Handshake::new(context.clone(), Role::Host, &host, [2; 32]).unwrap();
+        let theirs = Handshake::new(context, Role::Controller, &technician, [1; 32]).unwrap().hello();
+        assert!(verify_peer(&mut consent, Some(mine), Some(theirs), [1; 32]).is_err());
+        assert!(!consent.can_share_local_screen());
+    }
+
+    /// An old peer announces nothing: today's order (the control channel first) stays.
+    #[test]
+    fn the_fast_picture_needs_the_attribute_from_the_peer() {
+        let offer = "v=0\r\na=x-mixel-features:hd\r\n";
+        assert!(!offer.lines().any(|line| line == FASTPIC_ATTRIBUTE));
+        let offer = format!("{offer}{FASTPIC_ATTRIBUTE}\r\n");
+        assert!(offer.lines().any(|line| line == FASTPIC_ATTRIBUTE));
     }
 }
