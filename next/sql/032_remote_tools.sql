@@ -357,7 +357,7 @@ begin
             perform remote_private.raise_hint('22023', 'max_length must be 1 to 1024', 'invalid_script');
         end if;
         if e->>'type' = 'choice' then
-            if jsonb_typeof(e->'options') <> 'array' or jsonb_array_length(e->'options') not between 1 and 50 then
+            if coalesce(jsonb_typeof(e->'options'), '') <> 'array' or jsonb_array_length(e->'options') not between 1 and 50 then
                 perform remote_private.raise_hint('22023', 'Choice parameter ' || n || ' needs 1 to 50 options', 'invalid_script');
             end if;
             for o in select x from jsonb_array_elements(e->'options') x loop
@@ -1044,7 +1044,7 @@ begin
     end if;
     -- Fleet commands carry their own parameter copy: the run keeps masked values.
     if mode = 'fleet' then
-        update remote_private.tool_runs set params = remote_private.tools_mask_params(params) where id = rid;
+        update remote_private.tool_runs ru set params = remote_private.tools_mask_params(ru.params) where ru.id = rid;
     end if;
     select jsonb_agg(jsonb_build_object('device_id', x.device_id, 'name', x.device_name, 'status', x.status, 'reason', x.reason))
         into out_devices from remote_private.tool_run_devices x where x.run_id = rid;
@@ -1102,14 +1102,15 @@ $$;
 create function remote_private.tools_finish(rid uuid, dev uuid, exit integer, output text, duration integer, timed_out boolean)
 returns boolean language plpgsql security definer set search_path = '' as $$
 declare r remote_private.tool_runs; d remote_private.tool_run_devices; st text; ctx remote_private.tools_ctx; v remote_private.tool_script_versions;
-        raw text; cleaned text;
+        raw text; cleaned text; secrets jsonb;
 begin
     select * into r from remote_private.tool_runs where id = rid;
     select * into d from remote_private.tool_run_devices x where x.run_id = rid and x.device_id = dev and x.status = 'running' for update;
     if r.id is null or d.run_id is null then return false; end if;
     select * into v from remote_private.tool_script_versions where id = r.version_id;
     raw := coalesce(output, '');
-    cleaned := remote_private.tools_clean_output(raw, r.params);
+    select c.payload->'params' into secrets from remote_private.tool_commands c where c.id = d.command_id;
+    cleaned := remote_private.tools_clean_output(raw, coalesce(secrets, r.params));
     st := case when coalesce(timed_out, false) or exit = -2 then 'timeout' when exit = 0 then 'succeeded' else 'failed' end;
     update remote_private.tool_run_devices set status = st, exit_code = exit, finished_at = now(),
         duration_ms = coalesce(duration, greatest(0, (extract(epoch from now() - d.started_at) * 1000)::integer)),
