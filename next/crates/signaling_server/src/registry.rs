@@ -227,6 +227,9 @@ struct Session {
     warned: usize,
     /// Restored from the previous broker and waiting for both sides to `resume`.
     parked: Option<Parked>,
+    /// A renewal under way (feature `renewagain`): the session it replaced, back in place if the renewed transport
+    /// fails (`ClientMessage::RenewalFailed`).
+    renewed_from: Option<Box<(Uuid, Session)>>,
 }
 #[derive(Clone, Copy, Debug)]
 struct Parked {
@@ -1010,6 +1013,7 @@ impl Registry {
                         controller_back: false,
                         host_back: false,
                     }),
+                    renewed_from: None,
                 },
             );
             restored += 1;
@@ -1084,6 +1088,7 @@ impl Registry {
         // traffic for that exact retired room; never route it into the new one.
         if let ClientMessage::Signal { session, .. }
         | ClientMessage::Close { session }
+        | ClientMessage::RenewalFailed { session }
         | ClientMessage::Restart { session } = &message
             && self
                 .retired
@@ -1182,7 +1187,10 @@ impl Registry {
                 let replacement = Uuid::new_v4();
                 let mut nonce = [0; 32];
                 OsRng.fill_bytes(&mut nonce);
-                self.sessions.remove(&session);
+                let before = self.sessions.remove(&session);
+                let renew_again = [controller, host]
+                    .iter()
+                    .all(|id| self.peers.get(id).is_some_and(|peer| peer.supports(crate::protocol::FEATURE_RENEW_AGAIN)));
                 self.sessions.insert(
                     replacement,
                     Session {
@@ -1205,6 +1213,7 @@ impl Registry {
                         password_until,
                         warned,
                         parked: None,
+                        renewed_from: before.filter(|_| renew_again).map(|before| Box::new((session, before))),
                     },
                 );
                 self.retired.insert(
@@ -1227,6 +1236,24 @@ impl Registry {
                         },
                     );
                 }
+                Ok(())
+            }
+            ClientMessage::RenewalFailed { session } => {
+                // Only the replacement of a running session that is still negotiating, reported by one of its sides.
+                let current = self.sessions.get(&session).ok_or(ErrorCode::Forbidden)?;
+                if (from != current.controller && from != current.host) || !matches!(current.phase, Phase::Offer) || current.renewed_from.is_none() {
+                    return Err(ErrorCode::Forbidden);
+                }
+                let (controller, host) = (current.controller, current.host);
+                let mut failed = self.sessions.remove(&session).ok_or(ErrorCode::Forbidden)?;
+                let (before_id, mut before) = *failed.renewed_from.take().ok_or(ErrorCode::Forbidden)?;
+                // The session before comes back as it was, and can be restarted again after a short pause.
+                self.retired.remove(&before_id);
+                before.restart_after = now + Duration::from_secs(5);
+                self.sessions.insert(before_id, before);
+                self.retired.insert(session, Retired { controller, host, deadline: now + Duration::from_secs(60) });
+                let other = if from == controller { host } else { controller };
+                self.send(other, ServerMessage::Closed { session, reason: CloseReason::Requested });
                 Ok(())
             }
             ClientMessage::ConfigureUnattended { enabled } => {
@@ -1445,6 +1472,7 @@ impl Registry {
                         password_until: None,
                         warned: 0,
                         parked: None,
+                        renewed_from: None,
                     },
                 );
                 self.send(from, ServerMessage::Requested { session });
@@ -1609,6 +1637,7 @@ impl Registry {
                         password_until: if primary_password { primary_until } else { None },
                         warned: 0,
                         parked: None,
+                        renewed_from: None,
                     },
                 );
                 self.send(from, ServerMessage::Requested { session });
@@ -1674,6 +1703,7 @@ impl Registry {
                         password_until,
                         warned,
                         parked: None,
+                        renewed_from: None,
                     },
                 );
                 self.send(host, ServerMessage::Switched { previous: session, session: replacement, host: controller });
@@ -2554,6 +2584,71 @@ mod rotation_tests {
         registry.handle(111_111_111, technician, ClientMessage::Close { session }, now).unwrap();
         assert!(drain(&mut colleague_events).iter().any(|event| matches!(event, ServerMessage::Closed { session: closed, .. } if *closed == joined)));
         assert_eq!(registry.counts().1, 0);
+    }
+
+    type Renewed = (Registry, (Uuid, Uuid), (u32, Uuid), (u32, Uuid), mpsc::Receiver<ServerMessage>, mpsc::Receiver<ServerMessage>, Instant);
+    fn renewal_after_a_failed_attempt(announce: bool) -> Renewed {
+        let mut registry = Registry::default();
+        let now = Instant::now();
+        let (technician, mut technician_events) = peer(&mut registry, 111_111_111, 10);
+        let (host, mut host_events) = peer(&mut registry, 222_222_222, 11);
+        for (id, generation) in [(111_111_111, technician), (222_222_222, host)] {
+            let features = if announce { vec![crate::protocol::FEATURE_RENEW_AGAIN.into()] } else { vec![] };
+            registry.handle(id, generation, ClientMessage::Capabilities { features }, now).unwrap();
+        }
+        registry.handle(111_111_111, technician, ClientMessage::Request { host: 222_222_222 }, now).unwrap();
+        let Some(ServerMessage::Requested { session }) = drain(&mut technician_events).pop() else { panic!() };
+        connect(&mut registry, now, (111_111_111, technician), (222_222_222, host), session);
+        drain(&mut host_events);
+        let later = now + Duration::from_secs(31);
+        registry.handle(111_111_111, technician, ClientMessage::Restart { session }, later).unwrap();
+        let Some(ServerMessage::Restarted { session: replacement, .. }) = drain(&mut technician_events).pop() else { panic!() };
+        drain(&mut host_events);
+        (registry, (session, replacement), (111_111_111, technician), (222_222_222, host), technician_events, host_events, later)
+    }
+
+    #[test]
+    fn a_failed_renewal_attempt_returns_the_session_to_the_transport_before_and_it_restarts_again() {
+        let (mut registry, (session, replacement), technician, host, mut technician_events, mut host_events, later) = renewal_after_a_failed_attempt(true);
+        // The host's side of the new transport failed.
+        registry.handle(host.0, host.1, ClientMessage::RenewalFailed { session: replacement }, later).unwrap();
+        assert!(drain(&mut technician_events).iter().any(|event| matches!(event, ServerMessage::Closed { session: closed, .. } if *closed == replacement)));
+        assert!(drain(&mut host_events).is_empty(), "the reporter is not told");
+        assert_eq!(registry.counts().1, 1);
+        // A second report (the other side) is ignored, not an error.
+        registry.handle(technician.0, technician.1, ClientMessage::RenewalFailed { session: replacement }, later).unwrap();
+        // Too early: the pause; later the restart of the transport before is answered as usual.
+        assert!(registry.handle(technician.0, technician.1, ClientMessage::Restart { session }, later + Duration::from_secs(1)).is_err());
+        let again = later + Duration::from_secs(6);
+        registry.handle(technician.0, technician.1, ClientMessage::Restart { session }, again).unwrap();
+        let Some(ServerMessage::Restarted { session: next, previous, .. }) = drain(&mut technician_events).pop() else { panic!() };
+        assert_eq!(previous, session);
+        assert_ne!(next, replacement);
+        assert_eq!(registry.counts().1, 1);
+        // The new attempt can fail and be reported again.
+        registry.handle(technician.0, technician.1, ClientMessage::RenewalFailed { session: next }, again).unwrap();
+        assert_eq!(registry.counts().1, 1);
+    }
+
+    #[test]
+    fn a_failed_renewal_attempt_is_not_undone_for_apps_that_did_not_announce_it() {
+        let (mut registry, (session, replacement), technician, host, _, _, later) = renewal_after_a_failed_attempt(false);
+        assert!(registry.handle(host.0, host.1, ClientMessage::RenewalFailed { session: replacement }, later).is_err());
+        // The old way: closing the attempt ends the session at the service, and a restart of the old one is refused.
+        registry.handle(host.0, host.1, ClientMessage::Close { session: replacement }, later).unwrap();
+        assert_eq!(registry.counts().1, 0);
+        let _ = registry.handle(technician.0, technician.1, ClientMessage::Restart { session }, later + Duration::from_secs(10));
+        assert_eq!(registry.counts().1, 0, "nothing to restart");
+    }
+
+    #[test]
+    fn only_a_negotiating_replacement_of_the_own_session_can_be_reported_failed() {
+        let (mut registry, (session, replacement), _technician, host, _, _, later) = renewal_after_a_failed_attempt(true);
+        let (stranger, _) = peer(&mut registry, 345_678_901, 12);
+        assert!(registry.handle(345_678_901, stranger, ClientMessage::RenewalFailed { session: replacement }, later).is_err());
+        // The transport before is retired and no longer the session: reporting it fails nothing.
+        assert!(registry.handle(host.0, host.1, ClientMessage::RenewalFailed { session }, later).is_ok());
+        assert_eq!(registry.counts().1, 1);
     }
 
     #[test]

@@ -2809,6 +2809,28 @@ async fn a_relay_lease_without_a_session_only_with_the_gate_and_the_announcement
     on.abort();
 }
 
+/// Feature `renewagain`: the broker tells an app that announced it that a failed renewal can be reported; an app
+/// that did not announce it hears nothing (and keeps the old way: a failed attempt is closed).
+#[tokio::test]
+async fn the_broker_announces_renewing_again_only_to_apps_that_asked() {
+    use ed25519_dalek::SigningKey;
+    use signaling_server::delegated_auth::TicketAuth;
+
+    let signer = SigningKey::from_bytes(&[83; 32]);
+    let state = AppState::new(Arc::new(TicketAuth::new(vec![signer.verifying_key()]).unwrap()), HashSet::new());
+    let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/v1/ws", socket.local_addr().unwrap());
+    let broker = tokio::spawn(async move { axum::serve(socket, router(state)).await.unwrap() });
+    let identity = |connection_id: u32, key_byte: u8| SignedPeer { profile: Uuid::from_u128(11), device: Uuid::from_u128(30), tenant: None, connection_id, generation: 1, key_byte };
+    let mut old = signed_peer(&url, &signer, identity(234_567_892, 92)).await;
+    send(&mut old, ClientMessage::Capabilities { features: vec!["join".into()] }).await;
+    assert!(quiet(&mut old).await);
+    let mut new = signed_peer(&url, &signer, identity(234_567_893, 93)).await;
+    send(&mut new, ClientMessage::Capabilities { features: vec!["renewagain".into()] }).await;
+    assert!(matches!(event(&mut new).await, ServerMessage::RenewAgain));
+    broker.abort();
+}
+
 /// D4 phase 3: with MIXEL_AGENT_REQUIRE_SIGNED on, `device_policy` carries `require_signed_commands: true`,
 /// but only for apps that announced `signed`; an app that announced only `policy` gets the old shape.
 #[tokio::test]

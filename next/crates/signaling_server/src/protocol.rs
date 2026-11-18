@@ -82,6 +82,9 @@ pub enum ClientMessage {
     Close { session: Uuid },
     Ice { session: Uuid },
     Restart { session: Uuid },
+    /// The renewed transport `session` (still waiting for its connection) failed on this side: the session goes back
+    /// to the transport before it, which can be renewed again (feature `renewagain`).
+    RenewalFailed { session: Uuid },
     /// Which of these Remote IDs are online and reachable for the caller.
     Presence { hosts: Vec<u32> },
     /// Optional broker features this app understands (`join`, `switch`). Sent once after `ready`;
@@ -339,6 +342,9 @@ pub enum ServerMessage {
     /// A relay lease without a session (`ice` with the nil session) may be asked for to keep a transport ready
     /// before Connect (feature `prewarm`, broker gate `MIXEL_PREWARM=1`). Sent once, after the app announced it.
     Prewarm,
+    /// A failed renewal can be reported (`renewal_failed`) and the session renewed again (feature `renewagain`).
+    /// Sent once, after the app announced the feature.
+    RenewAgain,
     /// The session is known again after a broker restart and this side is back in it (feature `resume`).
     Resumed {
         session: Uuid,
@@ -377,6 +383,9 @@ pub const FEATURE_EARLY_ICE: &str = "earlyice";
 /// Broker feature: a relay lease for a transport that waits for a request (`ice` with the nil session);
 /// the broker sends `prewarm` (message) to apps that announced it when its `MIXEL_PREWARM=1` gate is on.
 pub const FEATURE_PREWARM: &str = "prewarm";
+/// Broker feature: a renewed transport that fails before it took over is reported with `renewal_failed`; the
+/// session returns to the transport before and a new `restart` is answered. The broker sends `renew_again`.
+pub const FEATURE_RENEW_AGAIN: &str = "renewagain";
 #[derive(Clone, Copy, Deserialize, Serialize, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Joining {

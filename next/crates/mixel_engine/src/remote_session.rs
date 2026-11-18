@@ -41,6 +41,7 @@ const RESUME: &str = signaling_server::protocol::FEATURE_RESUME;
 const SIGNED: &str = signaling_server::protocol::FEATURE_SIGNED;
 const EARLY_ICE: &str = signaling_server::protocol::FEATURE_EARLY_ICE;
 const PREWARM: &str = signaling_server::protocol::FEATURE_PREWARM;
+const RENEW_AGAIN: &str = signaling_server::protocol::FEATURE_RENEW_AGAIN;
 /// `macos-arm64`, `windows-x64`, `linux-x64`: what the Devices list shows next to the version.
 fn app_platform() -> String {
     let arch = match std::env::consts::ARCH {
@@ -2698,7 +2699,7 @@ impl Peer {
     /// The renewed transport failed (or was closed) before it took over while the transport before still carries
     /// the session: the session goes back to the one before and the failed attempt is dropped.
     /// Returns the failed transport's id; `None` when there is nothing to go back to (the session ends).
-    fn renewal_failed(&mut self) -> Option<Uuid> {
+    fn renewal_failed(&mut self, renew_again: bool) -> Option<Uuid> {
         let before = self.fallback.take()?;
         if before.link.released.load(Ordering::Acquire) {
             return None;
@@ -2713,13 +2714,21 @@ impl Peer {
         self.early.clear();
         self.nonce = None;
         self.close_sent = false;
-        // The connection service forgot this session when the failed attempt was closed (a restart of the transport
-        // before is refused as "unavailable", which ends the connection): no further renewal is asked for. The
-        // session goes on over the transport before until its relay lease or the peer authorization runs out; then
-        // the reconnect path takes over (an unattended session asks again by itself).
-        self.restart_pending = None;
-        self.restart_tries = 0;
-        self.rotated_at = std::time::Instant::now() + Duration::from_secs(10 * 365 * 24 * 3600);
+        if renew_again {
+            // The connection service took the failed attempt back (feature `renewagain`): the transport before is
+            // its session again, and the renewal is asked for again after the retry time, up to the tries, then
+            // the pause between renewals.
+            self.restart_pending = Some(std::time::Instant::now());
+            self.restart_tries = 1;
+        } else {
+            // An older connection service forgot this session when the failed attempt was closed (a restart of the
+            // transport before is refused as "unavailable", which ends the connection): no further renewal is
+            // asked for. The session goes on over the transport before until its relay lease or the peer
+            // authorization runs out; then the reconnect path takes over (an unattended session asks again).
+            self.restart_pending = None;
+            self.restart_tries = 0;
+            self.rotated_at = std::time::Instant::now() + Duration::from_secs(10 * 365 * 24 * 3600);
+        }
         Some(failed)
     }
     /// The transport before a renewal ended: nothing to go back to any more.
@@ -2954,11 +2963,11 @@ fn can_go_back_to_transport_before(peer: &Option<Peer>, ctrl: &[Peer], session: 
     })
 }
 /// Goes back to the transport before a failed renewal (`Peer::renewal_failed`); the failed transport's ID, if so.
-fn go_back_to_transport_before(peer: &mut Option<Peer>, ctrl: &mut [Peer], session: Uuid) -> Option<Uuid> {
+fn go_back_to_transport_before(peer: &mut Option<Peer>, ctrl: &mut [Peer], session: Uuid, renew_again: bool) -> Option<Uuid> {
     if !can_go_back_to_transport_before(peer, ctrl, session) {
         return None;
     }
-    peer.iter_mut().chain(ctrl.iter_mut()).find(|active| active.id == session).and_then(Peer::renewal_failed)
+    peer.iter_mut().chain(ctrl.iter_mut()).find(|active| active.id == session).and_then(|active| active.renewal_failed(renew_again))
 }
 
 fn media_end_ends_session(current_transport: Uuid, ended_transport: Uuid) -> bool {
@@ -3406,7 +3415,7 @@ async fn run(
         let mut features:Vec<String>=if own_ticket.unattended_host_only() || crate::service_config::controller_only() {vec![JOIN.into()]} else {vec![JOIN.into(),SWITCH.into()]};
         // Password-session warnings, the administrator's device policy, resuming a session after the connection
         // service restarted, and signed remote commands (verified in `agent_verify`).
-        features.extend([ENDING.into(),POLICY.into(),RESUME.into(),SIGNED.into(),EARLY_ICE.into(),PREWARM.into()]);
+        features.extend([ENDING.into(),POLICY.into(),RESUME.into(),SIGNED.into(),EARLY_ICE.into(),PREWARM.into(),RENEW_AGAIN.into()]);
         send(&mut socket,ClientMessage::Capabilities{features}).await?;
         send(&mut socket,ClientMessage::AppVersion{version:crate::agent::APP_VERSION.into(),platform:app_platform()}).await?;
         // An older connection service answers "invalid": then these features are simply not offered.
@@ -3448,6 +3457,8 @@ async fn run(
         let mut early_ok=false;
         // A transport kept ready before Connect (feature `prewarm`): asked for while the Devices list is shown, taken by the next request.
         let mut prewarm_ok=false;
+        // The connection service takes a failed renewal back (`renewal_failed`) and restarts the session again.
+        let mut renew_again_ok=false;
         let mut warm:Option<remote_peer::Warm>=None;
         let mut warm_asked:Option<std::time::Instant>=None;
         let mut warm_managed=false;
@@ -3792,10 +3803,10 @@ async fn run(
                     Command::Signal{session,signal}=>{if peer.as_ref().is_some_and(|peer|peer.id==session && !peer.cancel.load(Ordering::Acquire)) || ctrl.iter().any(|peer|peer.id==session && !peer.cancel.load(Ordering::Acquire)) || joined.iter().any(|colleague|colleague.id==session && !colleague.cancel.load(Ordering::Acquire)){send(&mut socket,ClientMessage::Signal{session,payload:signal}).await?;}},
                     Command::Finished{session,result}=>{
                     // A renewed transport that fails before it took over does not end the session while the one before works.
-                    if let Some(error)=result.as_ref().err() && let Some(failed)=go_back_to_transport_before(&mut peer,&mut ctrl,session){
+                    if let Some(error)=result.as_ref().err() && let Some(failed)=go_back_to_transport_before(&mut peer,&mut ctrl,session,renew_again_ok){
                         remember_gone(&mut recent,failed);
-                        eprintln!("QA renewal attempt failed: {error}; the transport before carries on (the session is not renewed again)");
-                        send(&mut socket,ClientMessage::Close{session:failed}).await?;
+                        eprintln!("QA renewal attempt failed: {error}; the transport before carries on ({})",if renew_again_ok{"renewed again later"}else{"older connection service: not renewed again"});
+                        if renew_again_ok{send(&mut socket,ClientMessage::RenewalFailed{session:failed}).await?;}else{send(&mut socket,ClientMessage::Close{session:failed}).await?;}
                         continue;
                     }
                     for active in peer.iter_mut().chain(ctrl.iter_mut()){active.before_ended(session);}
@@ -4003,6 +4014,7 @@ async fn run(
                         },
                         ServerMessage::EarlyIce=>{early_ok=true;},
                         ServerMessage::Prewarm=>{prewarm_ok=true;},
+                        ServerMessage::RenewAgain=>{renew_again_ok=true;},
                         ServerMessage::Consent{session,requester_connection,requester,requester_identity,unattended,joining:Some(join),..}=>{
                             // A colleague of the technician asks to join the running session.
                             let primary=peer.as_ref().filter(|active|active.host && active.id==join.session && active.remote==join.inviter_connection && active.signals.is_some() && !active.cancel.load(Ordering::Acquire));
@@ -4247,7 +4259,7 @@ async fn run(
                         },
                         ServerMessage::Closed{session,..} if can_go_back_to_transport_before(&peer,&ctrl,session)=>{
                             // The other side gave up the renewed transport before it took over.
-                            if let Some(failed)=go_back_to_transport_before(&mut peer,&mut ctrl,session){remember_gone(&mut recent,failed);eprintln!("QA renewal attempt closed by the other side; the transport before carries on (the session is not renewed again)");}
+                            if let Some(failed)=go_back_to_transport_before(&mut peer,&mut ctrl,session,renew_again_ok){remember_gone(&mut recent,failed);eprintln!("QA renewal attempt closed by the other side; the transport before carries on");}
                         },
                         ServerMessage::Closed{session,reason} if matches!(reason,signaling_server::protocol::CloseReason::Disconnected|signaling_server::protocol::CloseReason::Requested) && ctrl.iter().any(|active|(active.id==session || active.ui==session) && !active.joined && !active.host && !active.close_sent && active.signals.is_some() && close_means_lost(reason,active.link.lost.load(std::sync::atomic::Ordering::Acquire)) && !retries.iter().any(|again|again.host==active.remote) && last_access.get(&active.remote).is_some_and(crate::reconnect::Access::repeatable))=>{
                             // The computer this session views went away: only this session asks again.
@@ -4731,7 +4743,7 @@ mod consent_tests {
         assert!(running.superseded.load(Ordering::Acquire));
         let mut peer = Some(peer);
         assert!(can_go_back_to_transport_before(&peer, &ctrl, second));
-        assert_eq!(go_back_to_transport_before(&mut peer, &mut ctrl, second), Some(second));
+        assert_eq!(go_back_to_transport_before(&mut peer, &mut ctrl, second, false), Some(second));
         let active = peer.as_mut().unwrap();
         // The session is back on the transport that kept carrying pictures, and is still active.
         assert_eq!(active.id, first);
@@ -4762,6 +4774,33 @@ mod consent_tests {
         ctrl.clear();
     }
     #[test]
+    fn with_a_connection_service_that_takes_a_failed_renewal_back_the_renewal_is_asked_for_again() {
+        let mut peer = invitation();
+        peer.host = false;
+        let first = peer.id;
+        let (signals, _kept) = mpsc::channel(1);
+        peer.signals = Some(signals);
+        let second = Uuid::from_u128(50);
+        peer.begin_renewal(second);
+        peer.handover = None;
+        let mut peer = Some(peer);
+        let mut ctrl = vec![];
+        assert_eq!(go_back_to_transport_before(&mut peer, &mut ctrl, second, true), Some(second));
+        let active = peer.as_mut().unwrap();
+        assert_eq!(active.id, first);
+        assert_eq!((active.restart_tries, active.restart_pending.is_some()), (1, true));
+        assert_eq!(active.renewal_step(920, true), Renewal::Wait);
+        active.restart_pending = Some(std::time::Instant::now() - Duration::from_secs(7));
+        assert_eq!(active.renewal_step(920, true), Renewal::Retry, "the existing retry logic asks again");
+        assert!(active.apply_renewal(Renewal::Retry));
+        // The next renewal takes over: the transport before ends and nothing is left to go back to.
+        let third = Uuid::from_u128(51);
+        active.begin_renewal(third);
+        active.handover = None;
+        active.before_ended(first);
+        assert!(active.fallback.is_none() && active.id == third);
+    }
+    #[test]
     fn a_renewal_attempt_fails_after_the_transport_before_ended_the_session_ends() {
         let mut peer = invitation();
         peer.host = false;
@@ -4772,7 +4811,7 @@ mod consent_tests {
         let mut peer = Some(peer);
         let mut ctrl = vec![];
         assert!(!can_go_back_to_transport_before(&peer, &ctrl, second));
-        assert_eq!(go_back_to_transport_before(&mut peer, &mut ctrl, second), None);
+        assert_eq!(go_back_to_transport_before(&mut peer, &mut ctrl, second, true), None);
         assert_eq!(peer.as_ref().unwrap().id, second, "the session ends the usual way");
     }
     #[test]

@@ -595,6 +595,7 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                         }
                         let announces_policy = matches!(&parsed, Ok(ClientMessage::Capabilities { features }) if features.iter().any(|name| name == crate::protocol::FEATURE_POLICY));
                         let announces_early_ice = matches!(&parsed, Ok(ClientMessage::Capabilities { features }) if features.iter().any(|name| name == crate::protocol::FEATURE_EARLY_ICE));
+                        let announces_renew_again = matches!(&parsed, Ok(ClientMessage::Capabilities { features }) if features.iter().any(|name| name == crate::protocol::FEATURE_RENEW_AGAIN));
                         let announces_prewarm = matches!(&parsed, Ok(ClientMessage::Capabilities { features }) if features.iter().any(|name| name == crate::protocol::FEATURE_PREWARM));
                         let result = match parsed {
                             Ok(ClientMessage::Ice{session})=>{
@@ -607,6 +608,9 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                         };
                         if result.is_ok() && announces_early_ice && state.early_ice {
                             let _ = own_tx.try_send(ServerMessage::EarlyIce);
+                        }
+                        if result.is_ok() && announces_renew_again {
+                            let _ = own_tx.try_send(ServerMessage::RenewAgain);
                         }
                         if result.is_ok() && announces_prewarm && state.prewarm {
                             let _ = own_tx.try_send(ServerMessage::Prewarm);
