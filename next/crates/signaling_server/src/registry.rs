@@ -287,6 +287,8 @@ pub struct Registry {
     /// Set only while `handle_limited_attended` runs: a plain request is handled as attended
     /// (the person at the host decides) although the host has unattended access on.
     force_attended: bool,
+    /// Relay credentials before consent, only for apps that announced `early_ice` (`MIXEL_EARLY_ICE=1`).
+    early_ice: bool,
 }
 impl Default for Registry {
     fn default() -> Self {
@@ -579,6 +581,10 @@ impl Registry {
         }
         Ok(())
     }
+    /// Switch for relay credentials while the session still waits for consent.
+    pub fn set_early_ice(&mut self, enabled: bool) {
+        self.early_ice = enabled;
+    }
     pub fn ice_permission(
         &mut self,
         id: u32,
@@ -589,11 +595,17 @@ impl Registry {
     ) -> Result<u64, ErrorCode> {
         self.expire(now);
         let active = self.sessions.get(&session).ok_or(ErrorCode::Forbidden)?;
-        if (active.host != id && active.controller != id) || matches!(active.phase, Phase::Consent)
-        {
+        if active.host != id && active.controller != id {
             return Err(ErrorCode::Forbidden);
         }
         let peer = self.peers.get_mut(&id).ok_or(ErrorCode::Forbidden)?;
+        // Before consent only the two sides of a request that exists, authenticated, enrolled and
+        // authorized (a refused request is gone), and only apps that announced `early_ice`.
+        if matches!(active.phase, Phase::Consent)
+            && !(self.early_ice && peer.features.iter().any(|name| name == crate::protocol::FEATURE_EARLY_ICE))
+        {
+            return Err(ErrorCode::Forbidden);
+        }
         if peer.generation != generation || peer.principal.expires_at.saturating_sub(unix) < 30 {
             return Err(ErrorCode::Forbidden);
         }
@@ -616,6 +628,7 @@ impl Registry {
             max_sessions: connections,
             journal: SessionJournal::default(),
             force_attended: false,
+            early_ice: false,
         }
     }
     /// Changes the limits; connections and sessions already open stay.
@@ -2361,6 +2374,56 @@ mod rotation_tests {
         registry
             .handle(id, generation, ClientMessage::Capabilities { features: vec![FEATURE_JOIN.into(), FEATURE_SWITCH.into()] }, Instant::now())
             .unwrap();
+    }
+
+    fn announce_early_ice(registry: &mut Registry, id: u32, generation: Uuid) {
+        registry
+            .handle(id, generation, ClientMessage::Capabilities { features: vec![FEATURE_EARLY_ICE.into()] }, Instant::now())
+            .unwrap();
+    }
+
+    #[test]
+    fn relay_credentials_before_consent_need_the_gate_and_the_announcement_and_a_live_request() {
+        let now = Instant::now();
+        let mut registry = Registry::default();
+        let (technician, mut technician_events) = peer(&mut registry, 111_111_111, 10);
+        let (host, mut host_events) = peer(&mut registry, 222_222_222, 11);
+        let (stranger, _stranger_events) = peer(&mut registry, 444_444_444, 13);
+        registry.handle(111_111_111, technician, ClientMessage::Request { host: 222_222_222 }, now).unwrap();
+        let Some(ServerMessage::Requested { session }) = drain(&mut technician_events).pop() else { panic!() };
+        drain(&mut host_events);
+        // Gate off (production today): nothing before consent, as before.
+        assert_eq!(registry.ice_permission(111_111_111, technician, session, now, 100), Err(ErrorCode::Forbidden));
+        registry.set_early_ice(true);
+        // Gate on, but the app did not announce the feature: still nothing.
+        assert_eq!(registry.ice_permission(111_111_111, technician, session, now, 100), Err(ErrorCode::Forbidden));
+        announce_early_ice(&mut registry, 111_111_111, technician);
+        announce_early_ice(&mut registry, 222_222_222, host);
+        announce_early_ice(&mut registry, 444_444_444, stranger);
+        // Both sides of the live request may ask; a stranger and an unknown session may not.
+        assert!(registry.ice_permission(111_111_111, technician, session, now, 100).is_ok());
+        assert!(registry.ice_permission(222_222_222, host, session, now, 100).is_ok());
+        assert_eq!(registry.ice_permission(444_444_444, stranger, session, now, 100), Err(ErrorCode::Forbidden));
+        assert_eq!(registry.ice_permission(111_111_111, technician, Uuid::from_u128(99), now, 100), Err(ErrorCode::Forbidden));
+        // Abuse limit kept: the same session again within 5 s is Busy.
+        assert_eq!(registry.ice_permission(111_111_111, technician, session, now, 100), Err(ErrorCode::Busy));
+    }
+
+    #[test]
+    fn a_refused_request_gets_no_relay_credentials() {
+        let now = Instant::now();
+        let mut registry = Registry::default();
+        registry.set_early_ice(true);
+        let (technician, mut technician_events) = peer(&mut registry, 111_111_111, 10);
+        let (host, mut host_events) = peer(&mut registry, 222_222_222, 11);
+        announce_early_ice(&mut registry, 111_111_111, technician);
+        announce_early_ice(&mut registry, 222_222_222, host);
+        registry.handle(111_111_111, technician, ClientMessage::Request { host: 222_222_222 }, now).unwrap();
+        let Some(ServerMessage::Requested { session }) = drain(&mut technician_events).pop() else { panic!() };
+        drain(&mut host_events);
+        registry.handle(222_222_222, host, ClientMessage::Decide { session, accept: false }, now).unwrap();
+        assert_eq!(registry.ice_permission(111_111_111, technician, session, now, 100), Err(ErrorCode::Forbidden));
+        assert_eq!(registry.ice_permission(222_222_222, host, session, now, 100), Err(ErrorCode::Forbidden));
     }
 
     #[test]

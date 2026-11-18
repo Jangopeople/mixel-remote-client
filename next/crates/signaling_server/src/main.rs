@@ -52,6 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_max_connections(max_connections)
         .with_support_policy(policy)
         .with_signed_commands_required(require_signed)
+        .with_early_ice(std::env::var("MIXEL_EARLY_ICE").is_ok_and(|value| value == "1"))
         .with_turn(signaling_server::turn::TurnConfig::from_env()?);
     // Running sessions survive a broker restart: saved at shutdown, restored at start (no secrets).
     let handover_file = std::env::var("MIXEL_HANDOVER_FILE").ok().map(std::path::PathBuf::from);

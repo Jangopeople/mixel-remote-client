@@ -82,8 +82,17 @@ pub struct AppState {
     shutting_down: Arc<AtomicBool>,
     /// D4 phase 3: remote commands only for apps that announced `signed` (MIXEL_AGENT_REQUIRE_SIGNED=1).
     require_signed: bool,
+    /// Relay credentials before consent for apps that announced `earlyice` (MIXEL_EARLY_ICE=1).
+    early_ice: bool,
 }
 impl AppState {
+    pub fn with_early_ice(mut self, enabled: bool) -> Self {
+        self.early_ice = enabled;
+        if let Ok(mut registry) = self.registry.lock() {
+            registry.set_early_ice(enabled);
+        }
+        self
+    }
     pub fn with_turn(mut self, config: Option<crate::turn::TurnConfig>) -> Self {
         self.turn = config.map(Arc::new);
         self
@@ -153,6 +162,7 @@ impl AppState {
             recheck_slots: Arc::new(Semaphore::new(64)),
             shutting_down: Arc::new(AtomicBool::new(false)),
             require_signed: false,
+            early_ice: false,
         }
     }
 }
@@ -574,6 +584,7 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                             eprintln!("ConfigureUnattended from={id} enabled={enabled}");
                         }
                         let announces_policy = matches!(&parsed, Ok(ClientMessage::Capabilities { features }) if features.iter().any(|name| name == crate::protocol::FEATURE_POLICY));
+                        let announces_early_ice = matches!(&parsed, Ok(ClientMessage::Capabilities { features }) if features.iter().any(|name| name == crate::protocol::FEATURE_EARLY_ICE));
                         let result = match parsed {
                             Ok(ClientMessage::Ice{session})=>{
                                 let permission=if enrolled.is_some(){match state.registry.lock(){Ok(mut registry)=>registry.ice_permission(id,generation,session,now,unix_now()),Err(_)=>break}}else{Err(ErrorCode::Forbidden)};
@@ -583,6 +594,9 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                             Ok(message) => match state.registry.lock() { Ok(mut r) => r.handle(id, generation, message, now), Err(_) => break },
                             Err(_) => Err(ErrorCode::Invalid),
                         };
+                        if result.is_ok() && announces_early_ice && state.early_ice {
+                            let _ = own_tx.try_send(ServerMessage::EarlyIce);
+                        }
                         if result.is_ok() && announces_policy && device_policy_sent.is_none() {
                             device_policy_sent = Some(Instant::now());
                             send_device_policy(&state, id, generation, own_tx.clone());

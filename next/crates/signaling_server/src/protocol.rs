@@ -333,6 +333,9 @@ pub enum ServerMessage {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         require_signed_commands: Option<bool>,
     },
+    /// Relay credentials may be asked for before the session is accepted (feature `early_ice`, broker gate
+    /// `MIXEL_EARLY_ICE=1`). Sent once, after the app announced the feature.
+    EarlyIce,
     /// The session is known again after a broker restart and this side is back in it (feature `resume`).
     Resumed {
         session: Uuid,
@@ -365,6 +368,9 @@ pub const FEATURE_POLICY: &str = "policy";
 pub const FEATURE_RESUME: &str = "resume";
 /// Broker feature: signed remote commands (D4).
 pub const FEATURE_SIGNED: &str = "signed";
+/// Broker feature: relay credentials (`ice`) may be asked for while the session still waits for consent;
+/// the broker sends `early_ice` (message) to apps that announced it when its `MIXEL_EARLY_ICE=1` gate is on.
+pub const FEATURE_EARLY_ICE: &str = "earlyice";
 #[derive(Clone, Copy, Deserialize, Serialize, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Joining {
