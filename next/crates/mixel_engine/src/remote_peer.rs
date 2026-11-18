@@ -563,11 +563,11 @@ type Negotiated = (
 );
 /// Both sides announce this in the offer/answer when the host may send the first complete picture
 /// as soon as the transport is encrypted and the peer's signed identity matches its certificate,
-/// without waiting for the control channel to open. Switched off by `MIXEL_NO_FASTPIC`
+/// without waiting for the control channel to open. Release 2.1.1: on; switched off by `MIXEL_NO_FASTPIC=1`
 /// (`MIXEL_NO_EARLYPIC` on the host switches off only the early capture/encode, for measurements).
 const FASTPIC_ATTRIBUTE: &str = "a=x-mixel-fastpic:1";
 fn fastpic_enabled() -> bool {
-    std::env::var_os("MIXEL_NO_FASTPIC").is_none()
+    !crate::remote_control::lab_flag("MIXEL_NO_FASTPIC")
 }
 /// The peer's signed identity against the certificate the encrypted transport actually has. Only
 /// a peer that passes this is `authenticated` for the session (pictures are sent to it and shown
@@ -1345,6 +1345,16 @@ fn packet_wait(taken_this_turn: u32) -> Duration {
 #[cfg(test)]
 mod packet_turn_tests {
     use super::*;
+
+    /// Release default 2.1.1: the fast first picture (and its early encode) is on; `MIXEL_NO_FASTPIC=1` turns it off.
+    #[test]
+    fn the_fast_picture_is_on_by_default() {
+        assert!(!crate::remote_control::lab_flag_value(None));
+        assert!(crate::remote_control::lab_flag_value(Some("1")));
+        if std::env::var_os("MIXEL_NO_FASTPIC").is_none() {
+            assert!(fastpic_enabled());
+        }
+    }
 
     /// A burst of packets that is already waiting is taken in one turn without any timed wait
     /// (a timed wait costs about 15 ms on Windows): the turn's time does not grow with the burst.

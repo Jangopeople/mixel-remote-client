@@ -3704,7 +3704,7 @@ async fn run(
                         if by_app{warm_managed=true;}
                         // Refreshed before it runs out; one question in flight; only technician apps that are not being helped.
                         if let Some(ready)=&warm && ready.age()>=Duration::from_secs(90){warm=None;}
-                        if (by_app||!warm_managed) && prewarm_ok && std::env::var_os("MIXEL_NO_PREWARM").is_none() && warm.is_none() && pending_warm.is_none() && peer.is_none() && warm_asked.is_none_or(|at|at.elapsed()>Duration::from_secs(12)) && outgoing.is_empty() && ctrl.len()<crate::remote_sessions::MAX_SESSIONS && {while warm_log.front().is_some_and(|at|at.elapsed()>Duration::from_secs(600)){warm_log.pop_front();}warm_log.len()<6}{
+                        if (by_app||!warm_managed) && prewarm_ok && crate::remote_control::prewarm_enabled() && warm.is_none() && pending_warm.is_none() && peer.is_none() && warm_asked.is_none_or(|at|at.elapsed()>Duration::from_secs(12)) && outgoing.is_empty() && ctrl.len()<crate::remote_sessions::MAX_SESSIONS && {while warm_log.front().is_some_and(|at|at.elapsed()>Duration::from_secs(600)){warm_log.pop_front();}warm_log.len()<6}{
                             warm_log.push_back(std::time::Instant::now());
                             crate::qa_timeline::mark("ready transport asked for (relay lease without a session)");
                             send(&mut socket,ClientMessage::Ice{session:Uuid::nil()}).await?;

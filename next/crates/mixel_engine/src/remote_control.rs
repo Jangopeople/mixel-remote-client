@@ -117,8 +117,28 @@ pub struct DisplayOffer {
     pub features: Vec<String>,
 }
 
+/// Release defaults 2.1.1: `vrate2` (new picture-rate control) is off unless the lab sets `MIXEL_VRATE2` to exactly `1`.
+/// The fast first picture (`fastpic`, incl. the early key-picture encode) and the client pre-warm are ON; they are
+/// switched off with `MIXEL_NO_FASTPIC=1` / `MIXEL_NO_PREWARM=1`.
+pub fn lab_flag_value(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+/// Whether the client pre-warm is on (release 2.1.1: on unless `MIXEL_NO_PREWARM` is set to exactly `1`).
+pub fn prewarm_enabled() -> bool {
+    !lab_flag_value(std::env::var("MIXEL_NO_PREWARM").ok().as_deref())
+}
+
+/// Whether the lab variable `name` is set to `1`.
+pub fn lab_flag(name: &str) -> bool {
+    lab_flag_value(std::env::var(name).ok().as_deref())
+}
+
 /// Optional features this app announces to the other side of a session.
 pub fn own_features() -> Vec<&'static str> {
+    own_features_with(lab_flag("MIXEL_VRATE2"))
+}
+/// The features announced, with the new receive report (`vrate2`) on or off.
+pub fn own_features_with(vrate2: bool) -> Vec<&'static str> {
     let mut features = vec![
         core_protocol::clipboard::FEATURE,
         ALL_MONITORS,
@@ -126,13 +146,44 @@ pub fn own_features() -> Vec<&'static str> {
         core_protocol::sound::FEATURE,
         FULL_HD,
         crate::video_rate::FEATURE,
-        crate::video_rate::FEATURE_CLOCK,
         crate::remote_session::JOIN,
         crate::remote_session::SWITCH,
     ];
+    if vrate2 {
+        features.push(crate::video_rate::FEATURE_CLOCK);
+    }
     // Hosts that show the technician's drawings (not Wayland or iOS).
     features.extend(crate::annotation::features());
     features
+}
+
+#[cfg(test)]
+mod release_defaults_tests {
+    use super::*;
+
+    #[test]
+    fn lab_flags_are_on_only_for_exactly_1() {
+        assert!(!lab_flag_value(None));
+        assert!(!lab_flag_value(Some("")));
+        assert!(!lab_flag_value(Some("0")));
+        assert!(!lab_flag_value(Some("true")));
+        assert!(lab_flag_value(Some("1")));
+    }
+
+    #[test]
+    fn prewarm_is_on_unless_switched_off() {
+        if std::env::var_os("MIXEL_NO_PREWARM").is_none() {
+            assert!(prewarm_enabled());
+        }
+    }
+
+    #[test]
+    fn vrate2_is_not_announced_by_default_but_vrate_v1_is() {
+        let off = own_features_with(false);
+        assert!(!off.contains(&crate::video_rate::FEATURE_CLOCK));
+        assert!(off.contains(&crate::video_rate::FEATURE));
+        assert!(own_features_with(true).contains(&crate::video_rate::FEATURE_CLOCK));
+    }
 }
 /// Feature: the controller can show "all monitors as one picture" as a display choice.
 pub const ALL_MONITORS: &str = "allmon";
@@ -340,7 +391,7 @@ impl ControlPipe {
             last_keyframe_request: None,
             force_keyframe: false,
             report_video: !config.host && features.iter().any(|name| name == crate::video_rate::FEATURE),
-            report_clock: !config.host && features.iter().any(|name| name == crate::video_rate::FEATURE_CLOCK),
+            report_clock: !config.host && lab_flag("MIXEL_VRATE2") && features.iter().any(|name| name == crate::video_rate::FEATURE_CLOCK),
             video_reports: Vec::new(),
             clipboard: {
                 let mut pipe = crate::remote_clipboard::ClipboardPipe::new(clipboard_rx, clipboard);
