@@ -29,6 +29,7 @@ mod lab {
     static RTC_LOG_ONCE: std::sync::Once = std::sync::Once::new();
 
     pub fn begin(step: &str) {
+        LINES.store(0, std::sync::atomic::Ordering::Relaxed);
         if std::env::var_os("MIXEL_QA_RTC_LOG").is_some() {
             RTC_LOG_ONCE.call_once(|| {
                 if log::set_logger(&RTC_LOG).is_ok() {

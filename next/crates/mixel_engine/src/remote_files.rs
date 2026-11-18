@@ -23,7 +23,10 @@ use zeroize::Zeroizing;
 
 type Authorization = Arc<dyn Fn() -> bool + Send + Sync>;
 type Reply = oneshot::Sender<Result<(), String>>;
-const WINDOW: usize = 8;
+/// Chunks the sender may have in flight (the receiver acknowledges every chunk). 8 chunks = 24 kB per round trip capped a
+/// transfer at 85 kB/s on a 280 ms line (speed pass, 18 Nov 2026); 24 chunks = 72 kB. Sender side only: a receiver of 2.0.18 and older
+/// acknowledges each chunk as before and queues at most 32 commands for its file thread, so the window must stay below 32.
+const WINDOW: usize = 24;
 const OFFER_LIFETIME: Duration = Duration::from_secs(90);
 #[derive(Clone, Serialize)]
 pub struct Transfer {
@@ -124,7 +127,7 @@ impl FileHub {
         if entries.len() >= 8 {
             return Err("Previous file cleanup has not completed".into());
         }
-        let (tx, rx) = mpsc::sync_channel(32);
+        let (tx, rx) = mpsc::sync_channel(128);
         let scope = FileScope(Arc::new(Inner {
             id,
             cancel,
@@ -320,7 +323,7 @@ impl FileScope {
                 break next;
             }
         };
-        let (tx, rx) = async_queue::channel(16);
+        let (tx, rx) = async_queue::channel(WINDOW + 16);
         self.send(Command::Attach { epoch, output: tx })?;
         Ok(Attachment {
             scope: self.clone(),
