@@ -3616,6 +3616,7 @@ dependencies = [
  "gstreamer-video",
  "image",
  "libc",
+ "log",
  "mp4",
  "native_os_capture",
  "rand_core 0.6.4",

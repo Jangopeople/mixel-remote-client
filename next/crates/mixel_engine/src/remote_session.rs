@@ -4024,6 +4024,11 @@ async fn run(
                                 else{state.slot_change(generation,active_ui,|view|{view.phase="negotiating".into();view.message="Accepted; obtaining authenticated short-lived relay configuration".into();}).await;}
                             }
                             ice_queue.ask(session);
+                            // Ask for the relay credentials now, not at the next 250 ms tick: on a line with a long round trip
+                            // every wait on the way to the offer is added to the connect time (speed pass, 18 Nov 2026).
+                            while let Some(next)=ice_queue.due(|id|peer.iter().chain(ctrl.iter()).chain(joined.iter()).any(|active|active.id==id && !active.cancel.load(Ordering::Acquire))){
+                                send(&mut socket,ClientMessage::Ice{session:next}).await?;
+                            }
                         },
                         ServerMessage::Ice{session,lease}=>{
                             let Some(active)=find_peer(&mut peer,&mut ctrl,session).filter(|peer|peer.signals.is_none()) else {if recently_gone(&recent,session){continue;}return Err("Unexpected relay configuration".into());};
