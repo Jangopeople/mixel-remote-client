@@ -1572,6 +1572,8 @@ async fn host_media(
         let mut rate = crate::video_rate::RateControl::new(Instant::now());
         #[cfg(feature = "qa-session")]
         let mut qa_rate_logged = Instant::now();
+        #[cfg(feature = "qa-session")]
+        let (mut qa_kf, mut qa_skip) = (0u32, 0u32);
         while !config.stopped() {
             if control.sound_wanted() {
                 if sound.is_none() && !sound_failed {
@@ -1661,16 +1663,25 @@ async fn host_media(
             pacer.set_cap(rate.limit());
             #[cfg(feature = "qa-session")]
             if qa_rate_logged.elapsed() >= Duration::from_secs(5) {
-                eprintln!("QA line limit {:.0} kB/s, in flight {} kB, base delay {} ms, queue {} ms, pace {:.0} kB/s", rate.limit() / 1000.0, rate.in_flight() / 1000, rate.base_delay().as_millis(), rate.queue_delay().as_millis(), pacer.rate() / 1000.0);
+                eprintln!("QA line limit {:.0} kB/s, in flight {} kB, base delay {} ms, queue {} ms, pace {:.0} kB/s | delivered {:.0} kB/s, max queue {} ms, cuts {} (soft steps {}), pacer own {:.0} kB/s ceiling {:.0} kB/s losses {}, keyframe requests {}, pictures {}, skipped loops {}", rate.limit() / 1000.0, rate.in_flight() / 1000, rate.base_delay().as_millis(), rate.queue_delay().as_millis(), pacer.rate() / 1000.0, rate.delivered() / 1000.0, rate.max_queue.as_millis(), rate.cuts, rate.softs, pacer.own_rate().0 / 1000.0, pacer.own_rate().1 / 1000.0, pacer.losses, qa_kf, sent, qa_skip);
+                rate.max_queue = Duration::ZERO;
                 qa_rate_logged = Instant::now();
             }
             if rate.backlogged(Instant::now()) {
+                #[cfg(feature = "qa-session")]
+                {
+                    qa_skip += 1;
+                }
                 pump_ice(config, transport).await?;
                 control.poll(config, channel).await?;
                 tokio::time::sleep(Duration::from_millis(5)).await;
                 continue;
             }
             let requested = control.take_keyframe_request();
+            #[cfg(feature = "qa-session")]
+            if requested {
+                qa_kf += 1;
+            }
             if requested {
                 pacer.complete_picture_requested(Instant::now());
             }
@@ -1983,6 +1994,9 @@ impl<'a> Ctl<'a> {
     fn recording_allowed(&self) -> bool {
         self.pipe.as_ref().is_some_and(|pipe| pipe.recording_allowed)
     }
+    fn report_clock(&self) -> bool {
+        self.pipe.as_ref().is_some_and(|pipe| pipe.report_clock())
+    }
     fn video_idle_for(&self) -> Duration {
         self.pipe.as_ref().map_or(Duration::ZERO, |pipe| pipe.last_video_idle.elapsed())
     }
@@ -2151,6 +2165,7 @@ async fn viewer_media(
             !transport.connected(),
             Ordering::Release,
         );
+        report_rx.clocked(control.report_clock());
         if let Some(report) = report_rx.due(Instant::now()) {
             control.send_video_report(channel, &report).await?;
         }

@@ -25,18 +25,29 @@ use std::time::{Duration, Instant};
 
 /// Announced by hosts that use the reports (`a=x-mixel-features:`).
 pub const FEATURE: &str = "vrate";
+/// Announced by hosts that also read the technician's own clock in a report ([`Report::clock`]):
+/// the delay is then the one-way delay of the picture packets, without the report's way back.
+pub const FEATURE_CLOCK: &str = "vrate2";
 /// Message prefix on the encrypted control channel, technician to host.
 pub const PREFIX: &[u8] = b"mixel-video-report-v1";
+/// The same report with the technician's clock appended.
+pub const PREFIX_CLOCK: &[u8] = b"mixel-video-report-v2";
 /// Reports this far apart.
 pub const REPORT_EVERY: Duration = Duration::from_millis(200);
-/// Extra delay above the base that counts as a queue building up.
-pub const QUEUE_HIGH: Duration = Duration::from_millis(200);
-/// Below this the line is not queueing and the limit may climb.
-pub const QUEUE_LOW: Duration = Duration::from_millis(80);
+/// Extra delay above the base that counts as a pile-up (the lowest delay of the last second).
+pub const QUEUE_HIGH: Duration = Duration::from_millis(150);
+/// Above this the queue is growing: no climbing, a gentle step back.
+pub const QUEUE_LOW: Duration = Duration::from_millis(60);
+/// The delay that counts is the lowest of this long: jitter and a late report are short, a queue stays.
+pub const RECENT: Duration = Duration::from_millis(1000);
 /// Without a report for this long the rate decays.
 pub const SILENCE: Duration = Duration::from_secs(3);
 /// What may be queued in the line beyond one round trip.
 pub const QUEUE_ALLOWED: Duration = Duration::from_millis(300);
+/// After a queue the limit is held at this many times what was delivered (the encoder takes 60 % of the limit, so it sends 90 % of what the line carried)...
+const HOLD_FACTOR: f64 = 1.5;
+/// ...and is allowed a quarter more after this long without a queue.
+pub const PROBE_EVERY: Duration = Duration::from_secs(8);
 pub const MIN_LIMIT: f64 = 125_000.0;
 pub const START_LIMIT: f64 = 500_000.0;
 pub const MAX_LIMIT: f64 = 12_000_000.0;
@@ -53,21 +64,33 @@ pub struct Report {
     pub interval: Duration,
     /// Picture packet bytes received in that time.
     pub bytes: u32,
+    /// The technician's own clock (milliseconds since it started reporting) when the report was
+    /// made. Only with [`FEATURE_CLOCK`]. Only differences matter (the two clocks are unrelated).
+    pub clock: Option<u32>,
 }
 
 impl Report {
     pub fn encode(&self) -> Vec<u8> {
-        let mut out = PREFIX.to_vec();
+        let mut out = if self.clock.is_some() { PREFIX_CLOCK.to_vec() } else { PREFIX.to_vec() };
         out.extend_from_slice(&self.seq.to_be_bytes());
         out.extend_from_slice(&(self.age.as_millis().min(65_535) as u16).to_be_bytes());
         out.extend_from_slice(&(self.interval.as_millis().min(65_535) as u16).to_be_bytes());
         out.extend_from_slice(&self.bytes.to_be_bytes());
+        if let Some(clock) = self.clock {
+            out.extend_from_slice(&clock.to_be_bytes());
+        }
         out
     }
     pub fn decode(plain: &[u8]) -> Option<Self> {
-        let rest = plain.strip_prefix(PREFIX)?;
-        let rest: [u8; 10] = rest.try_into().ok()?;
+        let (rest, clock) = if let Some(rest) = plain.strip_prefix(PREFIX_CLOCK) {
+            let rest: [u8; 14] = rest.try_into().ok()?;
+            (rest[..10].to_vec(), Some(u32::from_be_bytes([rest[10], rest[11], rest[12], rest[13]])))
+        } else {
+            (plain.strip_prefix(PREFIX)?.to_vec(), None)
+        };
+        let rest: [u8; 10] = rest.as_slice().try_into().ok()?;
         Some(Self {
+            clock,
             seq: u16::from_be_bytes([rest[0], rest[1]]),
             age: Duration::from_millis(u64::from(u16::from_be_bytes([rest[2], rest[3]]))),
             interval: Duration::from_millis(u64::from(u16::from_be_bytes([rest[4], rest[5]]))),
@@ -81,11 +104,17 @@ pub struct Receiver {
     newest: Option<(u16, Instant)>,
     bytes: u32,
     since: Instant,
+    epoch: Instant,
+    clocked: bool,
 }
 
 impl Receiver {
     pub fn new(now: Instant) -> Self {
-        Self { newest: None, bytes: 0, since: now }
+        Self { newest: None, bytes: 0, since: now, epoch: now, clocked: false }
+    }
+    /// Add the own clock to the reports (the host announced [`FEATURE_CLOCK`]).
+    pub fn clocked(&mut self, on: bool) {
+        self.clocked = on;
     }
     /// A picture packet of `size` bytes (header and payload) arrived.
     pub fn packet(&mut self, now: Instant, seq: u16, size: usize) {
@@ -101,7 +130,8 @@ impl Receiver {
         if interval < REPORT_EVERY {
             return None;
         }
-        let report = Report { seq, age: now.saturating_duration_since(at), interval, bytes: self.bytes };
+        let clock = self.clocked.then(|| now.saturating_duration_since(self.epoch).as_millis() as u32);
+        let report = Report { seq, age: now.saturating_duration_since(at), interval, bytes: self.bytes, clock };
         self.bytes = 0;
         self.since = now;
         Some(report)
@@ -114,17 +144,30 @@ pub struct RateControl {
     sent: VecDeque<(u16, Instant, u64)>,
     sent_total: u64,
     acked_total: u64,
+    epoch: Instant,
+    /// Round trip of the newest packet of every report (the line's round trip, with the report's way back).
     delays: VecDeque<(Instant, Duration)>,
+    /// What the queue signal is made of: one-way delays (with the technician's clock) or round trips,
+    /// in milliseconds; only differences count.
+    signal: VecDeque<(Instant, i64)>,
+    clocked: bool,
     limit: f64,
     delivered: f64,
     slow_start: bool,
     last_report: Option<Instant>,
     last_change: Instant,
     last_cut: Option<Instant>,
-    /// The first report of the current run above [`QUEUE_HIGH`], and how many there were.
-    high: Option<(Instant, u32)>,
+    last_soft: Option<Instant>,
+    /// The limit the line carried when a queue last built up (grows again by a quarter every
+    /// [`PROBE_EVERY`] without one): the climb stops there instead of running into the next queue.
+    ceiling: f64,
+    last_probe: Instant,
     queue: Duration,
     base: Duration,
+    /// Lab statistics: cuts of the limit, worst queue since the last read.
+    pub cuts: u32,
+    pub softs: u32,
+    pub max_queue: Duration,
 }
 
 impl RateControl {
@@ -133,23 +176,35 @@ impl RateControl {
             sent: VecDeque::new(),
             sent_total: 0,
             acked_total: 0,
+            epoch: now,
             delays: VecDeque::new(),
+            signal: VecDeque::new(),
+            clocked: false,
             limit: START_LIMIT,
             delivered: 0.0,
             slow_start: true,
             last_report: None,
             last_change: now,
             last_cut: None,
-            high: None,
+            last_soft: None,
+            ceiling: MAX_LIMIT,
+            last_probe: now,
             queue: Duration::ZERO,
             base: Duration::ZERO,
+            cuts: 0,
+            softs: 0,
+            max_queue: Duration::ZERO,
         }
     }
     /// What the line carries at the moment, bytes a second.
     pub fn limit(&self) -> f64 {
         self.limit
     }
-    /// The queue delay of the last report.
+    /// What the line delivers, bytes a second (smoothed).
+    pub fn delivered(&self) -> f64 {
+        self.delivered
+    }
+    /// The queue the line holds: the lowest delay of the last second above the lowest of 30 seconds.
     pub fn queue_delay(&self) -> Duration {
         self.queue
     }
@@ -194,40 +249,81 @@ impl RateControl {
         };
         self.last_report = Some(now);
         self.acked_total = self.acked_total.max(total);
-        let delay = now.saturating_duration_since(sent_at).saturating_sub(report.age);
-        self.delays.push_back((now, delay));
+        let round_trip = now.saturating_duration_since(sent_at).saturating_sub(report.age);
+        self.delays.push_back((now, round_trip));
         while self.delays.front().is_some_and(|(at, _)| now.saturating_duration_since(*at) > BASE_WINDOW) {
             self.delays.pop_front();
         }
-        self.base = self.delays.iter().map(|(_, d)| *d).min().unwrap_or(delay);
-        let queue = delay.saturating_sub(self.base);
+        self.base = self.delays.iter().map(|(_, d)| *d).min().unwrap_or(round_trip);
+        // The signal: with the technician's clock the one-way delay of the newest packet (when it
+        // arrived by the technician's clock minus when it left), which carries neither the way back
+        // of the report (an ordered, lossy channel: a lost report holds the next ones up) nor how
+        // late the host's own loop picked it up. Without: the round trip.
+        let sample = match report.clock {
+            Some(clock) => {
+                (i64::from(clock) - report.age.as_millis() as i64)
+                    - sent_at.saturating_duration_since(self.epoch).as_millis() as i64
+            }
+            None => round_trip.as_millis() as i64,
+        };
+        if self.clocked != report.clock.is_some() {
+            self.signal.clear();
+            self.clocked = report.clock.is_some();
+        }
+        self.signal.push_back((now, sample));
+        while self.signal.front().is_some_and(|(at, _)| now.saturating_duration_since(*at) > BASE_WINDOW) {
+            self.signal.pop_front();
+        }
+        let lowest = self.signal.iter().map(|(_, v)| *v).min().unwrap_or(sample);
+        let recent = self
+            .signal
+            .iter()
+            .filter(|(at, _)| now.saturating_duration_since(*at) <= RECENT)
+            .map(|(_, v)| *v)
+            .min()
+            .unwrap_or(sample);
+        let queue = Duration::from_millis((recent - lowest).max(0) as u64);
         self.queue = queue;
+        self.max_queue = self.max_queue.max(queue);
         if !report.interval.is_zero() && report.bytes > 0 {
             let rate = f64::from(report.bytes) / report.interval.as_secs_f64();
             self.delivered = if self.delivered == 0.0 { rate } else { self.delivered * 0.7 + rate * 0.3 };
         }
         let dt = now.saturating_duration_since(self.last_change).as_secs_f64().min(1.0);
-        self.high = if queue > QUEUE_HIGH {
-            Some(self.high.map_or((now, 1), |(since, count)| (since, count + 1)))
-        } else {
-            None
-        };
-        let persistent = self
-            .high
-            .is_some_and(|(since, count)| count >= 2 && now.saturating_duration_since(since) >= Duration::from_millis(300));
-        if persistent {
-            if self.last_cut.is_none_or(|cut| now.saturating_duration_since(cut) >= Duration::from_millis(500)) {
+        let since = |at: Option<Instant>| at.map_or(Duration::from_secs(3600), |at| now.saturating_duration_since(at));
+        if queue > QUEUE_HIGH {
+            // A pile-up that lasted a second: back to what was delivered, never by more than 15 % at once.
+            if since(self.last_cut) >= Duration::from_millis(1000) {
                 let by_delivery = if self.delivered > 0.0 { self.delivered * 1.4 } else { self.limit };
-                self.limit = by_delivery.min(self.limit * 0.85).max(MIN_LIMIT);
+                let cut = by_delivery.min(self.limit * 0.85).max(MIN_LIMIT);
+                #[cfg(feature = "qa-session")]
+                eprintln!("QA rate cut: queue {} ms (lowest of the last second above the lowest of 30 s, {}), delivered {:.0} kB/s, in flight {} kB, limit {:.0} -> {:.0} kB/s", queue.as_millis(), if self.clocked { "one-way" } else { "round trip" }, self.delivered / 1000.0, self.in_flight() / 1000, self.limit / 1000.0, cut / 1000.0);
+                self.cuts += 1;
+                self.limit = cut;
+                self.ceiling = (self.delivered * HOLD_FACTOR).clamp(MIN_LIMIT, MAX_LIMIT).max(cut);
+                self.last_probe = now;
                 self.slow_start = false;
                 self.last_cut = Some(now);
                 self.last_change = now;
             }
-        } else if queue < QUEUE_LOW
-            && self.last_cut.is_none_or(|cut| now.saturating_duration_since(cut) >= Duration::from_secs(1))
-        {
-            let cap = (self.delivered * 2.5).clamp(START_LIMIT, MAX_LIMIT);
-            let growth: f64 = if self.slow_start { 2.0 } else { 1.08 };
+        } else if queue > QUEUE_LOW {
+            // The queue grows: no climbing, one gentle step back a second.
+            self.slow_start = false;
+            if since(self.last_soft) >= Duration::from_millis(1000) && since(self.last_cut) >= Duration::from_millis(1000) {
+                self.limit = (self.limit * 0.93).max(MIN_LIMIT);
+                self.ceiling = self.ceiling.min(self.limit.max(self.delivered * HOLD_FACTOR));
+                self.last_probe = now;
+                self.softs += 1;
+                self.last_soft = Some(now);
+                self.last_change = now;
+            }
+        } else if since(self.last_cut) >= Duration::from_millis(2000) && since(self.last_soft) >= Duration::from_millis(1000) {
+            if now.saturating_duration_since(self.last_probe) >= PROBE_EVERY && self.limit >= self.ceiling * 0.97 {
+                self.ceiling = (self.ceiling * 1.25).min(MAX_LIMIT);
+                self.last_probe = now;
+            }
+            let cap = (self.delivered * 3.0).clamp(START_LIMIT, MAX_LIMIT).min(self.ceiling.max(self.limit));
+            let growth: f64 = if self.slow_start { 2.0 } else { 1.10 };
             self.limit = self.limit.max((self.limit * growth.powf(dt)).min(cap));
             self.last_change = now;
         }
@@ -305,6 +401,187 @@ mod tests {
         (control.limit(), worst, delivered as f64 / 10.0)
     }
 
+    /// A noisy line like the lab's long one: `rate` bytes a second after a delay of `latency` +- `jitter`
+    /// each way (packets are not reordered here: arrival times only grow), random loss `loss`, and
+    /// a report channel that is reliable and ordered: a lost report holds up every later one for
+    /// `stall`. A keyframe of `key_bytes` leaves every `key_every` seconds, spread at the limit.
+    struct Noisy {
+        rate: f64,
+        latency: f64,
+        jitter: f64,
+        loss: f64,
+        stall: f64,
+        key_bytes: usize,
+        key_every: f64,
+        /// The host picks a report up this much later at most (a loaded machine).
+        lag: f64,
+        /// The technician adds its clock (`vrate2`).
+        clocked: bool,
+    }
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> f64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 >> 11) as f64 / (1u64 << 53) as f64
+        }
+    }
+    /// Result of [`noisy`]: per 10 s slice (limit, delivered bytes/s, worst queue s) and the cut count.
+    struct Outcome {
+        slices: Vec<(f64, f64, f64)>,
+        cuts: u32,
+        /// When (seconds) each cut happened, and the limit after the run.
+        cut_times: Vec<f64>,
+    }
+    fn noisy(line: &mut Noisy, control: &mut RateControl, seconds: f64, change: Option<(f64, f64)>) -> Outcome {
+        let t0 = Instant::now();
+        let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+        let mut free_at = 0.0f64;
+        let mut arrivals: Vec<(f64, u16, usize)> = Vec::new();
+        let mut seen = 0;
+        let mut receiver = Receiver::new(t0);
+        let (mut seq, mut now, mut next_report, mut next_key) = (0u16, 0.0f64, 0.2f64, 1.0f64);
+        let mut reports: Vec<(f64, Report)> = Vec::new();
+        let mut last_report_arrival = 0.0f64;
+        receiver.clocked(line.clocked);
+        let (mut slice_bytes, mut slice_worst) = (0usize, 0.0f64);
+        let mut slices = Vec::new();
+        let mut cut_times = Vec::new();
+        let mut cuts_seen = 0;
+        let mut debt = 0.0f64;
+        let mut key_left = 0usize;
+        let mut credit = 0.0f64;
+        while now < seconds {
+            if let Some((at, rate)) = change
+                && now >= at
+            {
+                line.rate = rate;
+            }
+            let instant = t0 + Duration::from_secs_f64(now);
+            control.tick(instant);
+            let backlogged = control.backlogged(instant);
+            if now >= next_key && !backlogged {
+                key_left += line.key_bytes;
+                next_key += line.key_every;
+            }
+            // The pacer: pictures leave at the limit; ordinary pictures at the encoder's rate (60 % of it).
+            let paced = control.limit();
+            let mut budget = 0.0;
+            if !backlogged {
+                budget += control.limit() * 0.6 * 0.01;
+            }
+            credit = (credit + paced * 0.01).min(paced * 0.02 + 2500.0);
+            let from_key = (key_left as f64).min(credit);
+            key_left -= from_key as usize;
+            credit -= from_key;
+            budget += from_key;
+            debt += budget;
+            while debt >= 1200.0 {
+                debt -= 1200.0;
+                control.sent(instant, seq, 1200);
+                let start = free_at.max(now);
+                if start - now < 2.5 {
+                    free_at = start + 1200.0 / line.rate;
+                    if rng.next() >= line.loss {
+                        let at = (free_at + line.latency + (rng.next() * 2.0 - 1.0) * line.jitter).max(arrivals.last().map_or(0.0, |a| a.0));
+                        arrivals.push((at, seq, 1200));
+                    }
+                }
+                seq = seq.wrapping_add(1);
+            }
+            while seen < arrivals.len() && arrivals[seen].0 <= now {
+                let (at, s, size) = arrivals[seen];
+                receiver.packet(t0 + Duration::from_secs_f64(at), s, size);
+                slice_bytes += size;
+                seen += 1;
+            }
+            if now >= next_report {
+                if let Some(report) = receiver.due(instant) {
+                    let mut arrive = now + line.latency + (rng.next() * 2.0 - 1.0) * line.jitter;
+                    if rng.next() < line.loss {
+                        arrive += line.stall;
+                    }
+                    arrive = arrive.max(last_report_arrival);
+                    last_report_arrival = arrive;
+                    let picked_up = arrive + rng.next() * line.lag;
+                    last_report_arrival = last_report_arrival.max(picked_up);
+                    reports.push((picked_up, report));
+                }
+                next_report += 0.2;
+            }
+            while reports.first().is_some_and(|(at, _)| *at <= now) {
+                let (at, report) = reports.remove(0);
+                control.report(t0 + Duration::from_secs_f64(at), report);
+            }
+            if control.cuts != cuts_seen {
+                cuts_seen = control.cuts;
+                cut_times.push(now);
+            }
+            slice_worst = slice_worst.max((free_at - now).max(0.0));
+            now += 0.01;
+            if ((now * 100.0).round() as u64).is_multiple_of(1000) {
+                slices.push((control.limit(), slice_bytes as f64 / 10.0, slice_worst));
+                slice_bytes = 0;
+                slice_worst = 0.0;
+            }
+        }
+        Outcome { slices, cuts: control.cuts, cut_times }
+    }
+
+    fn long_line(clocked: bool, lag: f64) -> (f64, f64, f64, u32) {
+        let mut line = Noisy { rate: 500_000.0, latency: 0.14, jitter: 0.02, loss: 0.01, stall: 1.0, key_bytes: 80_000, key_every: 3.0, lag, clocked };
+        let mut control = RateControl::new(Instant::now());
+        let out = noisy(&mut line, &mut control, 300.0, None);
+        let tail: Vec<_> = out.slices.iter().skip(6).collect();
+        let n = tail.len() as f64;
+        (tail.iter().map(|s| s.0).sum::<f64>() / n, tail.iter().map(|s| s.1).sum::<f64>() / n, tail.iter().map(|s| s.2).fold(0.0, f64::max), out.cuts)
+    }
+
+    /// The lab's long line (4 Mbit/s, 140 ms +-20 each way, 1 % loss, reports stalled a second by a
+    /// lost one) with a host that picks reports up late (a loaded machine): the limit must settle
+    /// near the line rate (the encoder at 60 % of it, 2.4 Mbit/s of 4), not at the floor.
+    #[test]
+    fn the_long_line_with_a_slow_host_settles_near_the_line_rate() {
+        for (clocked, lag) in [(true, 0.0), (true, 0.3), (false, 0.0), (false, 0.3)] {
+            let (limit, delivered, worst, cuts) = long_line(clocked, lag);
+            eprintln!("LAB long line clocked={clocked} lag={lag}: mean limit {:.0} kB/s, delivered {:.0} kB/s, worst queue {:.2} s, cuts {cuts} in 300 s", limit / 1000.0, delivered / 1000.0, worst);
+        }
+        let (limit, delivered, worst, cuts) = long_line(true, 0.3);
+        assert!(limit > 350_000.0, "limit {limit} stays far from the floor");
+        assert!(delivered > 200_000.0, "delivered {delivered}");
+        assert!(worst < 1.0, "queue {worst}");
+        assert!(cuts <= 12, "{cuts} cuts in 5 minutes");
+    }
+
+
+    #[test]
+    fn a_noisy_line_settles_without_swinging() {
+        // Jitter, 1 % loss, stalled reports and a slow host: after the first minute the limit stays in a
+        // band around the line rate (500 kB/s, the encoder takes 60 % of the limit) in every 10 s.
+        let mut line = Noisy { rate: 500_000.0, latency: 0.14, jitter: 0.02, loss: 0.01, stall: 1.0, key_bytes: 80_000, key_every: 3.0, lag: 0.3, clocked: true };
+        let mut control = RateControl::new(Instant::now());
+        let out = noisy(&mut line, &mut control, 300.0, None);
+        for (index, (limit, delivered, _)) in out.slices.iter().enumerate().skip(6) {
+            assert!((400_000.0..1_300_000.0).contains(limit), "slice {index}: limit {limit}");
+            assert!(*delivered > 250_000.0, "slice {index}: delivered {delivered}");
+        }
+    }
+
+    #[test]
+    fn a_real_drop_of_the_line_is_followed_within_seconds() {
+        let mut line = Noisy { rate: 500_000.0, latency: 0.14, jitter: 0.02, loss: 0.01, stall: 1.0, key_bytes: 80_000, key_every: 3.0, lag: 0.1, clocked: true };
+        let mut control = RateControl::new(Instant::now());
+        // The line falls to a quarter (1 Mbit/s) at 100 s.
+        let out = noisy(&mut line, &mut control, 140.0, Some((100.0, 125_000.0)));
+        let first = out.cut_times.iter().find(|at| **at >= 100.0).copied();
+        let first = first.expect("a cut after the drop");
+        assert!(first - 100.0 < 3.0, "first cut {:.1} s after the drop", first - 100.0);
+        let (limit, delivered, worst) = out.slices[13];
+        assert!(limit < 400_000.0, "limit {limit} follows a line of 125 kB/s");
+        assert!(delivered > 60_000.0 && worst < 1.5, "delivered {delivered}, worst queue {worst}");
+    }
+
     #[test]
     fn one_late_report_does_not_cut_the_limit_but_a_lasting_queue_does() {
         let t0 = Instant::now();
@@ -316,20 +593,20 @@ mod tests {
             seq += 1;
             control.sent(at, seq, 12_000);
             at += Duration::from_millis(200);
-            control.report(at, Report { seq, age: Duration::from_millis(100), interval: Duration::from_millis(200), bytes: 12_000 });
+            control.report(at, Report { seq, age: Duration::from_millis(100), interval: Duration::from_millis(200), bytes: 12_000, clock: None });
         }
         let steady = control.limit();
         // One report held up by a retransmission (500 ms late), the next ones normal again.
         seq += 1;
         control.sent(at, seq, 12_000);
         at += Duration::from_millis(700);
-        control.report(at, Report { seq, age: Duration::from_millis(100), interval: Duration::from_millis(200), bytes: 12_000 });
+        control.report(at, Report { seq, age: Duration::from_millis(100), interval: Duration::from_millis(200), bytes: 12_000, clock: None });
         assert!(control.limit() >= steady, "one late report: {} vs {steady}", control.limit());
         for _ in 0..3 {
             seq += 1;
             control.sent(at, seq, 12_000);
             at += Duration::from_millis(200);
-            control.report(at, Report { seq, age: Duration::from_millis(100), interval: Duration::from_millis(200), bytes: 12_000 });
+            control.report(at, Report { seq, age: Duration::from_millis(100), interval: Duration::from_millis(200), bytes: 12_000, clock: None });
         }
         assert!(control.limit() >= steady);
         // Now every report is 400 ms late and only 60 kB/s arrive: a queue.
@@ -337,14 +614,17 @@ mod tests {
             seq += 1;
             control.sent(at, seq, 12_000);
             at += Duration::from_millis(600);
-            control.report(at, Report { seq, age: Duration::from_millis(100), interval: Duration::from_millis(600), bytes: 36_000 });
+            control.report(at, Report { seq, age: Duration::from_millis(100), interval: Duration::from_millis(600), bytes: 36_000, clock: None });
         }
         assert!(control.limit() < steady * 0.9, "a lasting queue cuts: {} vs {steady}", control.limit());
     }
 
     #[test]
     fn report_round_trips_on_the_wire() {
-        let report = Report { seq: 65_000, age: Duration::from_millis(40), interval: Duration::from_millis(200), bytes: 123_456 };
+        let clocked = Report { seq: 7, age: Duration::from_millis(3), interval: Duration::from_millis(200), bytes: 9, clock: Some(4_000_000_000) };
+        assert_eq!(Report::decode(&clocked.encode()), Some(clocked));
+        assert_eq!(Report::decode(&clocked.encode()[..clocked.encode().len() - 1]), None);
+        let report = Report { seq: 65_000, age: Duration::from_millis(40), interval: Duration::from_millis(200), bytes: 123_456, clock: None };
         assert_eq!(Report::decode(&report.encode()), Some(report));
         assert_eq!(Report::decode(b"mixel-video-report-v1\x00"), None);
         assert_eq!(Report::decode(b"other"), None);
@@ -392,7 +672,7 @@ mod tests {
         let mut seq = 0u16;
         // One report so the controller knows reports arrive.
         control.sent(t0, 0, 1200);
-        control.report(t0 + Duration::from_millis(100), Report { seq: 0, age: Duration::ZERO, interval: Duration::from_millis(200), bytes: 1200 });
+        control.report(t0 + Duration::from_millis(100), Report { seq: 0, age: Duration::ZERO, interval: Duration::from_millis(200), bytes: 1200, clock: None });
         assert!(!control.backlogged(t0 + Duration::from_millis(100)));
         for _ in 0..400 {
             seq += 1;
@@ -412,7 +692,7 @@ mod tests {
         control.tick(t0 + Duration::from_secs(10));
         assert_eq!(control.limit(), START_LIMIT, "no report was ever seen");
         control.sent(t0, 2, 1200);
-        control.report(t0 + Duration::from_millis(50), Report { seq: 2, age: Duration::ZERO, interval: Duration::from_millis(200), bytes: 2400 });
+        control.report(t0 + Duration::from_millis(50), Report { seq: 2, age: Duration::ZERO, interval: Duration::from_millis(200), bytes: 2400, clock: None });
         let before = control.limit();
         control.tick(t0 + Duration::from_secs(9));
         assert!(control.limit() < before);

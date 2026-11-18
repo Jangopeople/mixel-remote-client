@@ -126,6 +126,7 @@ pub fn own_features() -> Vec<&'static str> {
         core_protocol::sound::FEATURE,
         FULL_HD,
         crate::video_rate::FEATURE,
+        crate::video_rate::FEATURE_CLOCK,
         crate::remote_session::JOIN,
         crate::remote_session::SWITCH,
     ];
@@ -154,6 +155,8 @@ pub struct ControlPipe {
     force_keyframe: bool,
     /// Technician: the host uses receive reports (`video_rate::FEATURE`).
     report_video: bool,
+    /// Technician: the reports carry the own clock (`video_rate::FEATURE_CLOCK`).
+    report_clock: bool,
     /// Host: reports from the technician that the picture loop has not taken yet.
     video_reports: Vec<crate::video_rate::Report>,
     clipboard: crate::remote_clipboard::ClipboardPipe,
@@ -337,6 +340,7 @@ impl ControlPipe {
             last_keyframe_request: None,
             force_keyframe: false,
             report_video: !config.host && features.iter().any(|name| name == crate::video_rate::FEATURE),
+            report_clock: !config.host && features.iter().any(|name| name == crate::video_rate::FEATURE_CLOCK),
             video_reports: Vec::new(),
             clipboard: {
                 let mut pipe = crate::remote_clipboard::ClipboardPipe::new(clipboard_rx, clipboard);
@@ -383,6 +387,7 @@ impl ControlPipe {
             last_keyframe_request: None,
             force_keyframe: false,
             report_video: false,
+            report_clock: false,
             video_reports: Vec::new(),
             clipboard: crate::remote_clipboard::ClipboardPipe::new(clipboard, true),
             displays: Vec::new(),
@@ -710,6 +715,10 @@ impl ControlPipe {
     /// Host: receive reports from the technician since the last call.
     pub fn take_video_reports(&mut self) -> Vec<crate::video_rate::Report> {
         std::mem::take(&mut self.video_reports)
+    }
+    /// Technician: the host reads the technician's clock in the reports.
+    pub fn report_clock(&self) -> bool {
+        self.report_clock
     }
     /// Technician: tell the host what arrived (only when the host announced it uses the reports).
     pub async fn send_video_report(

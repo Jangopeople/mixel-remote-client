@@ -68,6 +68,8 @@ pub struct Pacer {
     last_loss: Option<Instant>,
     /// No complete picture was lost yet: the rate grows fourfold instead of twofold.
     untroubled: bool,
+    /// Lab statistics: complete pictures counted as lost.
+    pub losses: u32,
 }
 
 impl Pacer {
@@ -83,11 +85,16 @@ impl Pacer {
             latest_complete: None,
             last_loss: None,
             untroubled: true,
+            losses: 0,
         }
     }
     /// Bytes a second at the moment.
     pub fn rate(&self) -> f64 {
         self.rate.min(self.cap)
+    }
+    /// The pace by the pictures' own fate (without the line limit) and the ceiling, lab statistics.
+    pub fn own_rate(&self) -> (f64, f64) {
+        (self.rate, self.ceiling)
     }
     /// The most the line delivers, bytes a second (from the technician's receive reports).
     pub fn set_cap(&mut self, cap: f64) {
@@ -142,6 +149,7 @@ impl Pacer {
         self.latest_complete = None;
         self.last_loss = Some(now);
         self.untroubled = false;
+        self.losses += 1;
         self.ceiling = (self.rate * 0.75).max(MIN_RATE);
         self.rate = (self.rate / 3.0).max(MIN_RATE);
     }
