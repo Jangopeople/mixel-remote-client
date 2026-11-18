@@ -2817,6 +2817,28 @@
         }
       }
     },
+    "Connecting control…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steuerung wird verbunden…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connexion du contrôle…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connessione del controllo…"
+          }
+        }
+      }
+    },
     "Connecting securely…": {
       "localizations": {
         "de": {

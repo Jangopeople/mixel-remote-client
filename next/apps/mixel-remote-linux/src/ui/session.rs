@@ -599,7 +599,7 @@ impl SessionView {
         chip.append(&title);
         chip.update_property(&[gtk::accessible::Property::Label(&tf("Session with %@", &[&name]))]);
         self.toolbar.append(&chip);
-        let mode = caption(&if remote.control { t("View and control") } else { t("View only") });
+        let mode = caption(&if remote.control { t("View and control") } else if remote.control_pending { t("Connecting control…") } else { t("View only") });
         mode.set_wrap(false);
         self.toolbar.append(&mode);
 

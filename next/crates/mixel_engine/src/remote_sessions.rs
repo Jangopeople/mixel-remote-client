@@ -59,6 +59,10 @@ pub struct SessionStatus {
     pub consent: Option<Uuid>,
     pub received: u64,
     pub control: bool,
+    /// See `Status::control_pending`.
+    pub control_pending: bool,
+    #[serde(skip)]
+    pub control_open: bool,
     pub clipboard: bool,
     pub files: bool,
     pub recording_permitted: bool,
@@ -140,6 +144,8 @@ impl Slot {
         self.drawing = None;
         self.clipboard = None;
         self.view.control = false;
+        self.view.control_pending = false;
+        self.view.control_open = false;
         self.view.clipboard = false;
         self.view.files = false;
         self.view.recording_permitted = false;
@@ -216,6 +222,8 @@ impl Registry {
                 consent: None,
                 received: 0,
                 control: false,
+                control_pending: false,
+                control_open: false,
                 clipboard: false,
                 files: false,
                 recording_permitted: false,

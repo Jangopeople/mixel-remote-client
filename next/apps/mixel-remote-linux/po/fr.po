@@ -328,6 +328,9 @@ msgstr "Connecté. Le contrôle du clavier et de la souris est activé."
 msgid "Connecting"
 msgstr "Connexion en cours"
 
+msgid "Connecting control…"
+msgstr "Connexion du contrôle…"
+
 msgid "Connecting securely…"
 msgstr "Connexion sécurisée…"
 

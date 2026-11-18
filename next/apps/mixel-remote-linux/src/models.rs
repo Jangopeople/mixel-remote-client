@@ -84,6 +84,9 @@ pub struct RemoteStatus {
     pub received: u64,
     pub sharing: bool,
     pub control: bool,
+    /// The first picture is up but the control channel is still opening.
+    #[serde(default)]
+    pub control_pending: bool,
     pub clipboard: bool,
     pub files: bool,
     pub recording_permitted: bool,
@@ -167,6 +170,9 @@ pub struct SessionItem {
     pub consent: Option<String>,
     pub received: u64,
     pub control: bool,
+    /// The first picture is up but the control channel is still opening.
+    #[serde(default)]
+    pub control_pending: bool,
     pub clipboard: bool,
     pub files: bool,
     pub recording_permitted: bool,
@@ -336,6 +342,7 @@ impl RemoteStatus {
         view.peer = item.peer;
         view.received = item.received;
         view.control = item.control;
+        view.control_pending = item.control_pending;
         view.clipboard = item.clipboard;
         view.files = item.files;
         view.recording_permitted = item.recording_permitted;

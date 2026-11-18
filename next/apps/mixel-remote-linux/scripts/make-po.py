@@ -17,6 +17,7 @@ LANGS = ['de', 'fr', 'it']
 
 # English: (German (Swiss spelling), French, Italian) — texts only the Linux app shows.
 LINUX = {
+    "Connecting control…": ("Steuerung wird verbunden…", "Connexion du contrôle…", "Connessione del controllo…"),
     'Unattended access: who may connect…': ('Unbeaufsichtigter Zugriff: wer sich verbinden darf…', 'Accès sans surveillance : qui peut se connecter…', 'Accesso non presidiato: chi può collegarsi…'),
     "Reconnecting...": ("Verbindung wird wiederhergestellt ...", "Reconnexion en cours...", "Riconnessione in corso..."),
     "Could not reconnect": ("Verbindung konnte nicht wiederhergestellt werden", "Reconnexion impossible", "Impossibile riconnettersi"),

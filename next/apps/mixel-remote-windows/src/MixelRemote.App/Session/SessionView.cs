@@ -308,7 +308,7 @@ internal sealed class SessionView : Grid
 
     private string Detail()
     {
-        var detail = session.Remote.Control ? L("View and control") : L("View only");
+        var detail = session.Remote.Control ? L("View and control") : session.Remote.ControlPending ? L("Connecting control…") : L("View only");
         if (session.Fps > 0 && session.Frame is { } frame) detail += $" · {frame.Width} × {frame.Height} · {session.Fps} fps";
         return detail;
     }
@@ -358,7 +358,7 @@ internal sealed class SessionView : Grid
         // Who: the system tile, the name, and the ID with "E2E encrypted · Unattended".
         var facts = new List<string> { Format.RemoteId(remote.Peer), L("E2E encrypted") };
         facts.Add(remote.UnattendedSession || (session.RequestedUnattended && !remote.UnattendedRefused) ? L("Unattended") : L("Attended"));
-        if (!remote.Control) facts.Add(L("View only"));
+        if (!remote.Control) facts.Add(remote.ControlPending ? L("Connecting control…") : L("View only"));
         detailLine = Ui.Caption(string.Join(" · ", facts));
         detailLine.FontSize = 12;
         var title = Ui.Column(1, Ui.Text(name, bold: true, wrap: false), Ui.Row(5, Ui.Icon("", 11, Ui.Secondary), detailLine));

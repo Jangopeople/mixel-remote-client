@@ -469,6 +469,7 @@ public final class AppModel: ObservableObject {
         case "connecting", "deciding", "negotiating": return L("Connecting securely…")
         case "active":
             if remote.sharing { return L("Sharing your selected screen. You can end the session at any time.") }
+            if remote.controlPending == true { return L("Connecting control…") }
             return remote.control ? L("Connected. Keyboard and mouse control is enabled.") : L("Connected in view-only mode.")
         default: return Translator.shared.translate(remote.message)
         }

@@ -61,6 +61,8 @@ public sealed record RemoteStatus
     public ulong Received { get; init; }
     public bool Sharing { get; init; }
     public bool Control { get; init; }
+    /// The first picture is up but the control channel is still opening (keys, mouse, clipboard not available yet).
+    public bool ControlPending { get; init; }
     public bool Clipboard { get; init; }
     public bool Files { get; init; }
     public bool RecordingPermitted { get; init; }
@@ -132,7 +134,7 @@ public sealed record RemoteStatus
             new SessionStatus
             {
                 Id = Session ?? "", Session = Session, Peer = peer, Device = peer, Phase = Phase, Message = Message, Consent = Consent,
-                Received = Received, Control = Control, Clipboard = Clipboard, Files = Files, RecordingPermitted = RecordingPermitted,
+                Received = Received, Control = Control, ControlPending = ControlPending, Clipboard = Clipboard, Files = Files, RecordingPermitted = RecordingPermitted,
                 Recording = Recording, RecordingParts = RecordingParts, Displays = Displays, Display = Display, DisplayAll = DisplayAll, PrintJobs = PrintJobs,
                 HostActions = HostActions, SigninId = SigninId, HostMacs = HostMacs, MeetingOffer = MeetingOffer, PeerFeatures = PeerFeatures,
                 JoinedSession = JoinedSession, Switched = Switched, PasswordSession = PasswordSession, UnattendedSession = UnattendedSession, UnattendedRefused = UnattendedRefused,
@@ -175,6 +177,8 @@ public sealed record SessionStatus
     public string? Consent { get; init; }
     public ulong Received { get; init; }
     public bool Control { get; init; }
+    /// The first picture is up but the control channel is still opening (keys, mouse, clipboard not available yet).
+    public bool ControlPending { get; init; }
     public bool Clipboard { get; init; }
     public bool Files { get; init; }
     public bool RecordingPermitted { get; init; }
@@ -216,7 +220,7 @@ public sealed record SessionStatus
     public RemoteStatus Project(RemoteStatus top) => top with
     {
         Phase = Phase, Message = Message, Session = Id.Length == 0 ? Session : Id, Consent = Consent, Peer = Peer, Sharing = false,
-        Received = Received, Control = Control, Clipboard = Clipboard, Files = Files, RecordingPermitted = RecordingPermitted,
+        Received = Received, Control = Control, ControlPending = ControlPending, Clipboard = Clipboard, Files = Files, RecordingPermitted = RecordingPermitted,
         Recording = Recording, RecordingParts = RecordingParts, Displays = Displays, Display = Display, DisplayAll = DisplayAll, PrintJobs = PrintJobs,
         HostActions = HostActions, SigninId = SigninId, HostMacs = HostMacs, MeetingOffer = MeetingOffer, PeerFeatures = PeerFeatures,
         JoinedSession = JoinedSession, Switched = Switched,

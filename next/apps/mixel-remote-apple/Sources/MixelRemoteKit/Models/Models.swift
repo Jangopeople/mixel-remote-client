@@ -86,6 +86,8 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
     public var received: UInt64
     public var sharing: Bool
     public var control: Bool
+    /// The first picture is up but the control channel is still opening (keys, mouse, clipboard not available yet).
+    public var controlPending: Bool? = nil
     public var clipboard: Bool
     public var files: Bool
     public var recordingPermitted: Bool
@@ -236,6 +238,7 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
         copy.peer = item.peer
         copy.received = item.received
         copy.control = item.control
+        copy.controlPending = item.controlPending
         copy.clipboard = item.clipboard
         copy.files = item.files
         copy.recordingPermitted = item.recordingPermitted
@@ -274,6 +277,7 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
     public var consent: String?
     public var received: UInt64
     public var control: Bool
+    public var controlPending: Bool = false
     public var clipboard: Bool
     public var files: Bool
     public var recordingPermitted: Bool
@@ -322,7 +326,7 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
     }
 
     private enum Key: String, CodingKey {
-        case id, session, peer, device, phase, message, consent, received, control, clipboard, files, recordingPermitted, recording, recordingParts, displays, display
+        case id, session, peer, device, phase, message, consent, received, control, controlPending, clipboard, files, recordingPermitted, recording, recordingParts, displays, display
         case displayAll, printJobs, hostActions, signinId, hostMacs, meetingOffer, peerFeatures, joinedSession, switched, quality, startedAt
         case reconnecting, reconnectFailed, passwordSession, unattendedSession, unattendedRefused
     }
@@ -337,6 +341,7 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
         consent = try? c.decodeIfPresent(String.self, forKey: .consent)
         received = (try? c.decodeIfPresent(UInt64.self, forKey: .received)) ?? 0
         control = (try? c.decodeIfPresent(Bool.self, forKey: .control)) ?? false
+        controlPending = (try? c.decodeIfPresent(Bool.self, forKey: .controlPending)) ?? false
         clipboard = (try? c.decodeIfPresent(Bool.self, forKey: .clipboard)) ?? false
         files = (try? c.decodeIfPresent(Bool.self, forKey: .files)) ?? false
         recordingPermitted = (try? c.decodeIfPresent(Bool.self, forKey: .recordingPermitted)) ?? false
@@ -373,6 +378,7 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
         try c.encode(consent, forKey: .consent)
         try c.encode(received, forKey: .received)
         try c.encode(control, forKey: .control)
+        try c.encode(controlPending, forKey: .controlPending)
         try c.encode(clipboard, forKey: .clipboard)
         try c.encode(files, forKey: .files)
         try c.encode(recordingPermitted, forKey: .recordingPermitted)

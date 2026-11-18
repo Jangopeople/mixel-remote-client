@@ -328,6 +328,9 @@ msgstr "Verbunden. Tastatur- und Maussteuerung ist aktiv."
 msgid "Connecting"
 msgstr "Verbindung wird aufgebaut"
 
+msgid "Connecting control…"
+msgstr "Steuerung wird verbunden…"
+
 msgid "Connecting securely…"
 msgstr "Sichere Verbindung wird aufgebaut…"
 

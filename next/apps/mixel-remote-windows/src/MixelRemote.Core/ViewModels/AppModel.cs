@@ -627,7 +627,7 @@ public sealed class AppModel : Observable
                 "outgoing" => L("Waiting for the other person to accept your request."),
                 "connecting" or "deciding" or "negotiating" => L("Connecting securely…"),
                 "active" when Remote.Sharing => L("Sharing your selected screen. You can end the session at any time."),
-                "active" => Remote.Control ? L("Connected. Keyboard and mouse control is enabled.") : L("Connected in view-only mode."),
+                "active" => Remote.ControlPending ? L("Connecting control…") : Remote.Control ? L("Connected. Keyboard and mouse control is enabled.") : L("Connected in view-only mode."),
                 _ => Translator.Shared.Translate(Remote.Message),
             };
         }

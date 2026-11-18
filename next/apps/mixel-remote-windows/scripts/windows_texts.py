@@ -1,6 +1,7 @@
 # Texts only the Windows app has: English key -> (German, Swiss spelling; French; Italian with "Lei").
 # make-texts.py takes these first, then the Apple apps' NATIVE table, then the desktop app's table.
 WINDOWS = {
+    "Connecting control…": ("Steuerung wird verbunden…", "Connexion du contrôle…", "Connessione del controllo…"),
     "A technician is connected through the sign-in screen access.": ("Ein Techniker ist über den Zugriff auf den Anmeldebildschirm verbunden.", "Un technicien est connecté via l’accès à l’écran de connexion.", "Un tecnico è connesso tramite l’accesso alla schermata di accesso."),
     "Click to control the remote computer. Ctrl+Alt+Home gives the keyboard back.": ("Klicken, um den entfernten Computer zu steuern. Ctrl+Alt+Pos1 gibt die Tastatur zurück.", "Cliquez pour contrôler l’ordinateur distant. Ctrl+Alt+Origine rend le clavier.", "Faccia clic per controllare il computer remoto. Ctrl+Alt+Home restituisce la tastiera."),
     "Ctrl+Alt+Del on the remote computer": ("Ctrl+Alt+Del auf dem entfernten Computer", "Ctrl+Alt+Suppr sur l’ordinateur distant", "Ctrl+Alt+Canc sul computer remoto"),

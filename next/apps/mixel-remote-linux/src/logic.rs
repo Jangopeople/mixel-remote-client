@@ -167,6 +167,8 @@ pub fn connection_message(signed_in: bool, remote: &RemoteStatus, stopping: bool
         "active" => {
             if remote.sharing {
                 t("Sharing your selected screen. You can end the session at any time.")
+            } else if remote.control_pending {
+                t("Connecting control…")
             } else if remote.control {
                 t("Connected. Keyboard and mouse control is enabled.")
             } else {
@@ -1032,6 +1034,17 @@ mod tests {
         Device { device: format!("d{id}"), connection_id: id, name: format!("PC {id}"), os: "windows".into(), ..Default::default() }
     }
 
+    #[test]
+    fn the_label_follows_the_control_state_not_just_view_only() {
+        crate::i18n::set_choice("en");
+        let mut active = remote("active");
+        assert_eq!(connection_message(true, &active, false), "Connected in view-only mode.", "a real view-only session");
+        active.control_pending = true;
+        assert_eq!(connection_message(true, &active, false), "Connecting control…", "picture up, control channel still opening");
+        active.control_pending = false;
+        active.control = true;
+        assert_eq!(connection_message(true, &active, false), "Connected. Keyboard and mouse control is enabled.", "channel open");
+    }
     #[test]
     fn status_lines_follow_the_phase() {
         crate::i18n::set_choice("en");

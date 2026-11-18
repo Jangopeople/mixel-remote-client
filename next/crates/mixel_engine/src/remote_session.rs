@@ -79,6 +79,11 @@ pub struct Status {
     pub received: u64,
     pub sharing: bool,
     pub control: bool,
+    /// Technician: the first picture is up (fast first picture) but the control channel is still opening: keys, mouse, clipboard and
+    /// files are not available yet. False in a session that is really view only, and after the channel is open or the session ended.
+    pub control_pending: bool,
+    #[serde(skip)]
+    pub control_open: bool,
     pub clipboard: bool,
     pub files: bool,
     pub recording_permitted: bool,
@@ -262,6 +267,8 @@ impl Default for Status {
             received: 0,
             sharing: false,
             control: false,
+            control_pending: false,
+            control_open: false,
             clipboard: false,
             files: false,
             recording_permitted: false,
@@ -426,6 +433,8 @@ impl Status {
         self.received = view.received;
         self.sharing = false;
         self.control = view.control;
+        self.control_pending = view.control_pending;
+        self.control_open = view.control_open;
         self.clipboard = view.clipboard;
         self.files = view.files;
         self.recording_permitted = view.recording_permitted;
@@ -954,6 +963,8 @@ impl RemoteSession {
                     view.phase = "closing".into();
                     view.message = "The session stopped; cleaning up the connection".into();
                     view.control = false;
+                    view.control_pending = false;
+                    view.control_open = false;
                     view.clipboard = false;
                     view.files = false;
                     view.recording_permitted = false;
@@ -992,6 +1003,8 @@ impl RemoteSession {
             status.phase = "closing".into();
             status.message = "The session stopped; cleaning up the connection".into();
             status.control = false;
+            status.control_pending = false;
+            status.control_open = false;
             status.clipboard = false;
             status.files = false;
             status.recording_permitted = false;
@@ -1616,6 +1629,8 @@ impl RemoteSession {
         inner.drawing = None;
         inner.clipboard = None;
         inner.status.control = false;
+        inner.status.control_pending = false;
+        inner.status.control_open = false;
         inner.status.clipboard = false;
         inner.status.files = false;
         inner
@@ -1976,6 +1991,8 @@ impl RemoteSession {
         {
             if !slot.cancelled() && slot.view.phase != "closing" {
                 slot.view.control = control;
+                slot.view.control_open = true;
+                slot.view.control_pending = false;
                 slot.input = input;
                 slot.view.clipboard = clipboard;
                 slot.clipboard = clipboard_tx;
@@ -1988,6 +2005,8 @@ impl RemoteSession {
             && inner.status.phase != "closing"
         {
             inner.status.control = control;
+            inner.status.control_open = true;
+            inner.status.control_pending = false;
             inner.input = input;
             inner.status.clipboard = clipboard;
             inner.clipboard = clipboard_tx;
@@ -2182,6 +2201,8 @@ impl RemoteSession {
             inner.drawing = None;
             inner.clipboard = None;
             inner.status.control = false;
+            inner.status.control_pending = false;
+            inner.status.control_open = false;
             inner.status.clipboard = false;
             inner.status.files = false;
             if let Some(cancel) = inner.session_cancel.take() {
@@ -2241,6 +2262,8 @@ impl RemoteSession {
         inner.drawing = None;
         inner.clipboard = None;
         inner.status.control = false;
+        inner.status.control_pending = false;
+        inner.status.control_open = false;
         inner.status.clipboard = false;
         inner.status.files = false;
         inner.status.received = 0;
@@ -2295,6 +2318,8 @@ impl RemoteSession {
         slot.drawing = None;
         slot.clipboard = None;
         slot.view.control = false;
+        slot.view.control_pending = false;
+        slot.view.control_open = false;
         slot.view.clipboard = false;
         slot.view.files = false;
         slot.restarted();
@@ -2381,6 +2406,8 @@ impl RemoteSession {
             if !slot.cancelled() && slot.view.phase != "closing" {
                 slot.view.phase = "active".into();
                 slot.view.message = message.into();
+                // The fast first picture shows before the control channel is open: until it is (`grant`), control is pending.
+                slot.view.control_pending = !slot.view.control_open;
                 slot.pictures(received);
             }
             return;
@@ -2392,6 +2419,7 @@ impl RemoteSession {
         {
             inner.status.phase = "active".into();
             inner.status.message = message.into();
+            inner.status.control_pending = !inner.status.sharing && !inner.status.control_open;
             inner.status.received = received;
         }
     }
@@ -5884,5 +5912,63 @@ mod ice_spacing_tests {
         assert_eq!(queue.due(|_| true), Some(a));
         assert_eq!(queue.due(|gone| gone != b), Some(c), "a session that ended while it waited is skipped");
         assert_eq!(queue.due(|_| true), None, "nothing left");
+    }
+}
+
+#[cfg(test)]
+mod control_pending_tests {
+    use super::*;
+    async fn active_session(remote: &RemoteSession) -> Uuid {
+        let session = Uuid::new_v4();
+        let mut inner = remote.0.lock().await;
+        inner.status.phase = "outgoing".into();
+        inner.status.session = Some(session);
+        session
+    }
+    async fn pending(remote: &RemoteSession) -> (bool, bool) {
+        let inner = remote.0.lock().await;
+        (inner.status.control_pending, inner.status.control)
+    }
+    #[tokio::test]
+    async fn the_picture_before_the_control_channel_shows_control_as_pending_until_it_opens() {
+        let remote = RemoteSession::default();
+        let session = active_session(&remote).await;
+        assert_eq!(pending(&remote).await, (false, false), "nothing pending before a picture");
+        remote.update_peer(0, session, "Remote video decoded", 1).await;
+        assert_eq!(pending(&remote).await, (true, false), "picture up, channel still opening");
+        remote.update_peer(0, session, "Remote video decoded", 2).await;
+        assert_eq!(pending(&remote).await, (true, false), "more pictures do not change it");
+        let (input, _commands) = mpsc::channel(1);
+        remote.grant(0, session, true, Some(input), true, None).await;
+        assert_eq!(pending(&remote).await, (false, true), "the channel is open: the normal state");
+        remote.update_peer(0, session, "Remote video decoded", 3).await;
+        assert_eq!(pending(&remote).await, (false, true), "a picture after the channel never makes it pending again");
+    }
+    #[tokio::test]
+    async fn a_session_that_really_is_view_only_shows_the_true_state_once_the_channel_is_open() {
+        let remote = RemoteSession::default();
+        let session = active_session(&remote).await;
+        remote.update_peer(0, session, "Remote video decoded", 1).await;
+        assert_eq!(pending(&remote).await, (true, false));
+        remote.grant(0, session, false, None, false, None).await;
+        assert_eq!(pending(&remote).await, (false, false), "granted without control: view only, not pending");
+    }
+    #[tokio::test]
+    async fn without_the_fast_picture_the_channel_comes_first_and_control_is_never_pending() {
+        let remote = RemoteSession::default();
+        let session = active_session(&remote).await;
+        let (input, _commands) = mpsc::channel(1);
+        remote.grant(0, session, true, Some(input), true, None).await;
+        remote.update_peer(0, session, "Remote video decoded", 1).await;
+        assert_eq!(pending(&remote).await, (false, true));
+    }
+    #[tokio::test]
+    async fn pending_is_in_the_status_the_apps_read_and_the_internal_flag_is_not() {
+        let remote = RemoteSession::default();
+        let session = active_session(&remote).await;
+        remote.update_peer(0, session, "Remote video decoded", 1).await;
+        let json = serde_json::to_value(remote.0.lock().await.status.clone()).unwrap();
+        assert_eq!(json["control_pending"], true);
+        assert!(json.get("control_open").is_none());
     }
 }
