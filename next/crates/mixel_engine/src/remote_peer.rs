@@ -950,8 +950,19 @@ async fn negotiate(
     let mut verified: Option<core_protocol::crypto::ControlChannel> = None;
     let mut early_track: Option<RemoteTrack> = None;
     let mut opened = false;
+    // Host: the first picture is captured and encoded while DTLS is still opening (nothing is sent before the peer is verified).
+    let mut prepared: Option<EarlyPicture> = if early && config.host {
+        let full_hd = peer_features.iter().any(|name| name == crate::remote_control::FULL_HD);
+        let early_size = if full_hd { source_size_within(config, (1920.0, 1080.0))? } else { size };
+        Some(EarlyPicture::start(config, early_size))
+    } else {
+        None
+    };
     if early {
         let observed = loop {
+            if let Some(prep) = prepared.as_mut() {
+                prep.advance();
+            }
             if config.stopped() {
                 return Err("Session stopped during transport opening".into());
             }
@@ -972,10 +983,9 @@ async fn negotiate(
         verified = Some(verify_peer(&mut consent, handshake.take(), hello.take(), observed)?);
         crate::qa_timeline::mark("peer verified on the encrypted transport (identity and certificate)");
         if config.host {
-            let full_hd = peer_features.iter().any(|name| name == crate::remote_control::FULL_HD);
-            let early_size = if full_hd { source_size_within(config, (1920.0, 1080.0))? } else { size };
             let early_sender = sender.as_ref().ok_or("Host video sender unavailable")?;
-            host_early_picture(config, transport, &consent, early_sender, &mut channel, early_size, deadline).await?;
+            let mut prep = prepared.take().ok_or("Early picture not prepared")?;
+            host_early_picture(config, transport, &consent, early_sender, &mut channel, &mut prep, deadline).await?;
             opened = true;
         } else if let Some(shown) = channel.clone() {
             let mut before = Ctl::before_open();
@@ -1100,32 +1110,113 @@ async fn negotiate(
 /// 1.5 s if the channel is still not open: a packet lost beyond the stack's repeat requests would
 /// otherwise leave the technician without a picture until the channel opens), then waits for the
 /// channel to open and closes this capture again; the normal picture loop opens its own.
+/// The host's first key picture, made while the transport is still opening: the screen is captured and encoded as soon as the
+/// request is accepted and the peer's features are known, so that the picture is ready the moment DTLS is up and the peer
+/// verified (nothing is sent before that). Capture, encoder start and the first encode used to begin only after DTLS, which
+/// cost 1.2 to 3.5 s on a loaded host (speed pass, 18 Nov 2026).
+struct EarlyPicture {
+    capture: Option<session_platform::Capture>,
+    encoder: Option<mpsc::Sender<EncodeRequest>>,
+    encoding: Option<tokio::sync::oneshot::Receiver<Result<EncodeReply, String>>>,
+    picture: Option<Vec<u8>>,
+    sequence: u64,
+    started: Instant,
+    size: (usize, usize),
+}
+
+impl EarlyPicture {
+    fn start(config: &Config, size: (usize, usize)) -> Self {
+        let capture = session_platform::capture(
+            &config.source,
+            size,
+            #[cfg(target_os = "linux")]
+            config.portal.clone(),
+        )
+        .ok();
+        crate::qa_timeline::mark("early: screen capture opened");
+        let encoder = if capture.is_some() {
+            start_encoder(size, encoder_bitrate(size, crate::video_pacing::START_RATE)).ok()
+        } else {
+            None
+        };
+        Self { capture, encoder, encoding: None, picture: None, sequence: 0, started: Instant::now(), size }
+    }
+
+    /// One non-blocking step towards the encoded picture.
+    fn advance(&mut self) {
+        let size = self.size;
+        let (capture, encoder, encoding, picture, sequence, started) =
+            (&mut self.capture, &self.encoder, &mut self.encoding, &mut self.picture, &mut self.sequence, self.started);
+        if picture.is_none() {
+            if let Some(reply) = encoding.as_mut() {
+                match reply.try_recv() {
+                    Ok(Ok(EncodeReply { picture: Some(encoded), .. })) => {
+                        crate::qa_timeline::mark("early: first picture encoded");
+                        *encoding = None;
+                        *picture = Some(encoded.annex_b.to_vec());
+                    }
+                    Ok(_) | Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                        // Nothing came out (or the encoder stopped): the normal loop makes the picture.
+                        *encoding = None;
+                        *capture = None;
+                    }
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+                }
+            } else if let (Some(grab), Some(encoder)) = (capture.as_ref(), encoder.as_ref()) {
+                match session_platform::frames(grab).next(*sequence, Duration::from_millis(1)) {
+                    Ok((next, frame)) => {
+                        *sequence = next;
+                        let frame = if frame.width() == size.0 && frame.height() == size.1 {
+                            frame
+                        } else {
+                            match fit_frame(&frame, size) {
+                                Ok(fitted) => Arc::new(fitted),
+                                Err(_) => {
+                                    *capture = None;
+                                    return;
+                                }
+                            }
+                        };
+                        let (reply, output) = tokio::sync::oneshot::channel();
+                        if encoder
+                            .try_send(EncodeRequest { frame, timestamp: started.elapsed().as_micros() as u64, keyframe: true, reply })
+                            .is_ok()
+                        {
+                            *encoding = Some(output);
+                        } else {
+                            *capture = None;
+                        }
+                    }
+                    Err(native_os_capture::stream::CaptureError::Timeout) => {}
+                    Err(_) => *capture = None,
+                }
+            }
+        }
+    }
+
+    fn stop(&mut self) {
+        if let Some(mut capture) = self.capture.take() {
+            let _ = capture.stop();
+        }
+    }
+}
+
+impl Drop for EarlyPicture {
+    /// The peer failed verification (or the session ended) before the picture was sent: the capture does not stay open.
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
 async fn host_early_picture(
     config: &mut Config,
     transport: &mut NativeTransport,
     consent: &Session,
     sender: &H264VideoSender,
     channel: &mut Option<Arc<dyn NativeDataChannel>>,
-    size: (usize, usize),
+    prep: &mut EarlyPicture,
     deadline: Instant,
 ) -> Result<(), String> {
-    let mut capture = session_platform::capture(
-        &config.source,
-        size,
-        #[cfg(target_os = "linux")]
-        config.portal.clone(),
-    )
-    .ok();
-    crate::qa_timeline::mark("early: screen capture opened");
-    let encoder = if capture.is_some() {
-        start_encoder(size, encoder_bitrate(size, crate::video_pacing::START_RATE)).ok()
-    } else {
-        None
-    };
-    let mut encoding: Option<tokio::sync::oneshot::Receiver<Result<EncodeReply, String>>> = None;
-    let mut picture: Option<Vec<u8>> = None;
-    let (mut sequence, mut sends, mut sent_at) = (0, 0u32, Instant::now());
-    let started = Instant::now();
+    let (mut sends, mut sent_at) = (0u32, Instant::now());
     let result = loop {
         if config.stopped() {
             break Ok(());
@@ -1156,52 +1247,8 @@ async fn host_early_picture(
         } else {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        if picture.is_none() {
-            if let Some(reply) = &mut encoding {
-                match reply.try_recv() {
-                    Ok(Ok(EncodeReply { picture: Some(encoded), .. })) => {
-                        crate::qa_timeline::mark("early: first picture encoded");
-                        encoding = None;
-                        picture = Some(encoded.annex_b.to_vec());
-                    }
-                    Ok(_) | Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                        // Nothing came out (or the encoder stopped): the normal loop makes the picture.
-                        encoding = None;
-                        capture = None;
-                    }
-                    Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
-                }
-            } else if let (Some(grab), Some(encoder)) = (&capture, &encoder) {
-                match session_platform::frames(grab).next(sequence, Duration::from_millis(1)) {
-                    Ok((next, frame)) => {
-                        sequence = next;
-                        let frame = if frame.width() == size.0 && frame.height() == size.1 {
-                            frame
-                        } else {
-                            match fit_frame(&frame, size) {
-                                Ok(fitted) => Arc::new(fitted),
-                                Err(_) => {
-                                    capture = None;
-                                    continue;
-                                }
-                            }
-                        };
-                        let (reply, output) = tokio::sync::oneshot::channel();
-                        if encoder
-                            .try_send(EncodeRequest { frame, timestamp: started.elapsed().as_micros() as u64, keyframe: true, reply })
-                            .is_ok()
-                        {
-                            encoding = Some(output);
-                        } else {
-                            capture = None;
-                        }
-                    }
-                    Err(native_os_capture::stream::CaptureError::Timeout) => {}
-                    Err(_) => capture = None,
-                }
-            }
-        }
-        if let Some(annex_b) = &picture {
+        prep.advance();
+        if let Some(annex_b) = &prep.picture {
             let due = match sends {
                 0 => true,
                 1 => sent_at.elapsed() >= Duration::from_millis(1500),
@@ -1234,9 +1281,7 @@ async fn host_early_picture(
             }
         }
     };
-    if let Some(mut capture) = capture {
-        let _ = capture.stop();
-    }
+    prep.stop();
     result
 }
 async fn pump_ice(config: &mut Config, transport: &mut NativeTransport) -> Result<(), String> {
@@ -2638,6 +2683,16 @@ mod renewal_tests {
 
 #[cfg(test)]
 mod early_peer_tests {
+    /// The early picture is made while the transport opens; with no screen to capture it stays empty, never sends, and stopping twice is harmless.
+    #[test]
+    fn an_early_picture_without_a_screen_stays_empty_and_stops_cleanly() {
+        let mut early = EarlyPicture { capture: None, encoder: None, encoding: None, picture: None, sequence: 0, started: Instant::now(), size: (64, 64) };
+        early.advance();
+        assert!(early.picture.is_none());
+        early.stop();
+        early.stop();
+    }
+
     use super::*;
     use ed25519_dalek::SigningKey;
 
