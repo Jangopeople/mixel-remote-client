@@ -13,6 +13,7 @@ TABLES = json.load(open(os.path.join(HERE, 'Sources/MixelRemoteKit/Resources/eng
 
 # English key: (German (Swiss spelling), French, Italian)
 NATIVE = {
+    'Connecting control…': ('Steuerung wird verbunden…', 'Connexion du contrôle…', 'Connessione del controllo…'),
     # --- Who may connect (unattended access grants), 2026-11-17 ---
     'People who may connect to %@ (%@) without anyone there being asked.': ('Personen, die sich mit %@ (%@) verbinden dürfen, ohne dass jemand vor Ort gefragt wird.', 'Personnes autorisées à se connecter à %@ (%@) sans que quelqu’un sur place soit sollicité.', 'Persone che possono collegarsi a %@ (%@) senza che qualcuno sul posto venga interpellato.'),
     'The list could not be read.': ('Die Liste konnte nicht gelesen werden.', 'La liste n’a pas pu être lue.', 'Impossibile leggere l’elenco.'),
