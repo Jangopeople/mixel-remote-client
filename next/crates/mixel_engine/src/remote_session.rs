@@ -40,6 +40,7 @@ const POLICY: &str = signaling_server::protocol::FEATURE_POLICY;
 const RESUME: &str = signaling_server::protocol::FEATURE_RESUME;
 const SIGNED: &str = signaling_server::protocol::FEATURE_SIGNED;
 const EARLY_ICE: &str = signaling_server::protocol::FEATURE_EARLY_ICE;
+const PREWARM: &str = signaling_server::protocol::FEATURE_PREWARM;
 /// `macos-arm64`, `windows-x64`, `linux-x64`: what the Devices list shows next to the version.
 fn app_platform() -> String {
     let arch = match std::env::consts::ARCH {
@@ -468,6 +469,10 @@ pub enum Command {
     },
     Pairing(Option<Uuid>),
     Presence(Vec<u32>),
+    /// Technician: the Devices list is shown (a device is online or selected): keep a transport ready.
+    Warm,
+    /// Technician: the Devices list was left or the app is idle: release the ready transport.
+    Unwarm,
     Agent {
         inventory: Option<String>,
         result: Option<signaling_server::protocol::AgentResult>,
@@ -1328,6 +1333,29 @@ impl RemoteSession {
             .ok_or("Connect this device first")?
             .try_send(Command::Presence(hosts))
             .map_err(|_| "The connection service is busy".into())
+    }
+    /// Technician: the Devices list is shown with a device that is online (or selected): keep a transport ready
+    /// for the next Connect (a relay allocation and the offer made in advance, released again after 2 minutes or
+    /// when `unwarm` is called). Without the connection service's `prewarm` gate this does nothing.
+    pub async fn warm(&self) -> Result<(), String> {
+        let inner = self.0.lock().await;
+        if !matches!(inner.status.phase.as_str(), "ready" | "active" | "incoming" | "outgoing") {
+            return Ok(());
+        }
+        match inner.commands.as_ref() {
+            Some(commands) => {
+                let _ = commands.try_send(Command::Warm);
+                Ok(())
+            }
+            None => Ok(()),
+        }
+    }
+    /// Technician: the Devices list was left (or the app is idle): release the ready transport.
+    pub async fn unwarm(&self) {
+        let inner = self.0.lock().await;
+        if let Some(commands) = inner.commands.as_ref() {
+            let _ = commands.try_send(Command::Unwarm);
+        }
     }
     pub async fn pairing(&self, confirmation: Option<Uuid>) -> Result<(), String> {
         crate::service_config::require_host()?;
@@ -3313,7 +3341,7 @@ async fn run(
         let mut features:Vec<String>=if own_ticket.unattended_host_only() || crate::service_config::controller_only() {vec![JOIN.into()]} else {vec![JOIN.into(),SWITCH.into()]};
         // Password-session warnings, the administrator's device policy, resuming a session after the connection
         // service restarted, and signed remote commands (verified in `agent_verify`).
-        features.extend([ENDING.into(),POLICY.into(),RESUME.into(),SIGNED.into(),EARLY_ICE.into()]);
+        features.extend([ENDING.into(),POLICY.into(),RESUME.into(),SIGNED.into(),EARLY_ICE.into(),PREWARM.into()]);
         send(&mut socket,ClientMessage::Capabilities{features}).await?;
         send(&mut socket,ClientMessage::AppVersion{version:crate::agent::APP_VERSION.into(),platform:app_platform()}).await?;
         // An older connection service answers "invalid": then these features are simply not offered.
@@ -3353,6 +3381,11 @@ async fn run(
         // Relay credentials before consent (connection service feature `earlyice`): asked when the request is sent
         // (technician) or arrives (host), kept until the session is accepted, then used as if they had just come.
         let mut early_ok=false;
+        // A transport kept ready before Connect (feature `prewarm`): asked for while the Devices list is shown, taken by the next request.
+        let mut prewarm_ok=false;
+        let mut warm:Option<remote_peer::Warm>=None;
+        let mut warm_asked:Option<std::time::Instant>=None;
+        let mut pending_warm:Option<remote_peer::Warm>=None;
         let mut early_asked:std::collections::HashMap<Uuid,std::time::Instant>=std::collections::HashMap::new();
         let mut early_leases:std::collections::HashMap<Uuid,signaling_server::turn::IceLease>=std::collections::HashMap::new();
         let mut injected:std::collections::VecDeque<ServerMessage>=std::collections::VecDeque::new();
@@ -3535,6 +3568,7 @@ async fn run(
                         if peer.is_some(){state.slot_end(generation,slot,"This computer is being helped right now; finish that first".into()).await;continue;}
                         if ctrl.len()+outgoing.len()>=crate::remote_sessions::MAX_SESSIONS{state.slot_end(generation,slot,"You already have 4 sessions open. End one to start another.".into()).await;continue;}
                         if !state.slot_open(slot).await{continue;}
+                        if let Some(ready)=warm.take(){pending_warm=Some(ready);}
                         crate::qa_timeline::begin(if unattended {"connect asked (unattended)"} else if code.is_some() {"connect asked (password)"} else {"connect asked (attended)"});
                         let Some(credential) = credential.as_ref() else { return Err("A startup host cannot request sessions".into()); };
                         let cached = peer_keys.get(&host).and_then(|(key, at)| (at.elapsed() < Duration::from_secs(300)).then_some(*key));
@@ -3558,6 +3592,16 @@ async fn run(
                     Command::ConfigureUnattended{enabled}=>{
                         send(&mut socket,ClientMessage::ConfigureUnattended{enabled}).await?;
                     },
+                    Command::Warm=>{
+                        // Refreshed before it runs out; one question in flight; only technician apps that are not being helped.
+                        if let Some(ready)=&warm && ready.age()>=Duration::from_secs(90){warm=None;}
+                        if prewarm_ok && warm.is_none() && pending_warm.is_none() && peer.is_none() && warm_asked.is_none_or(|at|at.elapsed()>Duration::from_secs(12)) && ctrl.len()+outgoing.len()<crate::remote_sessions::MAX_SESSIONS{
+                            crate::qa_timeline::mark("ready transport asked for (relay lease without a session)");
+                            send(&mut socket,ClientMessage::Ice{session:Uuid::nil()}).await?;
+                            warm_asked=Some(std::time::Instant::now());
+                        }
+                    },
+                    Command::Unwarm=>{warm=None;warm_asked=None;},
                     Command::Presence(hosts)=>{
                         if presence_asked.len()>=16{presence_asked.pop_front();}
                         presence_asked.push_back(hosts.clone());
@@ -3744,7 +3788,7 @@ async fn run(
                                         for early in colleague.early.drain(..){overflow|=signals_tx.try_send(early).is_err();}
                                         colleague.signals=Some(signals_tx);
                                         if overflow {Err("Colleague signaling queue overflowed".to_owned())}
-                                        else {remote_peer::start(remote_peer::Config{state:state.clone(),generation,session,slot:session,transport:session,link:Default::default(),previous:None,nonce:binding,host:true,login_window:session_platform::login_window_mode(),remote_key:colleague.key,identity:identity.clone(),source:colleague.source.clone(),#[cfg(target_os = "linux")] portal:colleague.portal.clone(),confirm:colleague.confirm,control:colleague.control,clipboard:false,files:false,chat:false,recording:false,consent_id:colleague.consent_id,consent_cancel:colleague.consent_cancel.clone(),consent_started:colleague.started_at,session_cancel:colleague.cancel.clone(),account_cancel:cancel.clone(),signals:signals_rx,commands:tx.clone(),video:video.clone(),ice_servers,relay_only:service.relay_only,authorization:broker_lease.clone(),peer_expires:colleague.expires.clone(),mirror:true}).map(|()|None)}
+                                        else {remote_peer::start(remote_peer::Config{state:state.clone(),generation,session,slot:session,transport:session,link:Default::default(),previous:None,nonce:binding,host:true,login_window:session_platform::login_window_mode(),remote_key:colleague.key,identity:identity.clone(),source:colleague.source.clone(),#[cfg(target_os = "linux")] portal:colleague.portal.clone(),confirm:colleague.confirm,control:colleague.control,clipboard:false,files:false,chat:false,recording:false,consent_id:colleague.consent_id,consent_cancel:colleague.consent_cancel.clone(),consent_started:colleague.started_at,session_cancel:colleague.cancel.clone(),account_cancel:cancel.clone(),signals:signals_rx,commands:tx.clone(),video:video.clone(),ice_servers,relay_only:service.relay_only,authorization:broker_lease.clone(),peer_expires:colleague.expires.clone(),mirror:true,prewarmed:None}).map(|()|None)}
                                     },
                                     _=>Err("Invalid relay configuration for the colleague".to_owned()),
                                 }
@@ -3822,6 +3866,8 @@ async fn run(
                         ServerMessage::Presence{online}=>{
                             // Several parts of the window ask about different devices: keep what the others learned.
                             let asked=presence_asked.pop_front().unwrap_or_default();
+                            // A device is online while the Devices list is asking: keep a transport ready for the Connect.
+                            if !online.is_empty(){let _=tx.try_send(Command::Warm);}
                             state.change(generation,|status|{
                                 status.online.retain(|id|!asked.contains(id) && !online.contains(id));
                                 status.online.extend(online);
@@ -3869,13 +3915,14 @@ async fn run(
                                 continue;
                             }
                             ctrl.push(started);
-                            if early_ok && !joined_request && early_asked.len()<32 {
+                            if early_ok && !joined_request && early_asked.len()<32 && pending_warm.is_none() {
                                 crate::qa_timeline::mark("relay credentials asked before consent");
                                 send(&mut socket,ClientMessage::Ice{session}).await?;
                                 early_asked.insert(session,std::time::Instant::now());
                             }
                         },
                         ServerMessage::EarlyIce=>{early_ok=true;},
+                        ServerMessage::Prewarm=>{prewarm_ok=true;},
                         ServerMessage::Consent{session,requester_connection,requester,requester_identity,unattended,joining:Some(join),..}=>{
                             // A colleague of the technician asks to join the running session.
                             let primary=peer.as_ref().filter(|active|active.host && active.id==join.session && active.remote==join.inviter_connection && active.signals.is_some() && !active.cancel.load(Ordering::Acquire));
@@ -4042,7 +4089,11 @@ async fn run(
                                 if host_role{state.change(generation,|status|{status.phase="negotiating".into();status.message="Accepted; obtaining authenticated short-lived relay configuration".into();}).await;}
                                 else{state.slot_change(generation,active_ui,|view|{view.phase="negotiating".into();view.message="Accepted; obtaining authenticated short-lived relay configuration".into();}).await;}
                             }
-                            if let Some(lease)=early_leases.remove(&session){
+                            if let Some(ready)=pending_warm.as_ref().filter(|ready|!host_role && ready.usable()){
+                                // The relay allocation and the offer are ready: the session starts with them at once.
+                                early_asked.remove(&session);
+                                injected.push_back(ServerMessage::Ice{session,lease:ready.lease.clone()});
+                            } else if let Some(lease)=early_leases.remove(&session){
                                 early_asked.remove(&session);
                                 injected.push_back(ServerMessage::Ice{session,lease});
                             } else if !early_asked.contains_key(&session){
@@ -4052,6 +4103,20 @@ async fn run(
                             // every wait on the way to the offer is added to the connect time (speed pass, 18 Nov 2026).
                             while let Some(next)=ice_queue.due(|id|peer.iter().chain(ctrl.iter()).chain(joined.iter()).any(|active|active.id==id && !active.cancel.load(Ordering::Acquire))){
                                 send(&mut socket,ClientMessage::Ice{session:next}).await?;
+                            }
+                        },
+                        ServerMessage::Ice{session,lease} if session.is_nil()=>{
+                            warm_asked=None;
+                            let now=SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_|"System clock is unavailable")?.as_secs();
+                            if lease.expires_at<=now || lease.expires_at>now.saturating_add(3600) || lease.expires_at>authorized_until || lease.servers.len()>8{return Err("Relay configuration has invalid bounds or expiry".into());}
+                            let mut ice_servers=Vec::new();
+                            for server in lease.servers.iter(){
+                                if server.urls.is_empty() || server.urls.len()>8 || server.urls.iter().any(|url|url.len()>1024) || server.username.len()>256 || server.credential.len()>1024{return Err("Invalid relay configuration bounds".into());}
+                                ice_servers.push(core_protocol::transport::NativeIceServer{urls:server.urls.clone(),username:server.username.clone(),credential:server.credential.clone()});
+                            }
+                            // The person may have left the Devices list while the lease was on its way: then it is not used.
+                            if prewarm_ok && peer.is_none() && !cancel.load(Ordering::Acquire) && warm_asked.is_some(){
+                                warm=remote_peer::start_warm(state,&cancel,ice_servers,service.relay_only,lease).ok();
                             }
                         },
                         ServerMessage::Ice{session,lease} if early_asked.contains_key(&session) && !peer.iter().chain(ctrl.iter()).any(|active|active.id==session && active.nonce.is_some())=>{
@@ -4078,7 +4143,7 @@ async fn run(
                             if active.handover.is_none(){state.finish_previous_media(slot).await?;}
                             if active.cancel.load(Ordering::Acquire) || cancel.load(Ordering::Acquire){if active.take_close(){send(&mut socket,ClientMessage::Close{session}).await?;}continue;}
                             let session_video=if active.host{video.clone()}else{match state.slot_video(active.ui).await{Some(own)=>own,None=>{if active.take_close(){send(&mut socket,ClientMessage::Close{session}).await?;}continue;}}};
-                            remote_peer::start(remote_peer::Config{state:state.clone(),generation,session:active.ui,slot:slot.unwrap_or(active.ui),transport:session,link:active.link.clone(),previous:active.handover.take(),nonce,host:active.host,login_window:session_platform::login_window_mode(),remote_key:active.key,identity:identity.clone(),source:active.source.clone(),#[cfg(target_os = "linux")] portal:active.portal.clone(),confirm:active.confirm,control:active.control,clipboard:active.clipboard,files:active.files,chat:active.chat,recording:active.recording,consent_id:active.consent_id,consent_cancel:active.consent_cancel.clone(),consent_started:active.started_at,session_cancel:active.cancel.clone(),account_cancel:cancel.clone(),signals:signals_rx,commands:tx.clone(),video:session_video,ice_servers,relay_only:service.relay_only,authorization:broker_lease.clone(),peer_expires:active.expires.clone(),mirror:false})?;
+                            remote_peer::start(remote_peer::Config{state:state.clone(),generation,session:active.ui,slot:slot.unwrap_or(active.ui),transport:session,link:active.link.clone(),previous:active.handover.take(),nonce,host:active.host,login_window:session_platform::login_window_mode(),remote_key:active.key,identity:identity.clone(),source:active.source.clone(),#[cfg(target_os = "linux")] portal:active.portal.clone(),confirm:active.confirm,control:active.control,clipboard:active.clipboard,files:active.files,chat:active.chat,recording:active.recording,consent_id:active.consent_id,consent_cancel:active.consent_cancel.clone(),consent_started:active.started_at,session_cancel:active.cancel.clone(),account_cancel:cancel.clone(),signals:signals_rx,commands:tx.clone(),video:session_video,ice_servers,relay_only:service.relay_only,authorization:broker_lease.clone(),peer_expires:active.expires.clone(),mirror:false,prewarmed:if active.host{None}else{pending_warm.take()}})?;
                         },
                         ServerMessage::PeerRenewed{session,identity:renewed}=>{
                             let Some(active)=find_peer(&mut peer,&mut ctrl,session) else {if recently_gone(&recent,session){continue;}return Err("Unexpected peer authorization renewal".into());};

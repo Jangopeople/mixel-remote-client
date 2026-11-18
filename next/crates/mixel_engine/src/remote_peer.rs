@@ -118,6 +118,8 @@ pub struct Config {
     pub peer_expires: Arc<AtomicU64>,
     /// Host: a colleague who joined; sends the first technician's pictures instead of capturing.
     pub mirror: bool,
+    /// Technician: a transport that was made ready before Connect (`start_warm`); it takes this session over.
+    pub prewarmed: Option<Warm>,
 }
 fn authorization_live(
     account: &AtomicBool,
@@ -221,77 +223,194 @@ impl Config {
     }
 }
 pub fn start(mut config: Config) -> Result<(), String> {
+    // A transport made ready before Connect takes the session over (it has its own thread and
+    // runtime, the relay allocation and the offer are in it); one that is gone (it ran out of time or
+    // failed) is left out and the session starts the usual way.
+    if let Some(warm) = config.prewarmed.take() {
+        match warm.adopt(config) {
+            Ok(()) => return Ok(()),
+            Err(back) => config = *back,
+        }
+    }
     let state = config.state.clone();
     let cancel = config.account_cancel.clone();
     let mirror = config.mirror;
     let slot = config.slot;
     let renewal = config.previous.is_some();
-    state.spawn_media(&cancel, mirror, slot, renewal, move || {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(2)
-                .enable_all()
-                .build()
-                .map_err(|_| "Cannot start the media runtime".to_owned())
-                .and_then(|runtime| runtime.block_on(run(&mut config)))
-        }))
-        .unwrap_or_else(|_| {
-            Err("The native media owner failed; this connection was stopped".into())
-        });
-        if let Err(error) = &result
-            && session_platform::login_window_mode()
-        {
-            eprintln!("Login window media ended: {error}");
-        }
-        // Lab builds only: why each session ended, with the time (both sides).
-        #[cfg(feature = "qa-session")]
-        eprintln!(
-            "QA session end {} host={} at {:?}: {result:?}",
-            config.transport,
-            config.host,
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
-        );
-        // A transport that was replaced ends alone; any other end ends the session.
-        if !config.link.superseded.load(Ordering::Acquire) {
-            config.session_cancel.store(true, Ordering::Release);
-        }
-        config.link.released.store(true, Ordering::Release);
-        let mut command = Command::Finished {
-            session: config.transport,
-            result,
-        };
-        let deadline = Instant::now() + Duration::from_secs(3);
-        loop {
-            match config.commands.try_send(command) {
-                Ok(()) => break,
-                Err(mpsc::error::TrySendError::Closed(_)) => break,
-                Err(mpsc::error::TrySendError::Full(value)) => command = value,
-            }
-            if Instant::now() >= deadline {
-                config.account_cancel.store(true, Ordering::Release);
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
-    })
-}
-/// Whether a session's transport may publish only relay candidates.
-fn relay_only_transport(configured: bool) -> bool {
-    configured
+    state.spawn_media(&cancel, mirror, slot, renewal, move || own_media(config, None, None))
 }
 
-async fn run(config: &mut Config) -> Result<(), String> {
-    if config.stopped() {
-        return Ok(());
+/// Everything a transport made ready in advance holds: the transport with its relay allocation, the
+/// control channel and the offer (candidates in it) made from them.
+pub struct WarmParts {
+    transport: NativeTransport,
+    channel: Arc<dyn NativeDataChannel>,
+    offer: String,
+}
+
+/// Technician: a transport made ready before Connect. It lives on its own media thread for at most
+/// `WARM_LIFETIME`; `adopt` hands the session to that thread, dropping the handle ends it.
+pub struct Warm {
+    adopt: Option<std::sync::mpsc::Sender<Config>>,
+    release: Arc<AtomicBool>,
+    started: Instant,
+    /// The relay lease it was made with (valid for the session that takes it over too).
+    pub lease: signaling_server::turn::IceLease,
+}
+/// How long a ready transport is kept (the relay allocation lives 10 minutes; the lease longer).
+pub const WARM_LIFETIME: Duration = Duration::from_secs(120);
+impl Warm {
+    /// True while the thread behind it still waits for a session.
+    pub fn usable(&self) -> bool {
+        !self.release.load(Ordering::Acquire) && self.started.elapsed() < WARM_LIFETIME - Duration::from_secs(5)
     }
-    let servers = std::mem::take(&mut config.ice_servers);
-    // The service's configuration says relay only (`relay_only` in the packaged service file):
-    // neither side ever publishes its own addresses and every session goes through the relay.
-    // The snapshot of 2.0.5-2.0.14 ignored the setting unless MIXEL_RELAY_ONLY=1 was set, which
-    // no installation sets: both sides then published their local and public addresses to the
-    // other side. There is no switch to turn it off.
-    let strict_relay = relay_only_transport(config.relay_only);
-    let transport = if strict_relay {
+    pub fn age(&self) -> Duration {
+        self.started.elapsed()
+    }
+    fn adopt(mut self, config: Config) -> Result<(), Box<Config>> {
+        if !self.usable() {
+            return Err(Box::new(config));
+        }
+        match self.adopt.take() {
+            Some(sender) => sender.send(config).map_err(|error| Box::new(error.0)),
+            None => Err(Box::new(config)),
+        }
+    }
+}
+impl Drop for Warm {
+    fn drop(&mut self) {
+        if self.adopt.is_some() {
+            self.release.store(true, Ordering::Release);
+        }
+    }
+}
+
+/// The transport as a session needs it: relay allocation (unless only direct paths are used),
+/// control channel, offer. Everything that does not depend on the session's own numbers.
+async fn prepare_warm(
+    servers: Vec<core_protocol::transport::NativeIceServer>,
+    relay_only: bool,
+) -> Result<WarmParts, String> {
+    let mut transport = create_transport(servers, relay_only).await?;
+    transport.receive_video().await.map_err(|error| error.to_string())?;
+    let channel = transport
+        .peer
+        .create_data_channel("mixel-control-v1", None)
+        .await
+        .map_err(|_| "Cannot create the encrypted control channel")?;
+    let offer = transport
+        .local_sdp(
+            transport
+                .peer
+                .create_offer(None)
+                .await
+                .map_err(|_| "Cannot create the connection offer")?,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    crate::qa_timeline::mark(&format!("ready transport made, own candidates: {}", crate::qa_timeline::candidate_summary(&offer.sdp)));
+    Ok(WarmParts { transport, channel, offer: offer.sdp })
+}
+
+/// Makes a transport ready on its own thread (the lease comes from the broker without a session).
+pub fn start_warm(
+    state: &RemoteSession,
+    cancel: &AtomicBool,
+    servers: Vec<core_protocol::transport::NativeIceServer>,
+    relay_only: bool,
+    lease: signaling_server::turn::IceLease,
+) -> Result<Warm, String> {
+    let (adopt, adopted) = std::sync::mpsc::channel::<Config>();
+    let release = Arc::new(AtomicBool::new(false));
+    let thread_release = release.clone();
+    let strict = relay_only_transport(relay_only);
+    state.spawn_media(cancel, false, Uuid::new_v4(), false, move || {
+        let Ok(runtime) = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build() else {
+            thread_release.store(true, Ordering::Release);
+            return;
+        };
+        let Ok(parts) = runtime.block_on(async { tokio::time::timeout(Duration::from_secs(20), prepare_warm(servers, strict)).await }).map_err(|_| ()).and_then(|made| made.map_err(|_| ())) else {
+            thread_release.store(true, Ordering::Release);
+            return;
+        };
+        let started = Instant::now();
+        loop {
+            match adopted.recv_timeout(Duration::from_millis(100)) {
+                Ok(config) => {
+                    own_media(config, Some(runtime), Some(parts));
+                    return;
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if thread_release.load(Ordering::Acquire) || started.elapsed() >= WARM_LIFETIME {
+                        break;
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        thread_release.store(true, Ordering::Release);
+        let _ = runtime.block_on(async { tokio::time::timeout(Duration::from_secs(5), parts.transport.close()).await });
+    })?;
+    Ok(Warm { adopt: Some(adopt), release, started: Instant::now(), lease })
+}
+
+/// The media owner of one session: runs the session's transport to its end and reports the end.
+fn own_media(mut config: Config, runtime: Option<tokio::runtime::Runtime>, parts: Option<WarmParts>) {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        match runtime {
+            Some(runtime) => Ok(runtime),
+            None => tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().map_err(|_| "Cannot start the media runtime".to_owned()),
+        }
+        .and_then(|runtime| runtime.block_on(run(&mut config, parts)))
+    }))
+    .unwrap_or_else(|_| Err("The native media owner failed; this connection was stopped".into()));
+    if let Err(error) = &result
+        && session_platform::login_window_mode()
+    {
+        eprintln!("Login window media ended: {error}");
+    }
+    // Lab builds only: why each session ended, with the time (both sides).
+    #[cfg(feature = "qa-session")]
+    eprintln!(
+        "QA session end {} host={} at {:?}: {result:?}",
+        config.transport,
+        config.host,
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
+    );
+    // A transport that was replaced ends alone; any other end ends the session.
+    if !config.link.superseded.load(Ordering::Acquire) {
+        config.session_cancel.store(true, Ordering::Release);
+    }
+    config.link.released.store(true, Ordering::Release);
+    let mut command = Command::Finished {
+        session: config.transport,
+        result,
+    };
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        match config.commands.try_send(command) {
+            Ok(()) => break,
+            Err(mpsc::error::TrySendError::Closed(_)) => break,
+            Err(mpsc::error::TrySendError::Full(value)) => command = value,
+        }
+        if Instant::now() >= deadline {
+            config.account_cancel.store(true, Ordering::Release);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+/// The native transport: through the relay only (service setting `relay_only`), or direct and relay.
+/// The service's configuration says relay only (`relay_only` in the packaged service file):
+/// neither side ever publishes its own addresses and every session goes through the relay.
+/// The snapshot of 2.0.5-2.0.14 ignored the setting unless MIXEL_RELAY_ONLY=1 was set, which
+/// no installation sets: both sides then published their local and public addresses to the
+/// other side. There is no switch to turn it off.
+async fn create_transport(
+    servers: Vec<core_protocol::transport::NativeIceServer>,
+    relay_only: bool,
+) -> Result<NativeTransport, String> {
+    let transport = if relay_only_transport(relay_only) {
         #[cfg(target_os = "windows")]
         {
             NativeTransport::relay_stream_only(servers).await
@@ -303,11 +422,33 @@ async fn run(config: &mut Config) -> Result<(), String> {
     } else {
         NativeTransport::new("0.0.0.0:0".into(), servers).await
     };
-    let mut transport = transport.map_err(|_| "Cannot create the native WebRTC transport")?;
-    crate::qa_timeline::mark(if strict_relay { "transport created (relay only)" } else { "transport created (direct and relay)" });
+    transport.map_err(|_| "Cannot create the native WebRTC transport".to_owned())
+}
+/// Whether a session's transport may publish only relay candidates.
+fn relay_only_transport(configured: bool) -> bool {
+    configured
+}
+
+async fn run(config: &mut Config, parts: Option<WarmParts>) -> Result<(), String> {
+    if config.stopped() {
+        return Ok(());
+    }
+    let strict_relay = relay_only_transport(config.relay_only);
+    let (mut transport, warm) = match parts {
+        Some(WarmParts { transport, channel, offer }) => {
+            crate::qa_timeline::mark("ready transport taken over");
+            (transport, Some((channel, offer)))
+        }
+        None => {
+            let servers = std::mem::take(&mut config.ice_servers);
+            let transport = create_transport(servers, config.relay_only).await?;
+            crate::qa_timeline::mark(if strict_relay { "transport created (relay only)" } else { "transport created (direct and relay)" });
+            (transport, None)
+        }
+    };
     let result = async {
         let (mut consent, channel, sender, size, limit, mut control, mut early_track) =
-            negotiate(config, &mut transport).await?;
+            negotiate(config, &mut transport, warm).await?;
         let files = if let Some(bulk) = control.bulk.take() {
             Some(
                 crate::remote_file_transport::FileTransport::start(config, &mut transport, bulk)
@@ -469,6 +610,7 @@ async fn take_control_channel(
 async fn negotiate(
     config: &mut Config,
     transport: &mut NativeTransport,
+    mut warm: Option<(Arc<dyn NativeDataChannel>, String)>,
 ) -> Result<Negotiated, String> {
     const RECORDING_ATTRIBUTE: &str = "a=x-mixel-recording:1";
     const INPUT_RESULT_ATTRIBUTE: &str = "a=x-mixel-input-result:1";
@@ -541,14 +683,18 @@ async fn negotiate(
                 .map_err(|error| error.to_string())?,
         )
     } else {
-        transport
-            .receive_video()
-            .await
-            .map_err(|error| error.to_string())?;
+        if warm.is_none() {
+            transport
+                .receive_video()
+                .await
+                .map_err(|error| error.to_string())?;
+        }
         None
     };
     let mut channel = if config.host {
         None
+    } else if let Some((ready, _)) = &warm {
+        Some(ready.clone())
     } else {
         Some(
             transport
@@ -570,26 +716,32 @@ async fn negotiate(
     let mut signin_id: Option<u32> = None;
     let mut host_macs: Vec<String> = Vec::new();
     if !config.host {
-        let offer = transport
-            .local_sdp(
-                transport
-                    .peer
-                    .create_offer(None)
-                    .await
-                    .map_err(|_| "Cannot create the connection offer")?,
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-        crate::qa_timeline::mark(&format!("offer ready, own candidates: {}", crate::qa_timeline::candidate_summary(&offer.sdp)));
+        let offer_sdp = if let Some((_, ready)) = warm.take() {
+            crate::qa_timeline::mark("offer ready (made before Connect)");
+            ready
+        } else {
+            let offer = transport
+                .local_sdp(
+                    transport
+                        .peer
+                        .create_offer(None)
+                        .await
+                        .map_err(|_| "Cannot create the connection offer")?,
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+            crate::qa_timeline::mark(&format!("offer ready, own candidates: {}", crate::qa_timeline::candidate_summary(&offer.sdp)));
+            offer.sdp
+        };
         let proof = config.identity.handshake(
             context.clone(),
             role,
-            local_fingerprint(&offer.sdp).map_err(|error| error.to_string())?,
+            local_fingerprint(&offer_sdp).map_err(|error| error.to_string())?,
         )?;
         config.signal(Signal::Identity(proof.hello())).await?;
         let offer = format!(
             "{}\r\n{RECORDING_ATTRIBUTE}\r\n{INPUT_RESULT_ATTRIBUTE}\r\n{DISPLAYS_ATTRIBUTE}\r\n{ACTIONS_ATTRIBUTE}\r\n{FEATURES_PREFIX}{own_features}\r\n{}",
-            offer.sdp.trim_end(),
+            offer_sdp.trim_end(),
             if fastpic_enabled() { format!("{FASTPIC_ATTRIBUTE}\r\n") } else { String::new() }
         );
         config.signal(Signal::Offer(offer)).await?;
@@ -2360,7 +2512,7 @@ mod display_fit_tests {
 mod renewal_tests {
     use super::*;
 
-    fn config(link: TransportLink, session_cancel: Arc<AtomicBool>, commands: mpsc::Sender<Command>) -> Config {
+    pub(super) fn config(link: TransportLink, session_cancel: Arc<AtomicBool>, commands: mpsc::Sender<Command>) -> Config {
         let (_, signals) = mpsc::channel(1);
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
         Config {
@@ -2398,6 +2550,7 @@ mod renewal_tests {
             authorization: Arc::new(std::sync::Mutex::new((now + 600, Instant::now() + Duration::from_secs(60)))),
             peer_expires: Arc::new(AtomicU64::new(now + 600)),
             mirror: false,
+            prewarmed: None,
         }
     }
 
@@ -2542,5 +2695,62 @@ mod early_peer_tests {
         assert!(!offer.lines().any(|line| line == FASTPIC_ATTRIBUTE));
         let offer = format!("{offer}{FASTPIC_ATTRIBUTE}\r\n");
         assert!(offer.lines().any(|line| line == FASTPIC_ATTRIBUTE));
+    }
+}
+
+#[cfg(test)]
+mod warm_tests {
+    use super::*;
+
+    fn ready(age: Duration) -> (Warm, std::sync::mpsc::Receiver<Config>) {
+        let (adopt, adopted) = std::sync::mpsc::channel();
+        let warm = Warm {
+            adopt: Some(adopt),
+            release: Arc::new(AtomicBool::new(false)),
+            started: Instant::now() - age,
+            lease: signaling_server::turn::IceLease { expires_at: 0, servers: Vec::new() },
+        };
+        (warm, adopted)
+    }
+    fn session_config() -> Config {
+        let (commands, _) = mpsc::channel(4);
+        renewal_tests::config(TransportLink::default(), Arc::new(AtomicBool::new(false)), commands)
+    }
+
+    /// A ready transport hands the session to its own thread; the session's configuration arrives there intact.
+    #[test]
+    fn a_ready_transport_takes_the_session_over() {
+        let (warm, adopted) = ready(Duration::from_secs(3));
+        assert!(warm.usable());
+        assert!(warm.adopt(session_config()).is_ok());
+        assert!(adopted.try_recv().is_ok());
+    }
+
+    /// One that ran out of time, was released or whose thread is gone is left out: the session starts the usual way
+    /// and gets its configuration back.
+    #[test]
+    fn a_ready_transport_that_ran_out_or_is_gone_gives_the_session_back() {
+        let (old, _kept) = ready(WARM_LIFETIME);
+        assert!(!old.usable());
+        assert!(old.adopt(session_config()).is_err());
+        let (gone, adopted) = ready(Duration::from_secs(3));
+        drop(adopted);
+        assert!(gone.adopt(session_config()).is_err());
+        let (released, _kept) = ready(Duration::from_secs(3));
+        released.release.store(true, Ordering::Release);
+        assert!(released.adopt(session_config()).is_err());
+    }
+
+    /// Leaving the Devices list (dropping the handle) releases the transport; a taken-over one is not released.
+    #[test]
+    fn dropping_the_handle_releases_the_transport_but_not_after_a_take_over() {
+        let (warm, _kept) = ready(Duration::from_secs(1));
+        let release = warm.release.clone();
+        drop(warm);
+        assert!(release.load(Ordering::Acquire));
+        let (warm, _kept) = ready(Duration::from_secs(1));
+        let release = warm.release.clone();
+        assert!(warm.adopt(session_config()).is_ok());
+        assert!(!release.load(Ordering::Acquire));
     }
 }

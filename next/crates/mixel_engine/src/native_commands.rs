@@ -467,6 +467,16 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
             out(remote.configure_unattended(args.get("source")?, args.get("control")?).await?)
         }
         "remote_presence" => out(remote.presence(args.get("hosts")?).await?),
+        // Technician: a transport made ready before Connect (the Devices list shows a device that is online);
+        // `{"on":false}` releases it. The answers to `remote_presence` with an online device do the same.
+        "remote_prewarm" => {
+            if args.get::<bool>("on")? {
+                out(remote.warm().await?)
+            } else {
+                remote.unwarm().await;
+                out(())
+            }
+        }
         "remote_pairing" => {
             crate::service_config::require_host()?;
             out(remote.pairing(args.get("confirmation")?).await?)

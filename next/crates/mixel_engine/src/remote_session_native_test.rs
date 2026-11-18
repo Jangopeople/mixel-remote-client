@@ -139,6 +139,7 @@ impl FixturePeer {
             ))),
             peer_expires: Arc::new(AtomicU64::new(expires)),
             mirror: false,
+            prewarmed: None,
         })
         .unwrap();
     }
