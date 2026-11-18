@@ -782,6 +782,10 @@ async fn hosted_loop(check: &mut Check<'_>, suffix: &str, mine: u64, tenant: &st
         lab_commands(check, &mut control, mine, tenant).await;
         let status = check.status().await;
         if status["phase"] == "incoming" {
+            // Lab: a person needs a moment to click "Accept" (MIXEL_QA_ACCEPT_DELAY_MS), for the attended connect measurements.
+            if let Some(delay) = std::env::var("MIXEL_QA_ACCEPT_DELAY_MS").ok().and_then(|value| value.parse::<u64>().ok()) {
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+            }
             let targets = check.call("capture_targets", json!({})).await.unwrap_or(Value::Null);
             let source = targets.as_array().and_then(|list| list.iter().find(|target| target["full_display"] == true)).and_then(|target| target["id"].as_str()).unwrap_or_default().to_owned();
             let allow = control && status["input_access"] == true;

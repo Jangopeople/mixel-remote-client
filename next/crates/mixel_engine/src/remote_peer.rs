@@ -952,12 +952,16 @@ async fn negotiate(
     let mut early_track: Option<RemoteTrack> = None;
     let mut opened = false;
     // Host: the first picture is captured and encoded while DTLS is still opening (nothing is sent before the peer is verified).
-    let mut prepared: Option<EarlyPicture> = if early && config.host && std::env::var_os("MIXEL_NO_EARLYPIC").is_none() {
+    let early_size = if early && config.host {
         let full_hd = peer_features.iter().any(|name| name == crate::remote_control::FULL_HD);
-        let early_size = if full_hd { source_size_within(config, (1920.0, 1080.0))? } else { size };
-        Some(EarlyPicture::start(config, early_size))
+        Some(if full_hd { source_size_within(config, (1920.0, 1080.0))? } else { size })
     } else {
         None
+    };
+    // `MIXEL_NO_EARLYPIC` (lab): the capture and encoder start only after DTLS is up, as before 4752b70.
+    let mut prepared: Option<EarlyPicture> = match early_size {
+        Some(early_size) if std::env::var_os("MIXEL_NO_EARLYPIC").is_none() => Some(EarlyPicture::start(config, early_size)),
+        _ => None,
     };
     if early {
         let observed = loop {
@@ -985,7 +989,10 @@ async fn negotiate(
         crate::qa_timeline::mark("peer verified on the encrypted transport (identity and certificate)");
         if config.host {
             let early_sender = sender.as_ref().ok_or("Host video sender unavailable")?;
-            let mut prep = prepared.take().ok_or("Early picture not prepared")?;
+            let mut prep = match prepared.take() {
+                Some(prep) => prep,
+                None => EarlyPicture::start(config, early_size.ok_or("Early picture not prepared")?),
+            };
             host_early_picture(config, transport, &consent, early_sender, &mut channel, &mut prep, deadline).await?;
             opened = true;
         } else if let Some(shown) = channel.clone() {
