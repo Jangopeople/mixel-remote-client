@@ -132,6 +132,10 @@ pub fn own_features() -> Vec<&'static str> {
     ];
     // Hosts that show the technician's drawings (not Wayland or iOS).
     features.extend(crate::annotation::features());
+    // Lab / kill switch: behave like a peer without the technician-clock reports (old rate control).
+    if std::env::var_os("MIXEL_NO_VRATE2").is_some() {
+        features.retain(|name| *name != crate::video_rate::FEATURE_CLOCK);
+    }
     features
 }
 /// Feature: the controller can show "all monitors as one picture" as a display choice.
