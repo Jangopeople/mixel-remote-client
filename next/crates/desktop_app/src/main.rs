@@ -1262,8 +1262,8 @@ async fn enrollment_companies(
         .await
         .map_err(|_| "Companies are unavailable for this account".into())
 }
-/// Quick Support for phones: before connecting to an ID, claim it if it is a phone. `false` for computers
-/// and for accounts that are not Mixel team accounts (the ordinary request then decides).
+/// Quick Support for phones and computers: before connecting to an ID, claim it if it is a Quick Support ID.
+/// `false` for permanent enrolled computers (the ordinary request then decides).
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 #[tauri::command]
 async fn quick_phone_claim(
@@ -1273,14 +1273,11 @@ async fn quick_phone_claim(
 ) -> Result<bool, String> {
     main_window(&window)?;
     let credential = auth.credential(None).await?;
-    if !credential.principal.staff {
-        return Ok(false);
-    }
     credential
         .ism
         .quick_phone_claim(&credential.token, host)
         .await
-        .map_err(|_| "The phone could not be reached through Mixel. Please try again.".into())
+        .map_err(|_| "The device could not be reached through Mixel. Please try again.".into())
 }
 /// Mixel Meet for a session: a room (to show this screen to the other side, or to invite a colleague).
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]

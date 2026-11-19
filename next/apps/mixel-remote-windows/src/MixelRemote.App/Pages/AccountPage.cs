@@ -32,7 +32,78 @@ internal sealed class AccountPage : PageView
                 DangerCard(),
                 Ui.Message(App.Error));
         }
+        if (App.QuickSupportMode)
+        {
+            return SignInLayout(QuickSupportCard());
+        }
         return SignInLayout(SignInCard(account));
+    }
+
+    private Border QuickSupportCard()
+    {
+        var remote = App.Remote;
+        var items = new List<UIElement?>
+        {
+            Ui.Split(
+                Ui.PageTitle("Mixel Quick Support"),
+                Ui.Status(
+                    remote.Host is not null ? Ui.Badge.Online : remote.Phase == "error" ? Ui.Badge.Attention : Ui.Badge.Offline,
+                    remote.Phase == "active" && remote.Sharing ? L("Session active") : remote.Host is not null ? L("Ready for support") : L("Connecting…"))),
+            Ui.Text(L("Share the 9-digit Connection ID below with your technician. You will be asked to confirm before anyone can view or control your screen."), secondary: true),
+        };
+        if (remote.Host is { } host)
+        {
+            var idBlock = Ui.Selectable(Format.RemoteId(host), 34, mono: true);
+            idBlock.FontWeight = Microsoft.UI.Text.FontWeights.Bold;
+            var idCard = new Border
+            {
+                Padding = new Thickness(18, 16, 18, 16),
+                CornerRadius = new CornerRadius(12),
+                Background = Ui.Brush("MixelChrome"),
+                BorderBrush = Ui.Brush("MixelHairline"),
+                BorderThickness = new Thickness(1),
+                Child = Ui.Column(8,
+                    Ui.Split(
+                        Ui.Status(Ui.Badge.Online, L("Your Connection ID")),
+                        Ui.Caption(Environment.MachineName)),
+                    Ui.Split(
+                        idBlock,
+                        Ui.Primary(L("Copy ID"), () => App.CopyText(Format.RemoteId(host)), true, "\uE8C8"))),
+            };
+            items.Add(idCard);
+        }
+        else
+        {
+            var loadingCard = new Border
+            {
+                Padding = new Thickness(18, 16, 18, 16),
+                CornerRadius = new CornerRadius(12),
+                Background = Ui.Brush("MixelChrome"),
+                BorderBrush = Ui.Brush("MixelHairline"),
+                BorderThickness = new Thickness(1),
+                Child = Ui.Row(12,
+                    Ui.Spinner(),
+                    Ui.Column(2,
+                        Ui.Text(L("Getting your connection ID…"), bold: true),
+                        Ui.Caption(remote.Message.Length > 0 ? Translator.Shared.Translate(remote.Message) : L("Connecting to Mixel Remote in Switzerland…")))),
+            };
+            items.Add(loadingCard);
+        }
+        if (remote.Phase == "active" && remote.Sharing)
+        {
+            items.Add(Ui.Split(
+                Ui.Row(8, Ui.Icon("\uE95A", 16, Ui.BrandBrush), Ui.Text(L("A technician is connected to this computer."), bold: true)),
+                Ui.Primary(L("End session"), () => _ = App.Session.End())));
+        }
+        else if (remote.Host is null && !App.Busy)
+        {
+            items.Add(Ui.Plain(L("Try again"), () => _ = App.StartQuickSupport(App.QuickSupportStandalone)));
+        }
+        items.Add(Ui.Hairline());
+        items.Add(Ui.Split(
+            Ui.Caption(L("Have a Mixel Remote account?")),
+            Ui.Plain(App.QuickSupportStandalone ? L("Sign in with Mixel ID") : L("Back to Sign In"), () => _ = App.StopQuickSupport())));
+        return Ui.Card([.. items]);
     }
 
     private Border SignInCard(AccountStatus account)
@@ -118,7 +189,7 @@ internal sealed class AccountPage : PageView
                 items.Add(Ui.Link(L("Use another browser"), () => _ = App.SignIn(showLink: true, provider: App.SignInButtons.Select(item => item.Provider).FirstOrDefault())));
                 items.Add(Ui.Hairline());
                 items.Add(Ui.Split(Ui.Column(2, Ui.Text(L("Need help, no account?"), bold: true), Ui.Caption(L("Get a support ID for your technician"))),
-                    Ui.Plain(L("Quick Support"), () => App.OpenUrl("https://ism.mixel.ch/remote/support/"), true, "\uE945")));
+                    Ui.Plain(L("Quick Support"), () => _ = App.StartQuickSupport(), true, "\uE945")));
                 if (signup is null) _ = CheckSignup();
                 if (signup == true) items.Add(Ui.Link(L("Create Mixel ID"), () => App.OpenUrl("https://auth.mixel.ch/if/flow/mixel-remote-enrollment/")));
                 items.Add(Ui.Row(4,

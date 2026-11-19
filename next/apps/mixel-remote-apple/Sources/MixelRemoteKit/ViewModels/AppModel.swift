@@ -62,6 +62,10 @@ public final class AppModel: ObservableObject {
     @Published public var setupOffer = false
     /// Set by the "Add this computer" button in the failed-connect panel; the devices page opens its sheet.
     @Published public var addThisRequested = false
+    /// Quick Support mode: shows this computer's 9-digit ID immediately without requiring an account or sign-in.
+    @Published public var quickSupportMode = false
+    /// Set in standalone Quick Support builds so the window stays focused on Quick Support.
+    @Published public var quickSupportStandalone = false
     /// The sign-in link to open in another browser.
     @Published public var signInLink: String?
     @Published public var verificationCode = ""
@@ -377,13 +381,33 @@ public final class AppModel: ObservableObject {
         }
     }
 
+    public func startQuickSupport(standalone: Bool = false) {
+        if standalone { quickSupportStandalone = true }
+        quickSupportMode = true
+        error = ""
+        Task {
+            do {
+                let deviceName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+                _ = try await engine.run("quick_support_start", ["device_name": deviceName], as: UInt32.self)
+            } catch {
+                self.error = Self.message(error)
+            }
+            await refreshRemote()
+        }
+    }
+
+    public func stopQuickSupport() {
+        quickSupportMode = false
+        error = ""
+    }
+
     private func status() async -> RemoteStatus? { try? await engine.run("remote_status") }
 
     private func wait(seconds: Int, until: (RemoteStatus) -> Bool, ask: (() async -> Void)? = nil) async -> Bool {
         let steps = max(1, seconds * 10)
         for round in 0..<steps {
             if let state = await status(), until(state) { return true }
-            if let ask, round % 20 == 0 { await ask() }
+            if let ask, round % 5 == 0 { await ask() }
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
         return false

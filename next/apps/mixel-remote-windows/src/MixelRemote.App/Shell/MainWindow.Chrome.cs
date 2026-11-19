@@ -231,7 +231,7 @@ internal sealed partial class MainWindow
         var card = new Border { Margin = new Thickness(12, 0, 12, 10), Padding = new Thickness(12, 10, 12, 10), CornerRadius = new CornerRadius(10), Background = Ui.Brush("MixelPaper"), BorderBrush = Ui.Brush("MixelHairline"), BorderThickness = new Thickness(1) };
         var status = Ui.Status(remote.Connected ? Ui.Badge.Online : remote.Phase == "error" ? Ui.Badge.Attention : Ui.Badge.Offline,
             (remote.Connected ? L("This computer · online") : remote.Phase == "error" ? L("Connection problem") : L("This computer · offline")));
-        if (app.SignedIn && remote.Host is { } host)
+        if ((app.SignedIn || app.QuickSupportMode) && remote.Host is { } host)
         {
             var id = Ui.Selectable(Format.RemoteId(host), 20, mono: true);
             id.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;

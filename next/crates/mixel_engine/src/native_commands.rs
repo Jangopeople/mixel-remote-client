@@ -409,14 +409,43 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
         "quick_phone_claim" => {
             let host: u32 = args.get("host")?;
             let credential = auth.credential(None).await?;
-            if !credential.principal.staff {
-                return out(false);
-            }
             out(credential
                 .ism
                 .quick_phone_claim(&credential.token, host)
                 .await
-                .map_err(|_| "The phone could not be reached through Mixel. Please try again.")?)
+                .map_err(|_| "The device could not be reached through Mixel. Please try again.")?)
+        }
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+        "quick_support_start" => {
+            #[cfg(target_os = "macos")]
+            let default_name = std::process::Command::new("/usr/sbin/scutil")
+                .arg("--get")
+                .arg("ComputerName")
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned());
+            #[cfg(target_os = "linux")]
+            let default_name = std::fs::read_to_string("/etc/hostname")
+                .ok()
+                .map(|text| text.trim().to_owned())
+                .filter(|text| !text.is_empty());
+            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+            let default_name = std::env::var("COMPUTERNAME").ok();
+            let supplied: Option<String> = args.get("device_name").unwrap_or(None);
+            let name: String = supplied
+                .filter(|s| !s.trim().is_empty())
+                .or(default_name)
+                .unwrap_or_else(|| "Quick Support computer".to_owned())
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(60)
+                .collect();
+            let identity = tokio::task::spawn_blocking(IdentityState::quick_support)
+                .await
+                .map_err(|_| "Quick Support identity storage is unavailable")??;
+            let id = remote.start_quick_support(Arc::new(identity), name).await?;
+            out(id)
         }
         // ---- The connection and sessions ----
         "remote_status" => out(remote.status().await),

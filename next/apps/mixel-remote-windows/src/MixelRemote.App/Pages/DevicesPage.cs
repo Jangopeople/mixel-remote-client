@@ -94,6 +94,10 @@ internal sealed class DevicesPage : PageView
         var search = SearchBox();
         var filters = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         filters.Children.Add(search);
+        if (Format.ParseRemoteId(model.FilterText) is { } searchId && App.SignedIn)
+        {
+            filters.Children.Add(Ui.Primary(L("Connect"), () => ConnectId(searchId, clearSearch: true), App.CanStartConnection && !Preparing, "\uE945"));
+        }
         filters.Children.Add(Ui.Chip(L("Online"), model.OnlineOnly, () => model.OnlineOnly = !model.OnlineOnly, "MixelSuccess"));
         if (model.AdminAvailable)
         {
@@ -141,8 +145,14 @@ internal sealed class DevicesPage : PageView
             created.TextChanged += (_, _) => Model.FilterText = created.Text;
             created.KeyDown += (sender, key) =>
             {
+                if (key.Key != Windows.System.VirtualKey.Enter) return;
+                if (Model.Filtered.Count == 0 && Format.ParseRemoteId(created.Text) is { } searchId)
+                {
+                    ConnectId(searchId, clearSearch: true);
+                    return;
+                }
                 // The directory of a team member is paged on the server: search there too.
-                if (key.Key == Windows.System.VirtualKey.Enter && Model.Tenant is null)
+                if (Model.Tenant is null)
                 {
                     Model.Search = created.Text;
                     _ = Model.Load();
@@ -161,7 +171,7 @@ internal sealed class DevicesPage : PageView
     {
         var box = Keep("byid", () =>
         {
-            var created = new TextBox { PlaceholderText = "000 000 000", Width = 150, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Cascadia Mono, Consolas"), FontSize = 15, MaxLength = 11 };
+            var created = new TextBox { PlaceholderText = "000 000 000", Width = 158, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Cascadia Mono, Consolas"), FontSize = 15, MaxLength = 11 };
             created.TextChanged += (_, _) =>
             {
                 var digits = new string([.. created.Text.Where(char.IsAsciiDigit).Take(9)]);
@@ -171,7 +181,6 @@ internal sealed class DevicesPage : PageView
                     created.Text = grouped;
                     created.SelectionStart = grouped.Length;
                 }
-                else Rebuild();
             };
             created.KeyDown += (sender, key) =>
             {
@@ -180,8 +189,10 @@ internal sealed class DevicesPage : PageView
             return created;
         });
         AutomationProperties.SetName(box, L("Connect by ID"));
-        var connect = Ui.Primary(L("Connect"), () => ConnectTyped(box), App.SignedIn && Format.ParseRemoteId(box.Text) is not null && App.CanStartConnection && !Preparing, "\uE945");
-        return Ui.Row(8, Ui.Text(L("Connect by ID"), secondary: true, wrap: false), box, connect);
+        var label = Ui.Text(L("Connect by ID"), secondary: true, wrap: false);
+        label.Tapped += (_, _) => box.Focus(FocusState.Programmatic);
+        var connect = Ui.Primary(L("Connect"), () => ConnectTyped(box), App.SignedIn && App.CanStartConnection && !Preparing, "\uE945");
+        return Ui.Row(8, label, box, connect);
     }
 
     private void ConnectTyped(TextBox box)
@@ -189,11 +200,23 @@ internal sealed class DevicesPage : PageView
         if (Format.ParseRemoteId(box.Text) is not { } id)
         {
             App.Error = L("Enter a nine-digit connection ID");
+            box.Focus(FocusState.Programmatic);
             return;
         }
         box.Text = "";
+        ConnectId(id, clearSearch: false);
+    }
+
+    private void ConnectId(uint id, bool clearSearch)
+    {
+        App.Error = "";
+        if (clearSearch)
+        {
+            Model.FilterText = "";
+            if (Peek<TextBox>("search") is { } search) search.Text = "";
+        }
         var known = Model.AllDevices.FirstOrDefault(device => device.ConnectionId == id);
-        _ = Workspace.Connect(id, known?.Name, known?.Os ?? "", unattended: true, checkPhone: known is null);
+        _ = Workspace.Connect(id, known?.Name, known?.Os ?? "", unattended: known is not null, checkPhone: known is null);
     }
 
     private static Button Tip(Button button, string why)
@@ -250,10 +273,19 @@ internal sealed class DevicesPage : PageView
         var groups = model.RowGroups;
         if (groups.Count == 0)
         {
+            var searchId = Format.ParseRemoteId(model.FilterText);
+            var trimmedFilter = model.FilterText.Trim();
+            var filterDigits = trimmedFilter.Count(char.IsAsciiDigit);
+            var partialDigits = searchId is null && filterDigits is >= 4 and < 9 && trimmedFilter.All(ch => char.IsAsciiDigit(ch) || char.IsWhiteSpace(ch));
             var empty = Ui.Column(10,
                 Ui.Icon("", 44, Ui.Secondary),
                 new TextBlock { Text = EmptyTitle(), FontSize = 20, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Center },
                 new TextBlock { Text = EmptyDetail(), Foreground = Ui.Secondary, TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center, MaxWidth = 440 },
+                searchId is { } directId && App.SignedIn
+                    ? Ui.Primary(L("Connect") + " " + Format.RemoteId(directId), () => ConnectId(directId, clearSearch: true), App.CanStartConnection && !Preparing, "\uE945")
+                    : partialDigits
+                        ? new TextBlock { Text = L("Enter all 9 digits of the Connection ID to connect directly."), Foreground = Ui.Secondary, FontSize = 12, HorizontalAlignment = HorizontalAlignment.Center }
+                        : null,
                 !App.SignedIn ? Ui.Link(L("Sign in to Mixel →"), () => App.Section = AppSection.Account) : null);
             empty.HorizontalAlignment = HorizontalAlignment.Center;
             empty.VerticalAlignment = VerticalAlignment.Center;

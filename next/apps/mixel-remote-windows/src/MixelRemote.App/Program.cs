@@ -14,6 +14,7 @@ public static class Program
     public const string AppId = "ch.mixel.remote.desktop";
     private const string InstanceName = @"Local\ch.mixel.remote.desktop.window";
     private const string ShowEventName = @"Local\ch.mixel.remote.desktop.show";
+    internal const string QuickSupportEventName = @"Local\ch.mixel.remote.desktop.quicksupport";
 
     [STAThread]
     public static int Main(string[] args)
@@ -29,7 +30,11 @@ public static class Program
             instance = new Mutex(true, InstanceName, out var first);
             if (!first)
             {
-                // Mixel Remote is already running: bring its window forward.
+                // Mixel Remote is already running: bring its window forward (and switch to Quick Support if requested).
+                if (options.QuickSupport)
+                {
+                    try { EventWaitHandle.OpenExisting(QuickSupportEventName).Set(); } catch (WaitHandleCannotBeOpenedException) { }
+                }
                 try { EventWaitHandle.OpenExisting(ShowEventName).Set(); } catch (WaitHandleCannotBeOpenedException) { }
                 instance.Dispose();
                 return 0;
@@ -69,6 +74,8 @@ public sealed class StartOptions
 {
     /// <summary>Started with Windows (--autostart): stay in the notification area.</summary>
     public bool Hidden { get; private init; }
+    /// <summary>Started as Quick Support (--quick-support or Mixel-Quick-Support.exe): open directly with a 9-digit Connection ID, no sign-in needed.</summary>
+    public bool QuickSupport { get; private init; }
     /// <summary>--screenshots &lt;folder&gt;: renders every screen with the demo engine in light and dark, then quits.</summary>
     public string? Screenshots { get; private init; }
     /// <summary>--screenshots &lt;folder&gt; light|dark: only that theme, drawn as Windows is set (Mica, title bar).</summary>
@@ -87,9 +94,16 @@ public sealed class StartOptions
             return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
         }
         var lab = args.Length > 0 && args[0] is "--live-session" or "--live-host" ? args : [];
+        var processName = "";
+        try { processName = Process.GetCurrentProcess().ProcessName; } catch { }
+        var quickSupport = args.Contains("--quick-support")
+            || Environment.GetEnvironmentVariable("MIXEL_QUICK_SUPPORT") == "1"
+            || processName.Contains("Quick-Support", StringComparison.OrdinalIgnoreCase)
+            || processName.Contains("QuickSupport", StringComparison.OrdinalIgnoreCase);
         return new StartOptions
         {
             Hidden = args.Contains("--autostart"),
+            QuickSupport = quickSupport,
             Screenshots = Value("--screenshots"),
             ScreenshotTheme = args.SkipWhile(arg => arg != "--screenshots").Skip(2).FirstOrDefault(arg => arg is "light" or "dark"),
             Demo = Value("--demo"),

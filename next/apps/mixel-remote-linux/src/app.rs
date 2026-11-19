@@ -199,6 +199,8 @@ pub struct State {
     pub busy: bool,
     /// The last connect failed because this computer is not set up: the message offers "Add this computer".
     pub setup_offer: bool,
+    pub quick_support_mode: bool,
+    pub quick_support_standalone: bool,
     pub sign_in_link: Option<String>,
     /// Outside sign-ins the sign-in service offers (`keycloak` = Mixel ID, `google`, `azure`, `apple`).
     pub providers: Vec<String>,
@@ -640,6 +642,7 @@ impl App {
             state.enrollment.records.clear();
         });
         if self.state.borrow().signed_in() {
+            self.edit(|state| state.quick_support_mode = false);
             let app = self.clone();
             self.spawn(async move {
                 app.load_company().await;
@@ -760,6 +763,10 @@ impl App {
     // ---- The connection ----
 
     pub fn go_online(self: &Rc<Self>) {
+        if self.state.borrow().quick_support_mode && !self.state.borrow().signed_in() {
+            self.start_quick_support(false);
+            return;
+        }
         self.edit(|state| {
             state.went_offline = false;
             state.auto_tries = 0;
@@ -776,6 +783,31 @@ impl App {
                 Ok(())
             })
         });
+    }
+
+    pub fn start_quick_support(self: &Rc<Self>, standalone: bool) {
+        self.edit(|state| {
+            state.went_offline = false;
+            state.quick_support_mode = true;
+            if standalone {
+                state.quick_support_standalone = true;
+            }
+        });
+        self.act(|app| {
+            Box::pin(async move {
+                let _: u32 = app.run("quick_support_start", json!({})).await?;
+                Ok(())
+            })
+        });
+    }
+
+    pub fn stop_quick_support(self: &Rc<Self>) {
+        self.edit(|state| {
+            state.quick_support_mode = false;
+            state.went_offline = true;
+        });
+        self.clear_video();
+        self.act(|app| Box::pin(async move { app.perform("remote_disconnect", json!({})).await }));
     }
 
     pub fn go_offline(self: &Rc<Self>) {
@@ -3242,7 +3274,7 @@ fn trace_toolkit_messages() {
     });
 }
 
-pub fn run(autostart: bool) -> i32 {
+pub fn run(autostart: bool, quick_support: bool) -> i32 {
     use adw::prelude::*;
     #[cfg(feature = "qa-session")]
     trace_toolkit_messages();
@@ -3251,6 +3283,9 @@ pub fn run(autostart: bool) -> i32 {
     let holder = app.clone();
     application.connect_activate(move |application| {
         if let Some(existing) = holder.borrow().as_ref() {
+            if quick_support && !existing.state.borrow().signed_in() {
+                existing.start_quick_support(true);
+            }
             if let Some(ui) = existing.ui.borrow().as_ref() {
                 ui.present();
             }
@@ -3267,6 +3302,9 @@ pub fn run(autostart: bool) -> i32 {
         let created = App::new(engine, Store::open());
         crate::ui::install(&created, application, autostart);
         created.start();
+        if quick_support {
+            created.start_quick_support(true);
+        }
         #[cfg(feature = "qa-session")]
         crate::lab_hook::install(&created);
         holder.replace(Some(created));

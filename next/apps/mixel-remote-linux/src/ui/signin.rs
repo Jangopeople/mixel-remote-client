@@ -112,6 +112,13 @@ impl SigninPage {
                 &state.providers,
                 state.busy,
                 &state.error,
+                (
+                    state.quick_support_mode,
+                    state.quick_support_standalone,
+                    state.remote.host,
+                    state.remote.phase.as_str(),
+                    state.remote.sharing,
+                ),
                 crate::i18n::choice(),
                 &account.factors.first().map(|factor| factor.id.clone())
             )
@@ -133,6 +140,77 @@ impl SigninPage {
         let tile = hbox(0);
         tile.append(&mark(44));
         self.form.append(&tile);
+        if state.quick_support_mode {
+            let title = gtk::Label::builder()
+                .label("Mixel Quick Support")
+                .xalign(0.0)
+                .wrap(true)
+                .accessible_role(gtk::AccessibleRole::Heading)
+                .build();
+            title.add_css_class("title-1");
+            self.form.append(&title);
+            let lead = dim(&t(
+                "Share the 9-digit Connection ID below with your technician. You will be asked to confirm before anyone can view or control your screen.",
+            ));
+            lead.set_wrap(true);
+            self.form.append(&lead);
+            if let Some(host) = state.remote.host {
+                let formatted = crate::format::remote_id(Some(host));
+                let card = vbox(8);
+                card.add_css_class("mixel-quick");
+                card.set_margin_top(8);
+                let top = hbox(8);
+                top.append(&dot("on"));
+                let badge_label = label(&t("Your Connection ID"));
+                badge_label.set_hexpand(true);
+                top.append(&badge_label);
+                card.append(&top);
+                let id_row = hbox(10);
+                let id_label = gtk::Label::builder()
+                    .label(&formatted)
+                    .xalign(0.0)
+                    .selectable(true)
+                    .hexpand(true)
+                    .build();
+                id_label.add_css_class("title-1");
+                id_label.add_css_class("monospace");
+                id_row.append(&id_label);
+                let (a, copy_value) = (app.clone(), formatted.clone());
+                let copy_btn = primary(&t("Copy ID"), move || {
+                    if let Some(shell) = a.shell() {
+                        shell.copy(&copy_value);
+                        shell.notify(&t("Copied"));
+                    }
+                });
+                copy_btn.set_valign(gtk::Align::Center);
+                id_row.append(&copy_btn);
+                card.append(&id_row);
+                self.form.append(&card);
+            } else {
+                self.form.append(&spinner_line(&t("Getting your connection ID…")));
+                if !state.busy {
+                    let a = app.clone();
+                    let standalone = state.quick_support_standalone;
+                    let retry = button(&t("Try again"), move || a.start_quick_support(standalone));
+                    retry.set_halign(gtk::Align::Start);
+                    self.form.append(&retry);
+                }
+            }
+            if !state.error.is_empty() {
+                append_message(&self.form, &state.error, true);
+            }
+            let a = app.clone();
+            let switch_label = if state.quick_support_standalone {
+                t("Sign in with Mixel ID")
+            } else {
+                t("Back to Sign In")
+            };
+            let back = button(&switch_label, move || a.stop_quick_support());
+            back.set_halign(gtk::Align::Start);
+            back.set_margin_top(12);
+            self.form.append(&back);
+            return;
+        }
         let title = gtk::Label::builder()
             .label(t("Sign in to Mixel Remote"))
             .xalign(0.0)
@@ -278,7 +356,7 @@ impl SigninPage {
         quick.append(&texts);
         let a = app.clone();
         let quick_button = button(&t("Quick Support"), move || {
-            a.open_uri("https://remote.mixel.ch")
+            a.start_quick_support(false);
         });
         quick_button.set_valign(gtk::Align::Center);
         quick.append(&quick_button);

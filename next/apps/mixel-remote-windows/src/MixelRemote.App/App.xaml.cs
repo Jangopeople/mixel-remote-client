@@ -102,6 +102,7 @@ public partial class App : Application
 #endif
             if (!options.Hidden) main.Show();
             Model.Start();
+            if (options.QuickSupport) _ = Model.StartQuickSupport(standalone: true);
             WatchShowRequests();
             updates = main.DispatcherQueue.CreateTimer();
             updates.Interval = TimeSpan.FromMinutes(1);
@@ -166,11 +167,20 @@ public partial class App : Application
     {
         if (showRequests is null || main is null) return;
         var queue = main.DispatcherQueue;
+        var quickSupportRequests = new EventWaitHandle(false, EventResetMode.AutoReset, Program.QuickSupportEventName);
+        var handles = new WaitHandle[] { showRequests, quickSupportRequests };
         var thread = new Thread(() =>
         {
             while (!quitting)
             {
-                if (showRequests.WaitOne(1000) && !quitting) queue.TryEnqueue(() => main.Show());
+                var signaled = WaitHandle.WaitAny(handles, 1000);
+                if (quitting || signaled == WaitHandle.WaitTimeout) continue;
+                var startQs = signaled == 1;
+                queue.TryEnqueue(() =>
+                {
+                    if (startQs && !Model.SignedIn) _ = Model.StartQuickSupport(standalone: true);
+                    main.Show();
+                });
             }
         }) { IsBackground = true, Name = "show requests" };
         thread.Start();

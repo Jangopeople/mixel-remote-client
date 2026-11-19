@@ -22,7 +22,9 @@ public struct RootView: View {
 
     public var body: some View {
         Group {
-            if showsSignIn {
+            if app.quickSupportMode && !app.signedIn {
+                QuickSupportConsoleView(app: app)
+            } else if showsSignIn {
                 SignInScreen(app: app)
             } else if !app.accountChecked {
                 Theme.page
@@ -31,7 +33,7 @@ public struct RootView: View {
             }
         }
         .background(Theme.page)
-        .frame(minWidth: 960, minHeight: 600)
+        .frame(minWidth: app.quickSupportStandalone ? 520 : 960, minHeight: app.quickSupportStandalone ? 440 : 600)
         .sheet(isPresented: Binding(get: { app.host.asking }, set: { _ in })) {
             ConsentSheet(app: app).interactiveDismissDisabled()
         }

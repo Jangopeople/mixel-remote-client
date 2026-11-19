@@ -336,6 +336,10 @@ enum RegistrationAuth {
         enrolled: Arc<EnrolledPrincipal>,
         source: UnattendedSource,
     },
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    QuickSupport {
+        enrolled: Arc<EnrolledPrincipal>,
+    },
 }
 
 impl RegistrationAuth {
@@ -346,7 +350,7 @@ impl RegistrationAuth {
         match self {
             Self::Interactive(auth) => auth.credential(cancel).await.map(Some),
             #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-            Self::Startup { .. } => Ok(None),
+            Self::Startup { .. } | Self::QuickSupport { .. } => Ok(None),
         }
     }
 
@@ -360,7 +364,7 @@ impl RegistrationAuth {
                 .map(|credential| &credential.principal)
                 .ok_or_else(|| "Interactive account authorization is unavailable".into()),
             #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-            Self::Startup { enrolled, .. } => Ok(&enrolled.principal),
+            Self::Startup { enrolled, .. } | Self::QuickSupport { enrolled } => Ok(&enrolled.principal),
         }
     }
 
@@ -370,7 +374,7 @@ impl RegistrationAuth {
         identity: &IdentityState,
     ) -> Result<EnrolledPrincipal, String> {
         #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-        if let Self::Startup { enrolled, .. } = self {
+        if let Self::Startup { enrolled, .. } | Self::QuickSupport { enrolled } = self {
             return Ok(enrolled.as_ref().clone());
         }
         let credential = credential
@@ -393,6 +397,90 @@ impl RegistrationAuth {
             .await
             .map_err(|_| "This device is not enrolled for the current account".into())
     }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+async fn quick_support_register_once(
+    identity: &IdentityState,
+    device_name: &str,
+) -> Result<(u32, Option<EnrolledPrincipal>), String> {
+    #[derive(Deserialize)]
+    struct QuickRegistration {
+        connection_id: u32,
+        device_id: Option<Uuid>,
+        generation: Option<u64>,
+        profile: Option<Uuid>,
+        tenant: Option<Uuid>,
+    }
+    let config = crate::service_config::ServiceConfig::load()?;
+    let public_key = identity.public_key()?;
+    let hex_key: String = public_key
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let base: reqwest::Url = config
+        .identity_url
+        .parse()
+        .map_err(|_| "Invalid identity service configuration")?;
+    let endpoint = base
+        .join("/rest/v1/rpc/remote_quick_phone_register")
+        .map_err(|_| "Invalid Quick Support registration endpoint")?;
+    let clean_name: String = device_name
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(60)
+        .collect();
+    let clean_name = if clean_name.is_empty() {
+        "Quick Support computer".to_owned()
+    } else {
+        clean_name
+    };
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "Cannot initialize Quick Support connection")?;
+    let response = http
+        .post(endpoint)
+        .header("apikey", &config.public_key)
+        .bearer_auth(&config.public_key)
+        .header("accept", "application/vnd.pgrst.object+json")
+        .json(&serde_json::json!({
+            "device_name": clean_name,
+            "key_material": format!("\\x{hex_key}"),
+        }))
+        .send()
+        .await
+        .map_err(|_| "The Mixel service cannot be reached".to_owned())?;
+    if !response.status().is_success() {
+        return Err("The Mixel service could not issue a Quick Support ID".into());
+    }
+    let reg: QuickRegistration = response
+        .json()
+        .await
+        .map_err(|_| "Unexpected Quick Support registration response".to_owned())?;
+    if !(100_000_000..=999_999_999).contains(&reg.connection_id) {
+        return Err("Invalid Quick Support connection ID".into());
+    }
+    let enrolled = match (reg.device_id, reg.generation, reg.profile, reg.tenant) {
+        (Some(device), Some(generation), Some(user), Some(tenant)) => Some(EnrolledPrincipal {
+            principal: Principal {
+                user,
+                tenant: Some(tenant),
+                staff: false,
+                expires_at: 0,
+            },
+            device,
+            connection_id: reg.connection_id,
+            generation,
+            public_key,
+            identity_ticket: None,
+        }),
+        _ => None,
+    };
+    Ok((reg.connection_id, enrolled))
 }
 
 async fn registration_ticket(
@@ -1071,6 +1159,100 @@ impl RemoteSession {
         .await
     }
 
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    pub async fn connect_quick_support(
+        &self,
+        enrolled: EnrolledPrincipal,
+        identity: Arc<IdentityState>,
+    ) -> Result<(), String> {
+        crate::service_config::require_host()?;
+        self.connect_registration(
+            RegistrationAuth::QuickSupport {
+                enrolled: Arc::new(enrolled),
+            },
+            identity,
+        )
+        .await
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    pub async fn start_quick_support(
+        &self,
+        identity: Arc<IdentityState>,
+        device_name: String,
+    ) -> Result<u32, String> {
+        crate::service_config::require_host()?;
+        let (connection_id, claimed) = quick_support_register_once(&identity, &device_name).await?;
+        let mut last_claim = claimed
+            .as_ref()
+            .map(|e| (e.principal.user, e.principal.tenant, e.generation));
+        if let Some(enrolled) = claimed {
+            let _ = self.connect_quick_support(enrolled, identity.clone()).await;
+        } else {
+            let mut inner = self.0.lock().await;
+            if inner.commands.is_none() && !inner.stopping {
+                inner.status.host = Some(connection_id);
+                inner.status.phase = "ready".into();
+                inner.status.message = "Share this ID with the person helping you".into();
+                inner.status.unattended = None;
+                inner.status.unattended_enabled = false;
+            }
+        }
+        let state = self.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_millis(1500));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tick.tick().await;
+                let (busy, has_commands) = {
+                    let inner = state.0.lock().await;
+                    let busy = inner.stopping
+                        || matches!(
+                            inner.status.phase.as_str(),
+                            "incoming" | "negotiating" | "active" | "closing"
+                        );
+                    (busy, inner.commands.is_some())
+                };
+                if busy {
+                    continue;
+                }
+                let Ok((id, claimed)) = quick_support_register_once(&identity, &device_name).await
+                else {
+                    continue;
+                };
+                if let Some(enrolled) = claimed {
+                    let signature = (
+                        enrolled.principal.user,
+                        enrolled.principal.tenant,
+                        enrolled.generation,
+                    );
+                    if !has_commands || last_claim != Some(signature) {
+                        if has_commands {
+                            let _ = state.stop().await;
+                        }
+                        if state
+                            .connect_quick_support(enrolled, identity.clone())
+                            .await
+                            .is_ok()
+                        {
+                            last_claim = Some(signature);
+                        }
+                    }
+                } else if !has_commands {
+                    let mut inner = state.0.lock().await;
+                    if inner.commands.is_none() && !inner.stopping {
+                        inner.status.host = Some(id);
+                        inner.status.phase = "ready".into();
+                        inner.status.message = "Share this ID with the person helping you".into();
+                        inner.status.unattended = None;
+                        inner.status.unattended_enabled = false;
+                    }
+                }
+            }
+        });
+        Ok(connection_id)
+    }
+
     async fn connect_registration(
         &self,
         auth: RegistrationAuth,
@@ -1108,7 +1290,14 @@ impl RemoteSession {
         inner.video = Some(video.clone());
         // Unattended access is on by default, unless the owner turned it off on this computer:
         // that choice is kept across restarts (2.0.5-2.0.14 switched it back on at every start).
-        let default_unattended = if !crate::service_config::controller_only() && !unattended_choice::turned_off() {
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+        let quick_host_id = match &auth {
+            RegistrationAuth::QuickSupport { enrolled } => Some(enrolled.connection_id),
+            _ => None,
+        };
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        let quick_host_id: Option<u32> = None;
+        let default_unattended = if quick_host_id.is_none() && !crate::service_config::controller_only() && !unattended_choice::turned_off() {
             session_platform::main_display_source()
                 .map(|source| UnattendedSource {
                     source,
@@ -1119,8 +1308,14 @@ impl RemoteSession {
             None
         };
         inner.status = Status {
-            phase: "connecting".into(),
-            message: "Verifying enrolled identity and connecting securely".into(),
+            phase: if quick_host_id.is_some() { "ready" } else { "connecting" }.into(),
+            message: if quick_host_id.is_some() {
+                "Share this ID with the person helping you"
+            } else {
+                "Verifying enrolled identity and connecting securely"
+            }
+            .into(),
+            host: quick_host_id,
             unattended: default_unattended,
             ..Status::default()
         };
@@ -3393,6 +3588,23 @@ async fn run(
                 }).await;
                 send(&mut socket, ClientMessage::ConfigureUnattended { enabled: true }).await?;
             }
+            #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+            RegistrationAuth::QuickSupport { .. } => {
+                let carried_session = peer.is_some() || !ctrl.is_empty();
+                state.change(generation, |status| {
+                    if carried_session {
+                        status.host = Some(enrolled.connection_id);
+                        return;
+                    }
+                    status.phase = "ready".into();
+                    status.message = "Share this ID with the person helping you".into();
+                    status.host = Some(enrolled.connection_id);
+                    status.unattended = None;
+                    status.unattended_enabled = false;
+                    status.unattended_pending = None;
+                }).await;
+                send(&mut socket, ClientMessage::ConfigureSupportHost { enabled: true }).await?;
+            }
             _ => {
                 let carried_session = peer.is_some() || !ctrl.is_empty();
                 state.change(generation, |status| {
@@ -3964,6 +4176,15 @@ async fn run(
                                 return Err("The broker refused unattended startup sharing".into());
                             }
                         },
+                        ServerMessage::SupportHostStatus{enabled}=>{
+                            #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+                            let is_qs = matches!(auth, RegistrationAuth::QuickSupport { .. });
+                            #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+                            let is_qs = false;
+                            if is_qs && !enabled {
+                                return Err("The broker refused Quick Support hosting".into());
+                            }
+                        },
                         ServerMessage::Presence{online}=>{
                             // Several parts of the window ask about different devices: keep what the others learned.
                             let asked=presence_asked.pop_front().unwrap_or_default();
@@ -4115,7 +4336,11 @@ async fn run(
                             if crate::service_config::controller_only() || peer.is_some() || !ctrl.is_empty() || !outgoing.is_empty(){send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;continue;}
                             let ticket=requester_identity.ok_or("The invitation has no signed requester identity")?;
                             let key=peer_identity(&ticket,requester_connection,&principal,true,&roots)?;
-                            if own_ticket.unattended_host_only() && !unattended {
+                            #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+                            let is_qs = matches!(auth, RegistrationAuth::QuickSupport { .. });
+                            #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+                            let is_qs = false;
+                            if (own_ticket.unattended_host_only() && !unattended && !is_qs) || (is_qs && unattended) {
                                 send(&mut socket, ClientMessage::Decide { session, accept: false }).await?;
                                 continue;
                             }

@@ -63,11 +63,16 @@ enum Entry {
 struct MainWindow: View {
     @ObservedObject var app: AppModel
     @Environment(\.openWindow) private var openWindow
+    @State private var isFullScreen = false
 
     var body: some View {
         RootView(app: app)
-            .ignoresSafeArea(.container, edges: .top)
+            .padding(.top, isFullScreen ? 28 : 0)
+            .ignoresSafeArea(.container, edges: isFullScreen ? [] : .top)
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in isFullScreen = true }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in isFullScreen = false }
             .onAppear {
+                isFullScreen = NSApp?.windows.contains(where: { $0.styleMask.contains(.fullScreen) }) ?? false
                 app.workspace.openWindow = { peer in openWindow(id: "session", value: peer) }
                 app.workspace.focusWindow = { peer in NotificationCenter.default.post(name: .mixelFocusSessionWindow, object: peer) }
                 app.start()
@@ -132,6 +137,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             let app = AppModel(engine: engine)
             app.devices.admin = EngineDeviceAdminService(engine: engine)
             app.section = .devices
+            let bundleId = Bundle.main.bundleIdentifier ?? ""
+            let bundleName = (Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String) ?? ""
+            if CommandLine.arguments.contains("--quick-support")
+                || ProcessInfo.processInfo.environment["MIXEL_QUICK_SUPPORT"] == "1"
+                || bundleId == "ch.mixel.remote.quicksupport"
+                || bundleName.localizedCaseInsensitiveContains("Quick Support")
+            {
+                app.quickSupportStandalone = true
+                app.quickSupportMode = true
+            }
             // A ready transport is kept only while the app is in front and visible (`remote_prewarm`).
             // AppDelegate.init() runs inside MixelRemoteMacApp.init() before NSApplicationMain sets NSApp,
             // so NSApp is nil here and must never be force-unwrapped.

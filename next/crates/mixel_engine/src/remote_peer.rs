@@ -1571,6 +1571,7 @@ fn fit_frame(
         .map_err(|_| "Cannot scale the display image".into())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn host_media(
     config: &mut Config,
     consent: &mut Session,

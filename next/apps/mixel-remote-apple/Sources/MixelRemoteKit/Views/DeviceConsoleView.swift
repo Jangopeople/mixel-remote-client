@@ -92,18 +92,35 @@ public struct DeviceConsoleView: View {
                         .textFieldStyle(.plain)
                         .focused($focus, equals: .search)
                         .onSubmit {
+                            if let id = Format.parseRemoteId(model.filterText), model.filtered.isEmpty {
+                                connectToId(id)
+                                model.filterText = ""
+                                return
+                            }
                             // The directory of a team member is paged on the server: search there too.
                             if model.tenant == nil { model.search = model.filterText; Task { await model.load() } }
                         }
-                    Text(verbatim: "/").font(.caption.monospaced()).foregroundStyle(.secondary)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.hairline))
-                        .accessibilityHidden(true)
+                    if let id = Format.parseRemoteId(model.filterText), app.signedIn {
+                        Button {
+                            connectToId(id)
+                            model.filterText = ""
+                        } label: {
+                            Label(L("Connect"), systemImage: "bolt.fill").font(.system(size: 12, weight: .semibold))
+                        }
+                        .buttonStyle(PrimaryButtonStyle())
+                    } else {
+                        Text(verbatim: "/").font(.caption.monospaced()).foregroundStyle(.secondary)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.hairline))
+                            .accessibilityHidden(true)
+                    }
                 }
                 .padding(.horizontal, 10).padding(.vertical, 7)
-                .frame(maxWidth: 340)
+                .frame(maxWidth: 360)
                 .background(Theme.page, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(focus == .search ? Theme.brand : Theme.hairline, lineWidth: 1))
+                .contentShape(Rectangle())
+                .onTapGesture { focus = .search }
                 Chip(L("Online"), dot: Theme.success, on: model.onlineOnly) { model.onlineOnly.toggle() }
                 Rectangle().fill(Theme.hairline).frame(width: 1, height: 22).padding(.horizontal, 4)
                 ForEach([("macos", "macOS"), ("windows", "Windows"), ("linux", "Linux")], id: \.0) { system in
@@ -135,11 +152,20 @@ public struct DeviceConsoleView: View {
 
     private var connectById: some View {
         HStack(spacing: 8) {
-            Text(verbatim: L("Connect by ID")).font(.callout).foregroundStyle(.secondary).padding(.leading, 12)
+            Text(verbatim: L("Connect by ID"))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .padding(.leading, 12)
+                .contentShape(Rectangle())
+                .onTapGesture { focus = .byId }
             TextField(text: $byId, prompt: Text(verbatim: "000 000 000")) { Text(verbatim: L("Connect by ID")) }
                 .textFieldStyle(.plain)
                 .font(.system(size: 15, design: .monospaced))
-                .frame(width: 118)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .frame(width: 132)
+                .background(Theme.chrome, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(focus == .byId ? Theme.brand : Theme.hairline, lineWidth: 1))
                 .focused($focus, equals: .byId)
                 .onChange(of: byId) { value in
                     let digits = String(value.filter(\.isASCIIDigit).prefix(9))
@@ -155,7 +181,7 @@ public struct DeviceConsoleView: View {
                 Label(L("Connect"), systemImage: "bolt.fill").font(.system(size: 13, weight: .semibold))
             }
             .buttonStyle(PrimaryButtonStyle())
-            .disabled(!app.signedIn || Format.parseRemoteId(byId) == nil || app.remote.connectBlockedBySession || workspace.attempt?.failure.isEmpty == true)
+            .disabled(!app.signedIn || byId.trimmingCharacters(in: .whitespaces).isEmpty || app.remote.connectBlockedBySession || workspace.attempt?.failure.isEmpty == true)
         }
         .padding(4)
         .background(Theme.page, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -165,8 +191,12 @@ public struct DeviceConsoleView: View {
     private func connectTyped() {
         guard let id = Format.parseRemoteId(byId) else { app.error = L("Enter a nine-digit connection ID"); return }
         byId = ""
+        connectToId(id)
+    }
+
+    private func connectToId(_ id: UInt32) {
         let known = model.allDevices.first { $0.connectionId == id }
-        workspace.connect(peer: id, name: known?.name, os: known?.os ?? "", unattended: true, checkPhone: known == nil)
+        workspace.connect(peer: id, name: known?.name, os: known?.os ?? "", unattended: known != nil, checkPhone: known == nil)
     }
 
     // MARK: Notices
@@ -211,6 +241,18 @@ public struct DeviceConsoleView: View {
                 Image(systemName: "laptopcomputer.and.iphone").font(.system(size: 40)).foregroundStyle(.secondary)
                 Text(verbatim: emptyTitle).font(.title3.weight(.semibold))
                 Text(verbatim: emptyDetail).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 420)
+                if app.signedIn, let id = Format.parseRemoteId(model.filterText) {
+                    Button {
+                        connectToId(id)
+                        model.filterText = ""
+                    } label: {
+                        Label(L("Connect") + " · " + Format.remoteId(id), systemImage: "bolt.fill")
+                    }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .padding(.top, 4)
+                } else if app.signedIn, model.filterText.filter(\.isASCIIDigit).count >= 4 {
+                    Text(verbatim: L("Enter a nine-digit connection ID")).font(.callout).foregroundStyle(Theme.brand)
+                }
                 if !app.signedIn { Button(L("Sign in to Mixel →")) { app.section = .account }.linkButton() }
                 Spacer()
             }

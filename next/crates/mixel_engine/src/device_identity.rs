@@ -17,6 +17,7 @@ fn service_for_bundle(bundle: Option<&str>) -> Result<&'static str, String> {
             Ok("ch.mixel.remote.next.qa.controller.device-identity.v1")
         }
         Some("ch.mixel.remote.controller") => Ok("ch.mixel.remote.controller.device-identity.v1"),
+        Some("ch.mixel.remote.quicksupport") => Ok("ch.mixel.remote.quicksupport.device-identity.v1"),
         Some("ch.mixel.remote") => Ok("ch.mixel.remote.device-identity.v1"),
         // The native Mac app's test build: its own identity, so it is installed next to the
         // current app and never takes over an existing Mac's device identity.
@@ -327,6 +328,11 @@ impl IdentityState {
         #[cfg(target_os = "linux")]
         let key = linux_store::load_or_create(Some(profile), create)?;
         Ok(Self(Mutex::new(Some(key))))
+    }
+
+    /// Dedicated user-level key for Quick Support (no account, no admin, never overwrites a permanent enrolled device identity).
+    pub fn quick_support() -> Result<Self, String> {
+        Self::personal(uuid::Uuid::from_u128(0x5155_4943_4b53_5550_504f_5254_0000_0001), true)
     }
 
     #[cfg(target_os = "macos")]

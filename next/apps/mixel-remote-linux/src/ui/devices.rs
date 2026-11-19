@@ -73,6 +73,20 @@ impl DevicesPage {
         let a = app.clone();
         search.connect_activate(move |entry| {
             let text = entry.text().to_string();
+            if let Some(peer) = format::parse_remote_id(&text) {
+                let no_match = {
+                    let state = a.state.borrow();
+                    let rows = a.console_rows(&state);
+                    view::visible(&state.devices.filters, &rows).is_empty()
+                };
+                if no_match && a.state.borrow().can_connect() {
+                    entry.set_text("");
+                    a.edit(|state| state.devices.filters.search.clear());
+                    let known = a.state.borrow().devices.devices.iter().any(|device| device.connection_id == peer);
+                    a.connect(peer, None, known);
+                    return;
+                }
+            }
             a.state.borrow_mut().devices.search = text;
             a.reload_devices();
         });
@@ -171,6 +185,19 @@ impl DevicesPage {
         row.set_valign(gtk::Align::Center);
         let search = adopt(&self.search);
         row.append(&search);
+        if state.signed_in()
+            && let Some(peer) = format::parse_remote_id(&filters.search)
+        {
+            let (a, search_entry) = (app.clone(), self.search.clone());
+            let direct = primary(&t("Connect"), move || {
+                search_entry.set_text("");
+                a.edit(|state| state.devices.filters.search.clear());
+                let known = a.state.borrow().devices.devices.iter().any(|device| device.connection_id == peer);
+                a.connect(peer, None, known);
+            });
+            direct.set_sensitive(state.can_connect());
+            row.append(&direct);
+        }
         let chip = |text: &str, on: bool, dot_kind: Option<&str>, change: Box<dyn Fn(&mut Filters)>| {
             let inner = hbox(6);
             if let Some(kind) = dot_kind {
@@ -366,6 +393,17 @@ impl DevicesPage {
                 let sign_in = primary(&t("Sign in to Mixel →"), move || a.edit(|state| state.section = Section::Account));
                 sign_in.set_halign(gtk::Align::Center);
                 status.set_child(Some(&sign_in));
+            } else if let Some(peer) = format::parse_remote_id(&devices.filters.search) {
+                let (a, search_entry) = (app.clone(), self.search.clone());
+                let direct = primary(&format!("{} {}", t("Connect"), format::remote_id(Some(peer))), move || {
+                    search_entry.set_text("");
+                    a.edit(|state| state.devices.filters.search.clear());
+                    let known = a.state.borrow().devices.devices.iter().any(|device| device.connection_id == peer);
+                    a.connect(peer, None, known);
+                });
+                direct.set_halign(gtk::Align::Center);
+                direct.set_sensitive(state.can_connect());
+                status.set_child(Some(&direct));
             }
             self.list.append(&status);
             return;
@@ -637,8 +675,9 @@ fn connect_by_id(app: &Rc<App>, id: &gtk::Entry, password: &gtk::PasswordEntry) 
     let supplied = password.text().to_string();
     password.set_text("");
     id.set_text("");
-    // With a password the person there confirms it; without one an unattended computer lets us in.
-    app.connect(peer, (!supplied.is_empty()).then_some(supplied.clone()), supplied.is_empty());
+    let known = app.state.borrow().devices.devices.iter().any(|device| device.connection_id == peer);
+    // With a password or an unknown Quick Support ID, the person there confirms it; only a known enrolled computer without a password requests unattended access.
+    app.connect(peer, (!supplied.is_empty()).then_some(supplied.clone()), supplied.is_empty() && known);
 }
 
 /// Creates a group (the "+" next to Groups).

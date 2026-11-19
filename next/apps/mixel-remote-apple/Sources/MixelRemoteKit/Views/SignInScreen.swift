@@ -196,7 +196,7 @@ struct SignInScreen: View {
                 Text(verbatim: L("Get a support ID for your technician")).font(.system(size: 12)).foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
-            Button(L("Quick Support")) { if let url = URL(string: "https://ism.mixel.ch/remote/support/") { app.openURL(url) } }
+            Button(L("Quick Support")) { app.startQuickSupport() }
         }
         .padding(10)
         .background(Theme.chrome, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -215,6 +215,96 @@ struct SignInScreen: View {
                 Button(L("Privacy Policy")) { settings.openLegal("privacy") }.linkButton()
             }
             .font(.caption)
+        }
+    }
+}
+
+/// Short, clean Quick Support view matching the Main App design: displays this computer's 9-digit
+/// Connection ID immediately without requiring an account or administrator rights.
+public struct QuickSupportConsoleView: View {
+    @ObservedObject var app: AppModel
+    @ObservedObject var host: HostModel
+
+    public init(app: AppModel) {
+        self.app = app
+        host = app.host
+    }
+
+    private var remote: RemoteStatus { app.remote }
+
+    public var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                MixelMark(size: 28)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(verbatim: "Mixel Quick Support").font(.system(size: 15, weight: .bold))
+                    Text(verbatim: L("Remote support — no account or admin needed")).font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if !app.quickSupportStandalone {
+                    Button(L("Sign in with Mixel ID")) { app.stopQuickSupport() }
+                }
+            }
+            .padding(.horizontal, 28)
+            .padding(.top, 38)
+            .padding(.bottom, 16)
+            .background(WindowDragArea())
+            .background(Theme.chrome)
+            Rectangle().fill(Theme.hairline).frame(height: 1)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    if remote.phase == "active", remote.sharing {
+                        HostedSessionCard(app: app, host: host)
+                    }
+                    Card {
+                        HStack {
+                            CardTitle(L("Allow remote access"), symbol: "bolt.shield.fill")
+                            Spacer()
+                            StatusBadge(remote.host != nil ? .online : .attention,
+                                        remote.host != nil ? L("Online") : L("Connecting"))
+                        }
+                        Text(verbatim: L("Share this 9-digit ID with the person helping you. When they connect, you approve the connection on your screen."))
+                            .foregroundStyle(.secondary).font(.callout)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(verbatim: L("Your connection ID")).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                            HStack(spacing: 14) {
+                                RemoteIdText(remote.host)
+                                Spacer()
+                                Button {
+                                    host.copyId()
+                                } label: {
+                                    Label(L("Copy ID"), systemImage: "doc.on.doc")
+                                }
+                                .buttonStyle(PrimaryButtonStyle())
+                                .disabled(remote.host == nil)
+                            }
+                            .padding(14)
+                            .background(Theme.chrome, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Theme.hairline, lineWidth: 1))
+                        }
+                        HStack(spacing: 8) {
+                            Image(systemName: "lock.shield").foregroundStyle(Theme.brand)
+                            Text(verbatim: L("Your approval is required for every connection")).font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                            if remote.host == nil {
+                                Button(L("Reconnect now")) { app.startQuickSupport(standalone: app.quickSupportStandalone) }
+                            }
+                        }
+                    }
+                    MessageLine(app.error)
+                }
+                .padding(28)
+                .frame(maxWidth: 560)
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.page)
+        .onAppear {
+            if remote.host == nil {
+                app.startQuickSupport(standalone: app.quickSupportStandalone)
+            }
         }
     }
 }

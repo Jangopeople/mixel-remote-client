@@ -109,5 +109,9 @@ fn main() {
         _ => {}
     }
     linux_guard::recover_stale();
-    std::process::exit(app::run(args.iter().any(|argument| argument == mixel_engine::autostart::FLAG)));
+    let autostart = args.iter().any(|argument| argument == mixel_engine::autostart::FLAG);
+    let quick_support = args.iter().any(|argument| argument == "--quick-support")
+        || std::env::var("MIXEL_QUICK_SUPPORT").as_deref() == Ok("1")
+        || args.first().is_some_and(|bin| bin.to_ascii_lowercase().contains("quick-support") || bin.to_ascii_lowercase().contains("quicksupport"));
+    std::process::exit(app::run(autostart, quick_support));
 }

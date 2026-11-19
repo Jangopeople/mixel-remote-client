@@ -192,7 +192,7 @@ internal sealed partial class MainWindow : Window
     private void OnChanged(object? sender, PropertyChangedEventArgs change)
     {
         if (change.PropertyName is nameof(AppModel.Section) or nameof(AppModel.Remote) or nameof(AppModel.Account) or nameof(AppModel.Progress) or nameof(AppModel.Error)
-            or nameof(AppModel.Busy) or nameof(WorkspaceModel.Tabs) or nameof(WorkspaceModel.Selected) or nameof(WorkspaceModel.Attempt)
+            or nameof(AppModel.Busy) or nameof(AppModel.QuickSupportMode) or nameof(WorkspaceModel.Tabs) or nameof(WorkspaceModel.Selected) or nameof(WorkspaceModel.Attempt)
             or nameof(WorkspaceModel.ReadyNotices) or nameof(WorkspaceModel.Windows) or nameof(DevicesModel.Devices) or nameof(DevicesModel.View)) Refresh();
     }
 
@@ -247,11 +247,14 @@ internal sealed partial class MainWindow : Window
         AppWindow.TitleBar.ButtonForegroundColor = dark ? Colors.White : Colors.Black;
         AppWindow.TitleBar.ButtonInactiveForegroundColor = dark ? Windows.UI.Color.FromArgb(255, 0x9A, 0x9A, 0xA0) : Windows.UI.Color.FromArgb(255, 0x70, 0x70, 0x78);
         if (SystemBackdrop is null) root.Background = Ui.Brush("MixelChrome");
+        var quickOnly = app.QuickSupportMode && !app.SignedIn;
+        if (quickOnly && app.Section != AppSection.Account) app.Section = AppSection.Account;
+        sidebarBox.Visibility = quickOnly ? Visibility.Collapsed : Visibility.Visible;
         sidebarBox.Background = SystemBackdrop is null ? Ui.Brush("MixelChrome") : new SolidColorBrush(Colors.Transparent);
         pageHost.Background = Ui.Brush("MixelPaper");
         pageHost.BorderBrush = Ui.Brush("MixelHairline");
-        pageHost.BorderThickness = new Thickness(1, 1, 0, 0);
-        pageHost.CornerRadius = new CornerRadius(8, 0, 0, 0);
+        pageHost.BorderThickness = quickOnly ? new Thickness(0, 1, 0, 0) : new Thickness(1, 1, 0, 0);
+        pageHost.CornerRadius = quickOnly ? new CornerRadius(0) : new CornerRadius(8, 0, 0, 0);
         var workspace = app.Workspace;
         var session = workspace.Selected.Peer is { } peer && workspace.Tab(peer) is not null && !workspace.IsInWindow(peer) ? peer : (uint?)null;
         if (workspace.Selected.Peer is not null && session is null) workspace.Selected = WorkspaceTab.Console;

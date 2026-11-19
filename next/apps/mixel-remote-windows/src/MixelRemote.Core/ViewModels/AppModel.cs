@@ -89,6 +89,12 @@ public sealed class AppModel : Observable
     /// <summary>The sign-in link to open in another browser.</summary>
     public string? SignInLink { get => signInLink; set => Set(ref signInLink, value); }
     public string VerificationCode { get => verificationCode; set => Set(ref verificationCode, value); }
+    /// <summary>Quick Support mode: gets a 9-digit Connection ID and accepts attended support without signing in.</summary>
+    public bool QuickSupportMode { get => quickSupportMode; set => Set(ref quickSupportMode, value); }
+    private bool quickSupportMode;
+    /// <summary>Launched as standalone Mixel Quick Support (--quick-support or Mixel-Quick-Support.exe).</summary>
+    public bool QuickSupportStandalone { get => quickSupportStandalone; set => Set(ref quickSupportStandalone, value); }
+    private bool quickSupportStandalone;
 
     /// <summary>The app opens web pages (sign-in, legal texts) through this.</summary>
     public Action<string> OpenUrl { get; set; } = _ => { };
@@ -314,6 +320,7 @@ public sealed class AppModel : Observable
         Company.Reset();
         Enrollment.Reset();
         if (!SignedIn) return;
+        QuickSupportMode = false;
         await Company.Load();
         await Enrollment.Check();
         await Devices.Load();
@@ -458,6 +465,7 @@ public sealed class AppModel : Observable
 
     public Task GoOnline()
     {
+        if (QuickSupportMode && !SignedIn) return StartQuickSupport();
         WentOffline = false;
         autoTries = 1;
         // The automatic retry waits a little, so it never doubles this request.
@@ -470,6 +478,30 @@ public sealed class AppModel : Observable
         WentOffline = true;
         ClearSessions();
         return Act(() => Engine.PerformAsync("remote_disconnect"));
+    }
+
+    /// <summary>Starts Quick Support mode without requiring sign-in or administrator privileges.</summary>
+    public Task StartQuickSupport(bool standalone = false)
+    {
+        WentOffline = false;
+        QuickSupportMode = true;
+        if (standalone) QuickSupportStandalone = true;
+        Section = AppSection.Account;
+        return Act(async () =>
+        {
+            await Engine.PerformAsync("quick_support_start", ("device_name", Environment.MachineName));
+        });
+    }
+
+    /// <summary>Leaves Quick Support mode and returns to the Sign-In view.</summary>
+    public Task StopQuickSupport()
+    {
+        QuickSupportMode = false;
+        WentOffline = true;
+        return Act(async () =>
+        {
+            try { await Engine.PerformAsync("remote_disconnect"); } catch (EngineFailure) { }
+        });
     }
 
     /// <summary>
