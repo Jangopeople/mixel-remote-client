@@ -37,7 +37,17 @@ public final class AppModel: ObservableObject {
     }
     /// The window is in front and the app not hidden (the Mac app sets it; a ready transport is kept only while true).
     @Published public var appActive = true {
-        didSet { if appActive != oldValue { Task { await devices.updatePrewarm() } } }
+        didSet {
+            if appActive != oldValue {
+                let active = appActive
+                Task {
+                    await devices.updatePrewarm()
+                    if session.autoClipboardSync {
+                        await session.syncClipboardAutomatically(forcePull: !active)
+                    }
+                }
+            }
+        }
     }
     @Published public private(set) var account = AccountStatus(phase: "signed_out", message: "Sign in with your Mixel account")
     @Published public private(set) var remote = RemoteStatus.offline

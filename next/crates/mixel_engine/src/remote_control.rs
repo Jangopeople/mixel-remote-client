@@ -737,7 +737,7 @@ impl ControlPipe {
             };
             let plain = Zeroizing::new(self.crypto.open(&record).map_err(|error| error.to_string())?);
             if self.take_host_record(&plain)?
-                && let Some(result) = request.accept(&plain, config.stopped())?
+                && let Some(result) = request.accept_deduped(&plain, config.stopped(), &mut self.clipboard.last_digest)?
             {
                 return Ok(result);
             }

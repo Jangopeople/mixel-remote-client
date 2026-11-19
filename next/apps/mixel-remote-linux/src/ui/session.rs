@@ -487,6 +487,17 @@ impl SessionView {
             }
             let Some(usage) = keymap::usage(code) else { return glib::Propagation::Proceed };
             held.borrow_mut().keys.insert(usage);
+            let ctrl_or_super = modifiers.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::SUPER_MASK);
+            if ctrl_or_super && !modifiers.contains(gdk::ModifierType::ALT_MASK) {
+                if usage == 25 {
+                    a.paste_to_remote(usage);
+                    return glib::Propagation::Stop;
+                } else if usage == 6 || usage == 27 {
+                    a.send_input(input::key(usage, true));
+                    a.pull_clipboard_soon();
+                    return glib::Propagation::Stop;
+                }
+            }
             a.send_input(input::key(usage, true));
             glib::Propagation::Stop
         });

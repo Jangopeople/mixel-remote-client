@@ -96,6 +96,21 @@ internal sealed class RemoteScreen : Grid
             if (down)
             {
                 held.Add(usage);
+                var cmd = held.Contains(KeyMap.Windows) || held.Contains(231);
+                if ((ctrl || cmd) && !alt)
+                {
+                    if (usage == 25)
+                    {
+                        _ = session.PasteToRemote(usage, true);
+                        return true;
+                    }
+                    if (usage is 6 or 27)
+                    {
+                        session.Send(new InputEvent.Key(usage, true));
+                        session.PullClipboardSoon();
+                        return true;
+                    }
+                }
             }
             else if (!held.Remove(usage))
             {

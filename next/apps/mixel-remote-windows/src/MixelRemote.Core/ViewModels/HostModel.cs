@@ -52,7 +52,7 @@ public sealed class HostModel : Observable
             AllowChat = false;
             AllowRecording = false;
             AllowFiles = false;
-            AllowClipboard = false;
+            AllowClipboard = true;
             _ = LoadSources();
         }
         if (next.Phase == "ready" && previous.Phase != "ready") _ = RestoreUnattended();
@@ -69,6 +69,7 @@ public sealed class HostModel : Observable
             // allowed; the person still decides with Allow.
             ConfirmDisplay = Sources.Count == 1;
             AllowControl = ConfirmDisplay && Remote.InputAccess;
+            AllowClipboard = true;
         }
         catch (EngineFailure failure)
         {

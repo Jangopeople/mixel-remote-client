@@ -21,16 +21,22 @@ public struct RemoteScreen: NSViewRepresentable {
         view.image = session.frame
         view.pointerMode = session.pointerMode
         view.controllable = session.controllable
+        view.claimFocusIfAppropriate()
     }
 }
 
 public final class RemoteScreenView: NSView {
     weak var session: SessionModel?
     var image: CGImage? { didSet { if image !== oldValue { layer?.contents = image; needsLayout = true } } }
-    var controllable = false { didSet { if !controllable, oldValue { releaseAll() } } }
+    var controllable = false {
+        didSet {
+            if !controllable, oldValue { releaseAll() }
+            else if controllable, !oldValue { claimFocusIfAppropriate() }
+        }
+    }
     var pointerMode = false { didSet { window?.invalidateCursorRects(for: self) } }
     private var pressed: [Int: UInt8] = [:]
-    private var heldKeys: Set<UInt16> = []
+    private(set) var heldKeys: Set<UInt16> = []
     private var wheel = CGPoint.zero
     private var tracking: NSTrackingArea?
 
@@ -48,6 +54,22 @@ public final class RemoteScreenView: NSView {
 
     public override var acceptsFirstResponder: Bool { true }
     public override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    public override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        claimFocusIfAppropriate()
+    }
+    public override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        claimFocusIfAppropriate()
+    }
+
+    func claimFocusIfAppropriate() {
+        guard controllable, session?.focused != false, let window else { return }
+        if window.firstResponder === self { return }
+        if let textView = window.firstResponder as? NSTextView, textView.isEditable { return }
+        if let textField = window.firstResponder as? NSTextField, textField.isEditable { return }
+        window.makeFirstResponder(self)
+    }
     public override func resetCursorRects() {
         addCursorRect(bounds, cursor: PointerPolicy.cursor(pointerMode: pointerMode) == .crosshair ? .crosshair : .arrow)
     }
@@ -115,6 +137,7 @@ public final class RemoteScreenView: NSView {
         guard let clicks = pressed.removeValue(forKey: event.buttonNumber), let button = button(event) else { return }
         _ = move(event, clamp: true)
         session?.send(.buttonClick(button: button, down: false, clicks: clicks))
+        session?.pullClipboardSoon()
     }
 
     public override func mouseDown(with event: NSEvent) { down(event) }
@@ -141,37 +164,151 @@ public final class RemoteScreenView: NSView {
         if horizontal != 0 || vertical != 0 { session?.send(.wheel(horizontal: horizontal, vertical: vertical)) }
     }
 
+    /// Whether a modifier key usage (224…231) is currently pressed according to `flags`.
+    public static func modifierIsDown(usage: UInt16, flags: NSEvent.ModifierFlags) -> Bool? {
+        switch usage {
+        case 224, 228: return flags.contains(.control)
+        case 225, 229: return flags.contains(.shift)
+        case 226, 230: return flags.contains(.option)
+        case 227, 231: return flags.contains(.command)
+        default: return nil
+        }
+    }
+
+    /// Reconciles `heldKeys` with the live modifier flags on `event` so modifiers pressed or
+    /// released outside the window (such as ⌘Tab) can never become inverted.
+    func syncModifiers(_ flags: NSEvent.ModifierFlags) {
+        let cmdAsCtrl = remoteShortcutModifier == KeyMap.control
+        let pairs: [(Bool, UInt16, UInt16)] = [
+            (flags.contains(.control) || (cmdAsCtrl && flags.contains(.command)), KeyMap.control, 228),
+            (flags.contains(.shift), KeyMap.shift, 229),
+            (flags.contains(.option), KeyMap.alt, 230),
+            (!cmdAsCtrl && flags.contains(.command), KeyMap.command, 231),
+        ]
+        for (isDown, left, right) in pairs {
+            let wasDown = heldKeys.contains(left) || heldKeys.contains(right)
+            if isDown && !wasDown {
+                heldKeys.insert(left)
+                session?.send(.key(usage: left, down: true))
+            } else if !isDown && wasDown {
+                for usage in [left, right] where heldKeys.remove(usage) != nil {
+                    session?.send(.key(usage: usage, down: false))
+                }
+            }
+        }
+    }
+
     public override func keyDown(with event: NSEvent) {
         guard controllable, let usage = KeyMap.usage(macKeyCode: event.keyCode) else { return super.keyDown(with: event) }
+        syncModifiers(event.modifierFlags)
+        if event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control) {
+            let mod = event.modifierFlags.contains(.control) ? KeyMap.control : remoteShortcutModifier
+            let needsWrap = !heldKeys.contains(mod) && !heldKeys.contains(mod + 4)
+            if usage == 25 { // V -> Paste
+                if session?.remote.clipboard == false {
+                    releaseAll()
+                }
+                session?.pasteToRemote(usage: 25, modifiers: needsWrap ? [mod] : [])
+                return
+            } else if usage == 6 || usage == 27 { // C / X -> Copy / Cut
+                heldKeys.insert(usage)
+                if needsWrap { session?.send(.key(usage: mod, down: true)) }
+                session?.send(.key(usage: usage, down: true))
+                if needsWrap {
+                    session?.send(.key(usage: usage, down: false))
+                    session?.send(.key(usage: mod, down: false))
+                    heldKeys.remove(usage)
+                }
+                session?.pullClipboardSoon()
+                return
+            }
+        }
         heldKeys.insert(usage)
         session?.send(.key(usage: usage, down: true))
     }
 
     public override func keyUp(with event: NSEvent) {
         guard controllable, let usage = KeyMap.usage(macKeyCode: event.keyCode) else { return super.keyUp(with: event) }
-        heldKeys.remove(usage)
-        session?.send(.key(usage: usage, down: false))
+        if heldKeys.remove(usage) != nil {
+            session?.send(.key(usage: usage, down: false))
+        }
     }
 
     public override func flagsChanged(with event: NSEvent) {
-        guard controllable, let usage = KeyMap.usage(macKeyCode: event.keyCode) else { return }
-        let down = !heldKeys.contains(usage)
-        if down { heldKeys.insert(usage) } else { heldKeys.remove(usage) }
-        session?.send(.key(usage: usage, down: down))
+        guard controllable else { return }
+        syncModifiers(event.modifierFlags)
     }
 
     /// Shortcuts like ⌘Q stay with this app; everything else reaches the remote computer.
     public override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        guard controllable, window?.firstResponder === self else { return super.performKeyEquivalent(with: event) }
+        guard controllable, session?.focused != false else { return super.performKeyEquivalent(with: event) }
+        if let window, window.firstResponder !== self {
+            if let textView = window.firstResponder as? NSTextView, textView.isEditable { return super.performKeyEquivalent(with: event) }
+            if let textField = window.firstResponder as? NSTextField, textField.isEditable { return super.performKeyEquivalent(with: event) }
+            window.makeFirstResponder(self)
+        }
         let keep: Set<String> = ["q", "w", ",", "h"]
         if event.modifierFlags.contains(.command), let key = event.charactersIgnoringModifiers?.lowercased(), keep.contains(key) {
             return super.performKeyEquivalent(with: event)
         }
-        // With ⌘ held, AppKit sends no key-up: press and release at once.
+        // With ⌘ held, AppKit sends no key-up: reconcile modifiers and press/release at once.
         guard let usage = KeyMap.usage(macKeyCode: event.keyCode) else { return super.performKeyEquivalent(with: event) }
+        syncModifiers(event.modifierFlags)
+        let mod = event.modifierFlags.contains(.control) ? KeyMap.control : remoteShortcutModifier
+        let needsWrap = !heldKeys.contains(mod) && !heldKeys.contains(mod + 4)
+        if event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control) {
+            if usage == 25 { // V -> Paste (sync local clipboard to remote first)
+                if session?.remote.clipboard == false {
+                    releaseAll()
+                }
+                session?.pasteToRemote(usage: 25, modifiers: needsWrap ? [mod] : [])
+                return true
+            } else if usage == 6 || usage == 27 { // C / X -> Copy / Cut (pull remote clipboard after)
+                session?.copyFromRemote(usage: usage, modifiers: needsWrap ? [mod] : [])
+                return true
+            } else if needsWrap {
+                session?.press(usage, modifiers: [mod])
+                return true
+            }
+        }
         session?.send(.key(usage: usage, down: true))
         session?.send(.key(usage: usage, down: false))
         return true
+    }
+
+    private var remoteShortcutModifier: UInt16 {
+        session?.remoteShortcutModifier ?? KeyMap.command
+    }
+
+    @objc public func copy(_ sender: Any?) {
+        guard controllable else { return }
+        let mod = remoteShortcutModifier
+        let needsWrap = !heldKeys.contains(mod) && !heldKeys.contains(mod + 4)
+        session?.copyFromRemote(usage: 6, modifiers: needsWrap ? [mod] : [])
+    }
+
+    @objc public func paste(_ sender: Any?) {
+        guard controllable else { return }
+        if session?.remote.clipboard == false {
+            releaseAll()
+        }
+        let mod = remoteShortcutModifier
+        let needsWrap = !heldKeys.contains(mod) && !heldKeys.contains(mod + 4)
+        session?.pasteToRemote(usage: 25, modifiers: needsWrap ? [mod] : [])
+    }
+
+    @objc public func cut(_ sender: Any?) {
+        guard controllable else { return }
+        let mod = remoteShortcutModifier
+        let needsWrap = !heldKeys.contains(mod) && !heldKeys.contains(mod + 4)
+        session?.copyFromRemote(usage: 27, modifiers: needsWrap ? [mod] : [])
+    }
+
+    public override func selectAll(_ sender: Any?) {
+        guard controllable else { return }
+        let mod = remoteShortcutModifier
+        let needsWrap = !heldKeys.contains(mod) && !heldKeys.contains(mod + 4)
+        session?.press(4, modifiers: needsWrap ? [mod] : [])
     }
 
     func releaseAll() {

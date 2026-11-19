@@ -304,13 +304,14 @@ public sealed class ViewModelTests
         var app = await DemoFixtures.App(engine);
         await app.Host.LoadSources();
         Assert.IsTrue(app.Host.Asking);
-        Assert.IsTrue(app.Host.ConfirmDisplay && app.Host.AllowControl && app.Host.CanAccept);
-        Assert.IsFalse(app.Host.AllowFiles || app.Host.AllowChat || app.Host.AllowClipboard || app.Host.AllowRecording, "nothing else before Accept");
+        Assert.IsTrue(app.Host.ConfirmDisplay && app.Host.AllowControl && app.Host.AllowClipboard && app.Host.CanAccept);
+        Assert.IsFalse(app.Host.AllowFiles || app.Host.AllowChat || app.Host.AllowRecording, "nothing else before Accept");
         app.Host.AllowChat = true;
         await app.Host.Decide(accept: true);
         var decision = engine.CallsOf("remote_decide").Single().Object["decision"]!.AsObject();
         Assert.IsTrue(decision["accept"]!.GetValue<bool>());
         Assert.IsTrue(decision["control"]!.GetValue<bool>());
+        Assert.IsTrue(decision["clipboard"]!.GetValue<bool>());
         Assert.IsTrue(decision["chat"]!.GetValue<bool>());
         Assert.IsFalse(decision["files"]!.GetValue<bool>());
         Assert.AreEqual(DemoFixtures.SessionId, decision["session"]!.GetValue<string>());

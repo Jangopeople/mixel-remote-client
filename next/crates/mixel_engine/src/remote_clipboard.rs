@@ -31,6 +31,10 @@ pub struct ClipboardPipe {
     expired_id: Option<u64>,
     /// Controller: requests up to this number were given up; their late answers are dropped.
     abandoned: u64,
+    /// Controller: the SHA-256 digest of the last clipboard payload synced (pushed or pulled).
+    /// When a background pull (`push == false`) receives identical bytes, the local pasteboard is
+    /// not rewritten so local copies are never clobbered by an unchanged remote clipboard.
+    pub last_digest: Option<[u8; 32]>,
 }
 /// Controller: a clipboard request waiting for the host's answer.
 pub struct Request {
@@ -38,6 +42,7 @@ pub struct Request {
     push: bool,
     rich: bool,
     receiver: Option<Receiver>,
+    payload_digest: Option<[u8; 32]>,
 }
 /// The request number a clipboard message belongs to.
 fn message_id(message: &Message<'_>) -> u64 {
@@ -60,6 +65,7 @@ impl ClipboardPipe {
             receiving_id: 0,
             expired_id: None,
             abandoned: 0,
+            last_digest: None,
         }
     }
     /// Host: a transfer from the technician that did not finish in time is dropped (the session
@@ -221,6 +227,7 @@ impl ClipboardPipe {
             .next
             .checked_add(1)
             .ok_or("Clipboard request sequence exhausted")?;
+        let mut payload_digest = None;
         if push {
             // Read only in direct response to the local Send clipboard action.
             // A local format/permission error must not tear down the session.
@@ -230,19 +237,22 @@ impl ClipboardPipe {
                 Ok(payload) => payload,
                 Err(error) => return Ok(Err(error)),
             };
+            let digest: [u8; 32] = sha2::Sha256::digest(&payload[..]).into();
+            self.last_digest = Some(digest);
+            payload_digest = Some(digest);
             send_payload(config, crypto, channel, id, &payload).await?;
         } else if self.rich {
             send(crypto, channel, Message::GetRich(id)).await?;
         } else {
             send(crypto, channel, Message::Get(id)).await?;
         }
-        Ok(Ok(Request { id, push, rich: self.rich, receiver: None }))
+        Ok(Ok(Request { id, push, rich: self.rich, receiver: None, payload_digest }))
     }
     /// Tests: a request numbered `id` as if it had been sent.
     #[cfg(test)]
     pub fn test_request(&mut self, id: u64, push: bool) -> Request {
         self.next = id + 1;
-        Request { id, push, rich: self.rich, receiver: None }
+        Request { id, push, rich: self.rich, receiver: None, payload_digest: None }
     }
     /// Controller: the host did not answer `request` in time; its answer may still come.
     pub fn give_up(&mut self, request: &Request) {
@@ -258,17 +268,35 @@ impl Request {
     /// is complete (with its outcome), `None` while more parts are to come. An error is a host
     /// breaking the protocol.
     pub fn accept(&mut self, plain: &[u8], stopped: bool) -> Result<Option<Result<(), String>>, String> {
+        let mut last_digest = None;
+        self.accept_deduped(plain, stopped, &mut last_digest)
+    }
+
+    /// Like [`accept`], but skips rewriting the local OS clipboard when a pull (`push == false`)
+    /// receives the exact same payload digest that was last pushed or pulled (`last_digest`).
+    pub fn accept_deduped(
+        &mut self,
+        plain: &[u8],
+        stopped: bool,
+        last_digest: &mut Option<[u8; 32]>,
+    ) -> Result<Option<Result<(), String>>, String> {
         let (id, push, rich) = (self.id, self.push, self.rich);
         let message = Message::decode(plain).map_err(|error| error.to_string())?;
         match message {
-            Message::Ack(reply) if push && reply == id => Ok(Some(Ok(()))),
+            Message::Ack(reply) if push && reply == id => {
+                if let Some(digest) = self.payload_digest {
+                    *last_digest = Some(digest);
+                }
+                Ok(Some(Ok(())))
+            }
             Message::Unavailable(reply) if reply == id => Ok(Some(Err(if rich {
                 "The remote clipboard is empty, or holds folders or more than 32 MB"
             } else {
                 "The remote clipboard is unavailable or exceeds the plain-text limit"
             }
             .into()))),
-            Message::Begin { id: reply, .. } if !push && reply == id && self.receiver.is_none() => {
+            Message::Begin { id: reply, digest, .. } if !push && reply == id && self.receiver.is_none() => {
+                self.payload_digest = Some(digest);
                 self.receiver = Some(
                     if rich {
                         Receiver::begin_rich(&message, Instant::now())
@@ -298,7 +326,18 @@ impl Request {
                 if stopped {
                     return Err("The session stopped before clipboard replacement".into());
                 }
-                Ok(Some(write_content(content)))
+                if let Some(digest) = self.payload_digest
+                    && *last_digest == Some(digest)
+                {
+                    return Ok(Some(Ok(())));
+                }
+                let result = write_content(content);
+                if result.is_ok()
+                    && let Some(digest) = self.payload_digest
+                {
+                    *last_digest = Some(digest);
+                }
+                Ok(Some(result))
             }
             _ => Err("Invalid clipboard response".into()),
         }
@@ -374,4 +413,49 @@ async fn send_payload(
         return Err("The clipboard transfer stopped".into());
     }
     send(crypto, channel, Message::Commit(id)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unchanged_pull_with_matching_last_digest_does_not_touch_local_clipboard() {
+        let (_tx, rx) = mpsc::channel(1);
+        let mut pipe = ClipboardPipe::new(rx, true);
+        let payload = b"same-remote-text";
+        let digest: [u8; 32] = sha2::Sha256::digest(payload).into();
+        pipe.last_digest = Some(digest);
+
+        let mut request = pipe.test_request(7, false);
+        let begin = Message::Begin {
+            id: 7,
+            length: payload.len() as u32,
+            digest,
+        }
+        .encode()
+        .unwrap();
+        let chunk = Message::Chunk {
+            id: 7,
+            offset: 0,
+            bytes: payload,
+        }
+        .encode()
+        .unwrap();
+        let commit = Message::Commit(7).encode().unwrap();
+
+        assert_eq!(
+            request.accept_deduped(&begin, false, &mut pipe.last_digest),
+            Ok(None)
+        );
+        assert_eq!(
+            request.accept_deduped(&chunk, false, &mut pipe.last_digest),
+            Ok(None)
+        );
+        assert_eq!(
+            request.accept_deduped(&commit, false, &mut pipe.last_digest),
+            Ok(Some(Ok(())))
+        );
+        assert_eq!(pipe.last_digest, Some(digest));
+    }
 }

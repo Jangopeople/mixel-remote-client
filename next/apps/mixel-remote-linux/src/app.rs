@@ -1995,7 +1995,7 @@ impl App {
                 host.allow_chat = false;
                 host.allow_recording = false;
                 host.allow_files = false;
-                host.allow_clipboard = false;
+                host.allow_clipboard = true;
                 host.error.clear();
             });
             let app = self.clone();
@@ -2744,6 +2744,41 @@ impl App {
                     Err(error) => i18n::engine(&error),
                 };
             });
+        });
+    }
+
+    pub fn paste_to_remote(self: &Rc<Self>, usage: u16) {
+        let Some(session) = self.state.borrow().focus.clone() else { return };
+        let may_push = self
+            .state
+            .borrow()
+            .session_item(&session)
+            .is_some_and(|item| item.clipboard && item.phase == "active" && !item.control_pending);
+        let app = self.clone();
+        self.spawn(async move {
+            if may_push {
+                let _ = app.perform("remote_clipboard", json!({ "session": session, "push": true })).await;
+            }
+            app.send_input_to(&session, input::key(usage, true));
+        });
+    }
+
+    pub fn pull_clipboard_soon(self: &Rc<Self>) {
+        let Some(session) = self.state.borrow().focus.clone() else { return };
+        let app = self.clone();
+        self.spawn(async move {
+            for delay in [150, 350] {
+                glib::timeout_future(Duration::from_millis(delay)).await;
+                let ok = app
+                    .state
+                    .borrow()
+                    .session_item(&session)
+                    .is_some_and(|item| item.clipboard && item.phase == "active" && !item.control_pending);
+                if !ok {
+                    return;
+                }
+                let _ = app.perform("remote_clipboard", json!({ "session": session, "push": false })).await;
+            }
         });
     }
 

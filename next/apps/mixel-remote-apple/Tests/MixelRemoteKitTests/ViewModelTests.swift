@@ -234,7 +234,7 @@ final class ViewModelTests: XCTestCase {
         XCTAssertEqual(decision["control"] as? Bool, true)
         XCTAssertEqual(decision["files"] as? Bool, true)
         XCTAssertEqual(decision["chat"] as? Bool, true)
-        XCTAssertEqual(decision["clipboard"] as? Bool, false)
+        XCTAssertEqual(decision["clipboard"] as? Bool, true)
         XCTAssertEqual(decision["recording"] as? Bool, false)
     }
 
@@ -253,7 +253,8 @@ final class ViewModelTests: XCTestCase {
         XCTAssertEqual(decision["source"] as? String, "display:2")
         XCTAssertEqual(decision["control"] as? Bool, true)
         XCTAssertEqual(decision["confirm"] as? Bool, true)
-        for option in ["clipboard", "files", "chat", "recording"] {
+        XCTAssertEqual(decision["clipboard"] as? Bool, true)
+        for option in ["files", "chat", "recording"] {
             XCTAssertEqual(decision[option] as? Bool, false, option)
         }
     }
@@ -440,6 +441,44 @@ final class ViewModelTests: XCTestCase {
         XCTAssertEqual(KeyMap.usage(macKeyCode: 0x24), 40)
         XCTAssertEqual(KeyMap.usage(macKeyCode: 0x37), 227)
     }
+
+    #if os(macOS)
+    func testModifierFlagsNeverInvertCommandAfterCmdTabRelease() throws {
+        let engine = MockEngine()
+        Fixtures.viewing(engine)
+        engine.queue(frame: VideoFrame.sample())
+        XCTAssertEqual(RemoteScreenView.modifierIsDown(usage: 227, flags: [.command]), true)
+        XCTAssertEqual(RemoteScreenView.modifierIsDown(usage: 227, flags: []), false)
+        XCTAssertEqual(RemoteScreenView.modifierIsDown(usage: 224, flags: [.control]), true)
+        XCTAssertEqual(RemoteScreenView.modifierIsDown(usage: 225, flags: [.shift]), true)
+        XCTAssertEqual(RemoteScreenView.modifierIsDown(usage: 226, flags: [.option]), true)
+    }
+
+    func testPasteToRemotePushesClipboardBeforeSendingKeystrokeAndCopyPullsAfter() async throws {
+        let engine = MockEngine()
+        Fixtures.viewing(engine)
+        engine.queue(frame: VideoFrame.sample())
+        let app = await Fixtures.app(engine)
+        try await waitFor { app.session.frame != nil }
+
+        // Paste (⌘V) pushes the local clipboard first, then sends the V keystroke.
+        app.session.pasteToRemote(usage: 25, modifiers: [KeyMap.command], forcePush: true)
+        try await waitFor { !engine.calls("remote_clipboard").isEmpty && engine.sentInput.count >= 4 }
+        let pushCall = try XCTUnwrap(engine.calls("remote_clipboard").first).object
+        XCTAssertEqual(pushCall["push"] as? Bool, true)
+        let sent = Self.events(engine)
+        XCTAssertTrue(sent.contains(["kind": "key", "usage": 227, "down": true]))
+        XCTAssertTrue(sent.contains(["kind": "key", "usage": 25, "down": true]))
+        XCTAssertTrue(sent.contains(["kind": "key", "usage": 25, "down": false]))
+        XCTAssertTrue(sent.contains(["kind": "key", "usage": 227, "down": false]))
+
+        // Copy (⌘C) sends the C keystroke and automatically pulls the remote clipboard shortly after.
+        app.session.copyFromRemote(usage: 6, modifiers: [KeyMap.command])
+        try await waitFor { engine.calls("remote_clipboard").contains { ($0.object["push"] as? Bool) == false } }
+        let pullCall = try XCTUnwrap(engine.calls("remote_clipboard").last).object
+        XCTAssertEqual(pullCall["push"] as? Bool, false)
+    }
+    #endif
 
     /// The input events the engine received, as dictionaries (key order does not matter).
     static func events(_ engine: MockEngine) -> [[String: AnyHashable]] {

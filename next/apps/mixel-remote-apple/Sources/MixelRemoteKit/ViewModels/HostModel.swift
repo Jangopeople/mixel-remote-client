@@ -10,7 +10,7 @@ public final class HostModel: ObservableObject {
     @Published public private(set) var sources: [CaptureTarget] = []
     @Published public var source = ""
     @Published public var allowControl = true
-    @Published public var allowClipboard = false
+    @Published public var allowClipboard = true
     @Published public var allowFiles = false
     @Published public var allowChat = false
     @Published public var allowRecording = false
@@ -41,7 +41,7 @@ public final class HostModel: ObservableObject {
             screenAccess = true
             error = ""
             allowControl = true
-            allowChat = false; allowRecording = false; allowFiles = false; allowClipboard = false
+            allowChat = false; allowRecording = false; allowFiles = false; allowClipboard = true
             Task { await loadSources() }
         }
         if next.phase == "ready", previous.phase != "ready" { Task { await restoreUnattended() } }

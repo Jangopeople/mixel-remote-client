@@ -1,3 +1,6 @@
+#if os(macOS)
+import AppKit
+#endif
 import CoreGraphics
 import Foundation
 
@@ -54,6 +57,14 @@ public final class SessionModel: ObservableObject {
     private var inputQueue: [InputEvent] = []
     private var sending = false
     private var reconnect: Reconnect?
+    private var clipboardSyncing = false
+    private var clipboardPullTask: Task<Void, Never>?
+    private var lastAutoClipboardPull = Date.distantPast
+    /// Automatic bidirectional clipboard sync (enabled by default in the app; tests can configure or inspect it).
+    public var autoClipboardSync = false
+    #if os(macOS)
+    private var lastPasteboardChangeCount: Int = NSPasteboard.general.changeCount
+    #endif
 
     struct Reconnect {
         var host: UInt32
@@ -154,6 +165,10 @@ public final class SessionModel: ObservableObject {
             sessionId = item.id
             privacy = false; blockInput = false; lockWhenDone = false; pointerMode = false; sound = true
             chat = []; files = nil; clipboardResult = ""; stoppedConsent = nil
+            lastAutoClipboardPull = .distantPast
+            #if os(macOS)
+            lastPasteboardChangeCount = NSPasteboard.general.changeCount
+            #endif
             if viewingSession != nil { clear() }
         }
         // Several sessions run side by side: each keeps fetching its own pictures, so a tab that comes
@@ -177,6 +192,7 @@ public final class SessionModel: ObservableObject {
         sessionId = nil
         toggleSession = nil
         tools?.cancel(); tools = nil
+        clipboardPullTask?.cancel(); clipboardPullTask = nil
         clear()
         stoppedConsent = nil
         stopping = false
@@ -471,20 +487,138 @@ public final class SessionModel: ObservableObject {
         guard let session, focused else { return }
         clipboardResult = L("Transferring…")
         Task {
-            do {
-                try await app.engine.perform("remote_clipboard", ["session": session, "push": push])
+            await performClipboardSync(session: session, push: push, explicit: true)
+        }
+    }
+
+    @discardableResult
+    func performClipboardSync(session: String, push: Bool, explicit: Bool) async -> Bool {
+        while clipboardSyncing {
+            try? await Task.sleep(nanoseconds: 15_000_000)
+            guard self.session == session else { return false }
+        }
+        guard self.session == session else { return false }
+        clipboardSyncing = true
+        defer { clipboardSyncing = false }
+        #if os(macOS)
+        if push {
+            lastPasteboardChangeCount = NSPasteboard.general.changeCount
+        }
+        #endif
+        do {
+            try await app.engine.perform("remote_clipboard", ["session": session, "push": push])
+            #if os(macOS)
+            lastPasteboardChangeCount = NSPasteboard.general.changeCount
+            #endif
+            if explicit {
                 clipboardResult = push ? L("Remote clipboard updated.") : L("Your clipboard was updated.")
-            } catch { clipboardResult = AppModel.message(error) }
+            }
+            return true
+        } catch {
+            if explicit {
+                clipboardResult = AppModel.message(error)
+            }
+            return false
+        }
+    }
+
+    /// The shortcut modifier expected by the remote OS: Control on Windows/Linux, Command on macOS.
+    public var remoteShortcutModifier: UInt16 {
+        if let peer, let os = (app.workspace.tab(peer)?.os ?? app.devices.devices.first(where: { $0.connectionId == peer })?.os)?.lowercased(),
+           os.contains("win") || os.contains("linux") {
+            return KeyMap.control
+        }
+        if remote.offers("sas") { return KeyMap.control }
+        return KeyMap.command
+    }
+
+    /// Pushes the local clipboard to the remote host (if it changed since the last sync or `forcePush` is true)
+    /// and then sends the paste keystroke (`usage` = 25 for `V`) with `modifiers` held around it.
+    public func pasteToRemote(usage: UInt16 = 25, modifiers: [UInt16] = [], forcePush: Bool = true) {
+        guard let session, controllable, focused else { return }
+        let status = remote
+        let shouldPush: Bool = {
+            guard status.clipboard, status.phase == "active" else { return false }
+            #if os(macOS)
+            if forcePush || NSPasteboard.general.changeCount != lastPasteboardChangeCount { return true }
+            return false
+            #else
+            return forcePush
+            #endif
+        }()
+        if !shouldPush {
+            #if os(macOS)
+            if !status.clipboard, status.control, status.phase == "active",
+               let text = NSPasteboard.general.string(forType: .string), !text.isEmpty, text.count <= 32_768 {
+                if !modifiers.isEmpty { send(.releaseAll) }
+                send(.text(text))
+                return
+            }
+            #endif
+            press(usage, modifiers: modifiers)
+            return
+        }
+        Task {
+            _ = await performClipboardSync(session: session, push: true, explicit: false)
+            guard self.session == session, self.controllable, self.focused else { return }
+            self.press(usage, modifiers: modifiers)
+        }
+    }
+
+    /// Sends a copy/cut keystroke (`usage` = 6 for `C`, 27 for `X`) with `modifiers` held around it
+    /// and pulls the remote clipboard onto the local Mac shortly after the remote app updates its clipboard.
+    public func copyFromRemote(usage: UInt16, modifiers: [UInt16] = []) {
+        guard controllable, focused else { return }
+        press(usage, modifiers: modifiers)
+        pullClipboardSoon()
+    }
+
+    /// Schedules a quick non-clobbering pull of the remote clipboard after a remote copy action.
+    public func pullClipboardSoon() {
+        guard let session, focused, remote.clipboard, remote.phase == "active" else { return }
+        clipboardPullTask?.cancel()
+        clipboardPullTask = Task { [weak self] in
+            for delayNs: UInt64 in [140_000_000, 320_000_000] {
+                try? await Task.sleep(nanoseconds: delayNs)
+                if Task.isCancelled { return }
+                guard let self, self.session == session, self.focused, self.remote.clipboard, self.remote.phase == "active" else { return }
+                _ = await self.performClipboardSync(session: session, push: false, explicit: false)
+                self.lastAutoClipboardPull = Date()
+            }
+        }
+    }
+
+    /// Automatic bidirectional clipboard sync: pushes local pasteboard changes to the remote host,
+    /// and periodically pulls remote clipboard changes (deduplicated by digest in the engine).
+    public func syncClipboardAutomatically(forcePull: Bool = false) async {
+        let status = remote
+        guard let session, focused, status.phase == "active", status.clipboard, status.controlPending != true else { return }
+        #if os(macOS)
+        let currentCount = NSPasteboard.general.changeCount
+        if currentCount != lastPasteboardChangeCount {
+            _ = await performClipboardSync(session: session, push: true, explicit: false)
+            return
+        }
+        #endif
+        let now = Date()
+        if forcePull || now.timeIntervalSince(lastAutoClipboardPull) >= 1.2 {
+            lastAutoClipboardPull = now
+            _ = await performClipboardSync(session: session, push: false, explicit: false)
         }
     }
 
     private func startTools() {
         guard tools == nil else { return }
+        autoClipboardSync = !(app.engine is MockEngine)
         tools = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
                 await self.readTools()
                 try? await Task.sleep(nanoseconds: 700_000_000)
+                if Task.isCancelled { return }
+                if self.autoClipboardSync {
+                    await self.syncClipboardAutomatically()
+                }
             }
         }
     }

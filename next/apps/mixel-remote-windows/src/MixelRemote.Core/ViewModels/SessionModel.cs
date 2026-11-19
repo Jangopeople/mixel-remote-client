@@ -741,6 +741,34 @@ public sealed class SessionModel : Observable
         }
     }
 
+    public async Task PasteToRemote(ushort usage, bool down)
+    {
+        if (SessionId is not { } session || !Controllable || !MayAct) return;
+        if (down && Remote is { Clipboard: true, Phase: "active", ControlPending: false })
+        {
+            try { await app.Engine.PerformAsync("remote_clipboard", ("session", session), ("push", true)); }
+            catch (EngineFailure) { }
+        }
+        Send(new InputEvent.Key(usage, down));
+    }
+
+    public void PullClipboardSoon()
+    {
+        if (SessionId is not { } session || !MayAct || Remote is not { Clipboard: true, Phase: "active" }) return;
+        _ = PullAsync(session);
+
+        async Task PullAsync(string id)
+        {
+            foreach (var delay in new[] { 150, 350 })
+            {
+                await Task.Delay(delay);
+                if (SessionId != id || !MayAct || Remote is not { Clipboard: true, Phase: "active" }) return;
+                try { await app.Engine.PerformAsync("remote_clipboard", ("session", id), ("push", false)); }
+                catch (EngineFailure) { }
+            }
+        }
+    }
+
     private void StartTools()
     {
         if (tools is not null) return;
