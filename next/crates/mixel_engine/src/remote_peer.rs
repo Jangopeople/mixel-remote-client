@@ -417,21 +417,21 @@ async fn create_transport(
 ) -> Result<NativeTransport, String> {
     let transport = if relay_only_transport(relay_only) {
         #[cfg(target_os = "windows")]
-        {
-            NativeTransport::relay_stream_only(servers).await
+        if crate::remote_control::lab_flag("MIXEL_TURN_TCP_ONLY") {
+            return NativeTransport::relay_stream_only(servers)
+                .await
+                .map_err(|_| "Cannot create the native WebRTC transport".to_owned());
         }
-        #[cfg(not(target_os = "windows"))]
-        {
-            NativeTransport::relay_only("0.0.0.0:0".into(), servers).await
-        }
+        NativeTransport::relay_only("0.0.0.0:0".into(), servers).await
     } else {
         NativeTransport::new("0.0.0.0:0".into(), servers).await
     };
     transport.map_err(|_| "Cannot create the native WebRTC transport".to_owned())
 }
-/// Whether a session's transport may publish only relay candidates.
+/// Whether a session's transport may publish only relay candidates (`MIXEL_RELAY_ONLY=1` forces strict relay-only;
+/// otherwise direct LAN/STUN UDP candidates are gathered alongside TURN relay candidates for lowest latency).
 fn relay_only_transport(configured: bool) -> bool {
-    configured
+    configured && crate::remote_control::lab_flag("MIXEL_RELAY_ONLY")
 }
 
 async fn run(config: &mut Config, parts: Option<WarmParts>) -> Result<(), String> {
@@ -452,7 +452,7 @@ async fn run(config: &mut Config, parts: Option<WarmParts>) -> Result<(), String
         }
     };
     let result = async {
-        let (mut consent, channel, sender, size, limit, mut control, mut early_track) =
+        let (mut consent, channel, sender, size, limit, mut control, mut early_track, mut early_prep) =
             negotiate(config, &mut transport, warm).await?;
         let files = if let Some(bulk) = control.bulk.take() {
             Some(
@@ -469,6 +469,7 @@ async fn run(config: &mut Config, parts: Option<WarmParts>) -> Result<(), String
             .map(|crypto| crate::remote_chat::ChatTransport::start(config, &mut transport, crypto));
         crate::qa_timeline::mark("chat channel set up");
         let result = if config.host && config.mirror {
+            drop(early_prep.take());
             mirror_media(config, &mut consent, &channel, sender.ok_or("Host video sender unavailable")?, &mut control, &mut transport).await
         } else if config.host {
             host_media(
@@ -479,6 +480,7 @@ async fn run(config: &mut Config, parts: Option<WarmParts>) -> Result<(), String
                 (size, limit),
                 &mut control,
                 &mut transport,
+                early_prep.take(),
             )
             .await
         } else {
@@ -560,6 +562,8 @@ type Negotiated = (
     ControlPipe,
     // The picture track, when the first picture was taken before the control channel opened.
     Option<RemoteTrack>,
+    // Host: the already-opened screen capture and encoder from the early picture, handed over to host_media.
+    Option<EarlyPicture>,
 );
 /// Both sides announce this in the offer/answer when the host may send the first complete picture
 /// as soon as the transport is encrypted and the peer's signed identity matches its certificate,
@@ -998,6 +1002,7 @@ async fn negotiate(
                 None => EarlyPicture::start(config, early_size.ok_or("Early picture not prepared")?),
             };
             host_early_picture(config, transport, &consent, early_sender, &mut channel, &mut prep, deadline).await?;
+            prepared = Some(prep);
             opened = true;
         } else if let Some(shown) = channel.clone() {
             let mut before = Ctl::before_open();
@@ -1115,13 +1120,13 @@ async fn negotiate(
     let full_hd = config.host && peer_features.iter().any(|name| name == crate::remote_control::FULL_HD);
     let limit = if full_hd { (1920.0, 1080.0) } else { (1280.0, 720.0) };
     let size = if full_hd { source_size_within(config, limit)? } else { size };
-    Ok((consent, channel, sender, size, limit, control, early_track))
+    Ok((consent, channel, sender, size, limit, control, early_track, prepared))
 }
 /// Host, fast first picture: the peer is verified on the encrypted transport, the control channel is
 /// not open yet. Opens the screen, encodes one complete picture and sends it (once more after
 /// 1.5 s if the channel is still not open: a packet lost beyond the stack's repeat requests would
 /// otherwise leave the technician without a picture until the channel opens), then waits for the
-/// channel to open and closes this capture again; the normal picture loop opens its own.
+/// channel to open and hands the running capture and encoder directly over to `host_media`.
 /// The host's first key picture, made while the transport is still opening: the screen is captured and encoded as soon as the
 /// request is accepted and the peer's features are known, so that the picture is ready the moment DTLS is up and the peer
 /// verified (nothing is sent before that). Capture, encoder start and the first encode used to begin only after DTLS, which
@@ -1246,7 +1251,7 @@ async fn host_early_picture(
             }
         }
         if let Some(open) = channel.as_ref() {
-            match tokio::time::timeout(Duration::from_millis(5), open.poll()).await {
+            match tokio::time::timeout(Duration::from_millis(2), open.poll()).await {
                 Ok(Some(NativeDataChannelEvent::OnOpen)) => {
                     crate::qa_timeline::mark("control channel open (ICE and DTLS done)");
                     break Ok(());
@@ -1257,7 +1262,7 @@ async fn host_early_picture(
                 _ => {}
             }
         } else {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            tokio::time::sleep(Duration::from_millis(2)).await;
         }
         prep.advance();
         if let Some(annex_b) = &prep.picture {
@@ -1274,15 +1279,15 @@ async fn host_early_picture(
                 if sends == 0 {
                     crate::qa_timeline::mark(&format!("early: first picture sent ({} packets)", packets.len()));
                 }
-                // About 2.4 Mbit/s: the handshake packets of the control channel go out between them.
+                // Send 8 packets per 2 ms burst so the initial keyframe arrives in ~50 ms while still letting control packets interleave.
                 let mut failed = None;
                 for (index, packet) in packets.into_iter().enumerate() {
                     if let Err(error) = sender.write(consent, packet).await {
                         failed = Some(error.to_string());
                         break;
                     }
-                    if index % 2 == 1 {
-                        tokio::time::sleep(Duration::from_millis(8)).await;
+                    if index % 8 == 7 {
+                        tokio::time::sleep(Duration::from_millis(2)).await;
                     }
                 }
                 if let Some(error) = failed {
@@ -1293,7 +1298,9 @@ async fn host_early_picture(
             }
         }
     };
-    prep.stop();
+    if result.is_err() {
+        prep.stop();
+    }
     result
 }
 async fn pump_ice(config: &mut Config, transport: &mut NativeTransport) -> Result<(), String> {
@@ -1572,6 +1579,7 @@ async fn host_media(
     (mut size, limit): ((usize, usize), (f64, f64)),
     control: &mut ControlPipe,
     transport: &mut NativeTransport,
+    mut early_prep: Option<EarlyPicture>,
 ) -> Result<(), String> {
     let _released = Released(config.link.released.clone());
     if config.stopped() {
@@ -1593,6 +1601,7 @@ async fn host_media(
     // the last picture of the one before until the first one of this one.
     let mut continuing = config.previous.is_some().then(crate::session_mirror::publish_continuing);
     if let Some(previous) = config.previous.take() {
+        drop(early_prep.take());
         #[cfg(feature = "qa-session")]
         let waited = Instant::now();
         let stopped = previous.take_over(CAPTURE_HANDOVER).await;
@@ -1601,12 +1610,28 @@ async fn host_media(
         #[cfg(not(feature = "qa-session"))]
         let _ = stopped;
     }
-    let mut capture = session_platform::capture(
-        &config.source,
-        size,
-        #[cfg(target_os = "linux")]
-        config.portal.clone(),
-    )?;
+    let handed_over = early_prep.take().and_then(|mut prep| {
+        if prep.size == size && prep.encoding.is_none()
+            && let (Some(capture), Some(encoder)) = (prep.capture.take(), prep.encoder.take())
+        {
+            Some((capture, encoder, prep.sequence, prep.started))
+        } else {
+            prep.stop();
+            None
+        }
+    });
+    let (mut capture, handed_encoder) = match handed_over {
+        Some((capture, encoder, seq, started_at)) => (capture, Some((encoder, seq, started_at))),
+        None => (
+            session_platform::capture(
+                &config.source,
+                size,
+                #[cfg(target_os = "linux")]
+                config.portal.clone(),
+            )?,
+            None,
+        ),
+    };
     #[cfg(feature = "qa-session")]
     let capture_ready = setup.elapsed();
     crate::qa_timeline::mark("screen capture opened");
@@ -1615,15 +1640,16 @@ async fn host_media(
     crate::session_guard::set_shared_source(&shown);
     let result = async {
         let mut bitrate = encoder_bitrate(size, crate::video_pacing::START_RATE);
-        let mut encoder = start_encoder(size, bitrate)?;
+        let (mut encoder, mut sequence, started) = match handed_encoder {
+            Some((encoder, seq, started_at)) => (encoder, seq, started_at),
+            None => (start_encoder(size, bitrate)?, 0, Instant::now()),
+        };
         let mut bitrate_set = Instant::now();
         crate::qa_timeline::mark("encoder started");
         let mut retry_encode = false;
         // The encoder left the last picture out: it is given again although the screen is unchanged.
         let mut encode_again = false;
-        let mut sequence = 0;
         let mut sent = 0u64;
-        let started = Instant::now();
         let mut last = Instant::now();
         let mut recent: Option<Arc<native_os_capture::stream::CapturedFrame>> = None;
         // Remote printing: forward jobs printed on "Mixel Remote Printer" during this session.
@@ -1767,7 +1793,7 @@ async fn host_media(
                 Duration::from_millis(if control.receiving_clipboard() {
                     1
                 } else if control.allowed || encode_again {
-                    8
+                    2
                 } else {
                     100
                 }),
@@ -2214,6 +2240,7 @@ async fn viewer_media(
         config.video.wants_compressed() && recording.is_none(),
         false,
     );
+    let mut seed_keyframe: Option<(u64, Vec<u8>)> = None;
     let mut player: Option<crate::remote_sound::Player> = None;
     let mut player_failed = false;
     let stream_opened = Instant::now();
@@ -2390,13 +2417,35 @@ async fn viewer_media(
                         if waiting_for_key || compressed {
                             let Ok(unit) = native_os_capture::h264::annex_b_to_avcc(&frame) else {
                                 waiting_for_key = true;
+                                seed_keyframe = None;
                                 control.request_keyframe(channel).await?;
                                 continue;
                             };
                             let key = unit.keyframe && unit.sps.is_some() && unit.pps.is_some();
                             if waiting_for_key && !key {
-                                control.request_keyframe(channel).await?;
-                                continue;
+                                if compressed
+                                    && let Some((seed_ts, seed_bytes)) = seed_keyframe.take()
+                                {
+                                    received += 1;
+                                    let seed_pkt = crate::remote_video::compressed_packet(
+                                        config.session,
+                                        received,
+                                        seed_ts,
+                                        &seed_bytes,
+                                        true,
+                                    )?
+                                    .from_transport(config.transport);
+                                    if !config.video.publish_compressed(seed_pkt)? {
+                                        control.request_keyframe(channel).await?;
+                                        continue;
+                                    }
+                                } else {
+                                    control.request_keyframe(channel).await?;
+                                    continue;
+                                }
+                            }
+                            if key {
+                                seed_keyframe = None;
                             }
                             waiting_for_key = false;
                             if compressed {
@@ -2471,6 +2520,13 @@ async fn viewer_media(
                         };
                         if config.stopped() {
                             return Ok(());
+                        }
+                        if native_os_capture::h264::annex_b_to_avcc(&frame)
+                            .is_ok_and(|u| u.keyframe && u.sps.is_some() && u.pps.is_some())
+                        {
+                            seed_keyframe = Some((timestamp, frame.to_vec()));
+                        } else {
+                            seed_keyframe = None;
                         }
                         if let Some(recording) = &recording {
                             recording.submit(

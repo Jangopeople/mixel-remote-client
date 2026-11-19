@@ -289,24 +289,26 @@ $$;
 -- May the caller administer this enrolled device (no visibility check here; see admin_context).
 create function remote_private.can_admin_device(target uuid) returns boolean
 language sql stable security definer set search_path = '' as $$
-    select case when t.id is not null then exists (
+    select case
+        when coalesce(auth.jwt()->>'aal', '') = 'aal2' and exists (
+            select 1 from public.users u where u.auth_user_id = auth.uid() and u.is_active
+              and u.deleted_at is null and u.organization_id is null and u.role::text = 'admin')
+        then true
+        when t.id is not null then exists (
             select 1 from remote_saas.members m
             join public.users u on u.id = m.user_id
             where m.tenant_id = t.id and m.role in ('owner', 'admin') and u.auth_user_id = auth.uid()
               and u.is_active and u.deleted_at is null and u.organization_id = t.organization_id)
-        else coalesce(auth.jwt()->>'aal', '') = 'aal2' and (
-            exists (select 1 from public.users u where u.auth_user_id = auth.uid() and u.is_active
-                    and u.deleted_at is null and u.organization_id is null and u.role::text = 'admin')
-            or exists (
-                select 1 from remote_private.company_administrators ca
-                join public.users u on u.id = ca.profile_id
-                join public.organizations o on o.id = ca.organization_id and o.is_active
-                join auth.identities i on i.user_id = u.auth_user_id and i.provider = 'keycloak'
-                    and i.identity_data->>'iss' in ('https://auth.mixel.ch/application/o/mixel-ism-user',
-                                                    'https://auth.mixel.ch/application/o/mixel-ism-user/')
-                    and i.identity_data->>'sub' = ca.mixel_subject and i.provider_id = ca.mixel_subject
-                where u.auth_user_id = auth.uid() and u.is_active and u.deleted_at is null
-                  and ca.organization_id = c.organization_id))
+        else coalesce(auth.jwt()->>'aal', '') = 'aal2' and exists (
+            select 1 from remote_private.company_administrators ca
+            join public.users u on u.id = ca.profile_id
+            join public.organizations o on o.id = ca.organization_id and o.is_active
+            join auth.identities i on i.user_id = u.auth_user_id and i.provider = 'keycloak'
+                and i.identity_data->>'iss' in ('https://auth.mixel.ch/application/o/mixel-ism-user',
+                                                'https://auth.mixel.ch/application/o/mixel-ism-user/')
+                and i.identity_data->>'sub' = ca.mixel_subject and i.provider_id = ca.mixel_subject
+            where u.auth_user_id = auth.uid() and u.is_active and u.deleted_at is null
+              and ca.organization_id = c.organization_id)
         end
     from public.devices d
     join public.clients c on c.id = d.client_id

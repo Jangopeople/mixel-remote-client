@@ -507,10 +507,10 @@ internal sealed class DevicesPage : PageView
                 }
                 menu.Items.Add(unattended);
             }
-            if (model.Manages)
+            if (model.Manages || model.CanAdmin(device))
             {
-                Add(L("Rename…"), () => _ = Rename(device), model.Writable);
-                if (model.GroupsOn) Add(L("Move to group…"), () => _ = Move(device), model.Writable);
+                Add(L("Rename…"), () => _ = Rename(device), model.Tenant is null || model.Writable);
+                if (model.Manages && model.GroupsOn) Add(L("Move to group…"), () => _ = Move(device), model.Writable);
                 menu.Items.Add(new MenuFlyoutSeparator());
                 Add(L("Remove…"), () => _ = Remove(device));
             }

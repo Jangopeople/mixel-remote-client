@@ -299,7 +299,9 @@ public sealed partial class DevicesModel : Observable
 
     public Task<bool> Rename(Device device, string name) => Tenant is { } tenant
         ? Change(() => app.Engine.RunAsync<string>("saas_rename_device", ("tenant", tenant.TenantId), ("device", device.DeviceId), ("name", name)))
-        : Task.FromResult(false);
+        : (AdminAvailable && AdminOf(device) is { CanAdmin: true }
+            ? AdminChange(device, info => DeviceAdmin.Rename(info, name))
+            : Task.FromResult(false));
 
     public Task<bool> Move(Device device, string? group) => Tenant is { } tenant
         ? Change(() => app.Engine.PerformAsync("saas_move_device", ("tenant", tenant.TenantId), ("device", device.DeviceId), ("group", group)))
@@ -307,7 +309,9 @@ public sealed partial class DevicesModel : Observable
 
     public Task<bool> Remove(Device device) => Tenant is { } tenant
         ? Change(() => app.Engine.PerformAsync("saas_remove_device", ("tenant", tenant.TenantId), ("device", device.DeviceId)))
-        : Task.FromResult(false);
+        : (AdminAvailable && AdminOf(device) is { CanAdmin: true }
+            ? AdminChange(device, info => DeviceAdmin.Remove(info, device.ConnectionId))
+            : Task.FromResult(false));
 
     public Task<bool> DeleteGroup(SaasGroup group) => Tenant is { } tenant
         ? Change(() => app.Engine.PerformAsync("saas_delete_group", ("tenant", tenant.TenantId), ("group", group.GroupId)))

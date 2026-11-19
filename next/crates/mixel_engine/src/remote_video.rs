@@ -164,7 +164,9 @@ impl VideoMailbox {
             && slot.compressed != compressed
         {
             slot.compressed = compressed;
-            slot.latest = None;
+            if !compressed {
+                slot.latest = None;
+            }
             slot.queue.clear();
             slot.queued_bytes = 0;
         }

@@ -829,6 +829,7 @@ pub struct SessionRow {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct AdminDevice {
+    pub device_id: Option<String>,
     pub connection_id: u32,
     pub app_version: Option<String>,
     pub unattended_allowed: Option<bool>,
@@ -837,6 +838,7 @@ pub struct AdminDevice {
     pub note: Option<String>,
     pub can_admin: bool,
     pub last_seen: Option<String>,
+    pub updated_at: Option<String>,
 }
 
 impl AdminDevice {

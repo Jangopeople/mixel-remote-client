@@ -277,7 +277,14 @@ impl NativeTransport {
                     .build(),
             )
         } else {
-            builder
+            builder.with_setting_engine(
+                webrtc::peer_connection::SettingEngineBuilder::new()
+                    .with_multicast_dns_mode(rtc::ice::mdns::MulticastDnsMode::Disabled)
+                    .with_ice_connection_attempts(Some(RELAY_ONLY_CHECK_INTERVAL), None)
+                    .with_prflx_acceptance_min_wait(Some(Duration::from_millis(40)))
+                    .with_relay_acceptance_min_wait(Some(Duration::from_millis(120)))
+                    .build(),
+            )
         };
         let builder = if let Some(runtime) = &streams {
             builder.with_runtime(runtime.clone())

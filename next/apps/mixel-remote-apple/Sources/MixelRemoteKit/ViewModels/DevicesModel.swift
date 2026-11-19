@@ -55,7 +55,7 @@ public final class DevicesModel: ObservableObject {
     public func isOutdated(_ device: Device) -> Bool { AppVersion.isOlder(adminRow(device)?.appVersion, than: newestVersion) }
     public var outdatedCount: Int { allDevices.filter(isOutdated).count }
     /// Whether this person may change the device (the server decides; `nil` answers fall back to the role).
-    public func canAdmin(_ device: Device) -> Bool { adminRow(device)?.canAdmin ?? manages }
+    public func canAdmin(_ device: Device) -> Bool { adminRow(device)?.canAdmin ?? (manages || managesIsmDevices) }
 
     func loadAdmin() async {
         guard admin.available, app.signedIn else { adminRows = [:]; return }
@@ -63,6 +63,9 @@ public final class DevicesModel: ObservableObject {
             // `company` of the API is the ISM client id, not the tenant id; every row is matched by its 9-digit ID anyway.
             let rows = try await admin.devices(company: nil, search: nil)
             adminRows = Dictionary(rows.map { ($0.connectionId, $0) }, uniquingKeysWith: { first, _ in first })
+            if tenant == nil {
+                favorites = Set(rows.filter { $0.favorite == true }.map(\.deviceId))
+            }
         } catch DeviceAdminError.unavailable {
             adminRows = [:]
         } catch {
@@ -150,7 +153,7 @@ public final class DevicesModel: ObservableObject {
     public var manages: Bool { tenant != nil && ["owner", "admin", "technician"].contains(role) }
     public var deploys: Bool { tenant != nil && ["owner", "admin"].contains(role) }
     public var groupsOn: Bool { app.company.overview?.features?["groups"] ?? false }
-    public var writable: Bool { ["active", "trial", "past_due"].contains(app.company.overview?.status ?? tenant?.status ?? "") }
+    public var writable: Bool { tenant == nil ? true : ["active", "trial", "past_due"].contains(app.company.overview?.status ?? tenant?.status ?? "") }
     public var room: Int {
         guard let overview = app.company.overview, let limit = overview.limits?.devices, let usage = overview.usage else { return .max }
         return limit - usage.devices
@@ -340,12 +343,17 @@ public final class DevicesModel: ObservableObject {
     public func isFavorite(_ device: Device) -> Bool { favorites.contains(device.device) }
 
     public func toggleFavorite(_ device: Device) {
-        guard let tenant else { return }
+        guard tenant != nil || admin.available else { return }
         let next = !favorites.contains(device.device)
         if next { favorites.insert(device.device) } else { favorites.remove(device.device) }
         Task {
-            do { try await app.engine.perform("saas_set_favorite", ["tenant": tenant.tenantId, "device": device.device, "favorite": next]) }
-            catch {
+            do {
+                if let tenant {
+                    try await app.engine.perform("saas_set_favorite", ["tenant": tenant.tenantId, "device": device.device, "favorite": next])
+                } else {
+                    _ = try await admin.setFavorite(device: device.device, favorite: next)
+                }
+            } catch {
                 if next { favorites.remove(device.device) } else { favorites.insert(device.device) }
                 self.error = AppModel.message(error)
             }

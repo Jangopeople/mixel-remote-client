@@ -134,8 +134,10 @@ public final class AppModel: ObservableObject {
             while !Task.isCancelled {
                 guard let self else { return }
                 await self.tick()
-                let fast = self.remote.inSession || ["connecting", "outgoing", "negotiating", "deciding"].contains(self.remote.phase) || self.account.signingIn
-                try? await Task.sleep(nanoseconds: fast ? 80_000_000 : 1_000_000_000)
+                let connecting = ["connecting", "outgoing", "negotiating", "deciding"].contains(self.remote.phase)
+                    || self.remote.viewerSessions.contains { ["connecting", "outgoing", "negotiating", "deciding"].contains($0.phase) }
+                let fast = self.remote.inSession || connecting || self.account.signingIn
+                try? await Task.sleep(nanoseconds: connecting ? 25_000_000 : (fast ? 80_000_000 : 1_000_000_000))
             }
         }
     }

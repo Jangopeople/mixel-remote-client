@@ -393,7 +393,7 @@ struct DeviceTableRow: View {
     }
 
     @ViewBuilder private var star: some View {
-        if model.tenant != nil {
+        if model.tenant != nil || model.adminAvailable {
             let on = model.isFavorite(device)
             Button { model.toggleFavorite(device) } label: {
                 Image(systemName: on ? "star.fill" : "star").foregroundStyle(on ? Color(light: 0xD99A00, dark: 0xF5C24A) : .secondary)
@@ -522,10 +522,10 @@ struct DeviceTableRow: View {
             Button(L("Wake")) { model.wake(device) }
         }
         Button(L("Copy ID")) { Pasteboard.copy(String(device.connectionId)) }
-        if model.tenant != nil {
+        if model.tenant != nil || model.adminAvailable {
             Button(model.isFavorite(device) ? L("Remove from favorites") : L("Add to favorites")) { model.toggleFavorite(device) }
         }
-        if model.manages, model.canAdmin(device) {
+        if (model.manages || model.canAdmin(device)), model.canAdmin(device) {
             Divider()
             Button(L("Rename…")) { rename(device) }.disabled(!model.writable)
             if model.groupsOn { Button(L("Move to group…")) { move(device) }.disabled(!model.writable) }
@@ -536,11 +536,15 @@ struct DeviceTableRow: View {
                 }.disabled(!model.writable)
                 if model.deploys { Button(L("Who may connect…")) { who(device) } }
             }
+            if model.managesIsmDevices, ["macos", "windows", "linux"].contains(device.os) {
+                Button(L("Edit device")) { edit(device) }
+            }
             Divider()
             Button(L("Remove…"), role: .destructive) { remove(device) }
         } else if model.managesIsmDevices, ["macos", "windows", "linux"].contains(device.os) {
             Divider()
             Button(L("Edit device")) { edit(device) }
+            Button(L("Remove…"), role: .destructive) { remove(device) }
         }
     }
 }

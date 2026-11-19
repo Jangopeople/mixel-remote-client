@@ -226,10 +226,13 @@ struct DeviceRow: View {
                     .help(L("Sends a wake signal on this computer's network (Wake-on-LAN)."))
                     .disabled(app.busy)
             }
-            if model.manages {
+            if model.manages || model.canAdmin(device) {
                 Menu {
                     Button(L("Rename…")) { rename(device) }.disabled(!model.writable)
                     if model.groupsOn { Button(L("Move to group…")) { move(device) }.disabled(!model.writable) }
+                    if model.managesIsmDevices, ["macos", "windows", "linux"].contains(device.os) {
+                        Button(L("Edit device")) { edit(device) }
+                    }
                     Divider()
                     Button(L("Remove…"), role: .destructive) { remove(device) }
                 } label: { Text(verbatim: L("Manage")) }

@@ -230,16 +230,24 @@ public final class SessionModel: ObservableObject {
                     let data = try await self.app.engine.nextVideo(session: session, compressed: decoder != nil)
                     if Task.isCancelled || self.viewingSession != session { return }
                     if data.isEmpty {
-                        try? await Task.sleep(nanoseconds: 4_000_000)
+                        try? await Task.sleep(nanoseconds: 2_000_000)
                         continue
                     }
                     if VideoFrame.isCompressed(data) {
                         guard let active = decoder else { continue }
                         do {
-                            let decoded = try active.decode(data)
+                            var latest = try active.decode(data)
+                            // Drain up to 4 already-queued compressed frames so any burst backlog collapses to 0 ms display lag.
+                            for _ in 0..<4 {
+                                let nextData = try await self.app.engine.nextVideo(session: session, compressed: true)
+                                if nextData.isEmpty || Task.isCancelled || self.viewingSession != session { break }
+                                if VideoFrame.isCompressed(nextData) {
+                                    latest = try active.decode(nextData)
+                                }
+                            }
                             sequence = 0
                             self.decoding = .device
-                            self.show(decoded)
+                            self.show(latest)
                         } catch H264Decoder.Problem.waitingForKeyframe {
                             continue
                         } catch {

@@ -598,11 +598,12 @@ impl DevicesPage {
                 shell.notify(&t("Copied"));
             }
         }))));
-        if company.manages_devices() {
-            let writable = company.writable();
+        let can_admin = company.manages_devices() || state.devices.meta.get(&device.connection_id).map(|m| m.can_admin).unwrap_or(false);
+        if can_admin {
+            let writable = company.tenant().is_none() || company.writable();
             let (a, chosen) = (app.clone(), device.clone());
             items.push(Some((t("Rename…"), writable, Box::new(move || rename_dialog(&a, &chosen)))));
-            if company.groups_on() {
+            if company.manages_devices() && company.groups_on() {
                 let (a, chosen) = (app.clone(), device.clone());
                 items.push(Some((t("Move to group…"), writable, Box::new(move || move_dialog(&a, &chosen)))));
             }

@@ -478,6 +478,27 @@ final class ViewModelTests: XCTestCase {
         let pullCall = try XCTUnwrap(engine.calls("remote_clipboard").last).object
         XCTAssertEqual(pullCall["push"] as? Bool, false)
     }
+
+    func testNonSaasAdminCanRemoveAndRenameSavedDevice() async throws {
+        let engine = MockEngine()
+        Fixtures.company(engine)
+        engine.reply("saas_my_tenants", json: "[]")
+        engine.reply("remote_devices", json: #"{"devices":[{"device":"d1000000-0000-4000-8000-000000000099","connection_id":615951910,"name":"Michael z16","os":"windows"}]}"#)
+        engine.reply("remote_admin_devices", json: #"[{"device_id":"d1000000-0000-4000-8000-000000000099","connection_id":615951910,"name":"Michael z16","os":"windows","can_admin":true,"favorite":false}]"#)
+        engine.reply("remote_admin_remove_device", json: #"{"removed":true}"#)
+        let app = await Fixtures.app(engine)
+        app.devices.admin = EngineDeviceAdminService(engine: engine)
+        await app.devices.load()
+        let device = try XCTUnwrap(app.devices.devices.first { $0.connectionId == 615951910 })
+        XCTAssertNil(app.devices.tenant)
+        XCTAssertTrue(app.devices.canAdmin(device))
+        XCTAssertTrue(app.devices.writable)
+        let removed = await app.devices.remove(device)
+        XCTAssertTrue(removed)
+        let call = try XCTUnwrap(engine.calls("remote_admin_remove_device").last).object
+        XCTAssertEqual(call["device"] as? String, "d1000000-0000-4000-8000-000000000099")
+        XCTAssertEqual(call["confirm_connection_id"] as? Int, 615951910)
+    }
     #endif
 
     /// The input events the engine received, as dictionaries (key order does not matter).

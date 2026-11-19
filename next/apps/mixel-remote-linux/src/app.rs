@@ -1335,9 +1335,20 @@ impl App {
     }
 
     pub async fn rename_device(self: &Rc<Self>, device: String, name: String) -> Result<(), String> {
-        let tenant = self.tenant_id().ok_or("No company")?;
+        let tenant = self.tenant_id();
+        let expected = self.state.borrow().devices.meta.values().find(|m| m.device_id.as_deref() == Some(device.as_str())).and_then(|m| m.updated_at.clone());
         let app = self.clone();
-        self.result_of(self.device_change(Box::pin(async move { app.perform("saas_rename_device", json!({ "tenant": tenant, "device": device, "name": name })).await })).await, |state| state.devices.error.clone())
+        self.result_of(
+            self.device_change(Box::pin(async move {
+                if let Some(tenant) = tenant {
+                    app.perform("saas_rename_device", json!({ "tenant": tenant, "device": device, "name": name })).await
+                } else {
+                    app.perform("remote_admin_rename_device", json!({ "device": device, "device_name": name, "expected_update": expected })).await
+                }
+            }))
+            .await,
+            |state| state.devices.error.clone(),
+        )
     }
 
     pub async fn move_device(self: &Rc<Self>, device: String, group: Option<String>) -> Result<(), String> {
@@ -1366,9 +1377,21 @@ impl App {
     }
 
     pub async fn remove_device(self: &Rc<Self>, device: String) -> Result<(), String> {
-        let tenant = self.tenant_id().ok_or("No company")?;
+        let tenant = self.tenant_id();
+        let confirm_id = self.state.borrow().devices.devices.iter().find(|d| d.device == device).map(|d| d.connection_id);
         let app = self.clone();
-        self.result_of(self.device_change(Box::pin(async move { app.perform("saas_remove_device", json!({ "tenant": tenant, "device": device })).await })).await, |state| state.devices.error.clone())
+        self.result_of(
+            self.device_change(Box::pin(async move {
+                if let Some(tenant) = tenant {
+                    app.perform("saas_remove_device", json!({ "tenant": tenant, "device": device })).await
+                } else {
+                    let confirm_id = confirm_id.ok_or_else(|| "Device not found".to_owned())?;
+                    app.perform("remote_admin_remove_device", json!({ "device": device, "confirm_connection_id": confirm_id })).await
+                }
+            }))
+            .await,
+            |state| state.devices.error.clone(),
+        )
     }
 
     pub async fn create_group(self: &Rc<Self>, name: String) -> Result<(), String> {

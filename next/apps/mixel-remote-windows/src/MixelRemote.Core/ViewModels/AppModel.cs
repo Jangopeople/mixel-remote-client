@@ -123,8 +123,9 @@ public sealed class AppModel : Observable
         while (!token.IsCancellationRequested)
         {
             await Tick();
-            var fast = Remote.InSession || Remote.Phase is "connecting" or "outgoing" or "negotiating" or "deciding" || Account.SigningIn;
-            try { await Task.Delay(fast ? 80 : 1000, token); }
+            var connecting = Remote.Phase is "connecting" or "outgoing" or "negotiating" or "deciding";
+            var fast = Remote.InSession || connecting || Account.SigningIn;
+            try { await Task.Delay(connecting ? 25 : (fast ? 80 : 1000), token); }
             catch (TaskCanceledException) { return; }
         }
     }
