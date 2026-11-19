@@ -62,4 +62,11 @@ final class PrewarmTests: XCTestCase {
         XCTAssertFalse(app.devices.mayConnect)
         XCTAssertNotEqual(lastOn(engine), true)
     }
+
+    #if os(macOS)
+    func testAppActiveNeverForceUnwrapsNilNSAppBeforeApplicationMain() {
+        let activeBeforeNSApp = NSApp?.isActive ?? true
+        XCTAssertNotNil(activeBeforeNSApp)
+    }
+    #endif
 }

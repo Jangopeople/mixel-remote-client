@@ -274,7 +274,7 @@ struct SessionBar: View {
             if app.assistant.available { toggle(.assistant, L("Report"), "doc.text") }
             more
             Spacer(minLength: 8)
-            button(L("Full screen"), "arrow.up.left.and.arrow.down.right") { NSApp.keyWindow?.toggleFullScreen(nil) }
+            button(L("Full screen"), "arrow.up.left.and.arrow.down.right") { NSApp?.keyWindow?.toggleFullScreen(nil) }
                 .keyboardShortcut("f", modifiers: [.command, .control])
             if inWindow {
                 button(L("Back into a tab"), "rectangle.stack") { workspace.dock(tab.peer) }

@@ -108,9 +108,9 @@ struct MixelRemoteMacApp: App {
         MenuBarExtra {
             if let app = delegate.model {
                 MenuBarContent(app: app, open: {
-                    NSApp.activate(ignoringOtherApps: true)
+                    NSApp?.activate(ignoringOtherApps: true)
                     openWindow(id: "main")
-                }, quit: { NSApp.terminate(nil) })
+                }, quit: { NSApp?.terminate(nil) })
             }
         } label: {
             if let app = delegate.model { MenuBarIcon(app: app) } else { Image(systemName: "arrow.left.arrow.right.circle") }
@@ -133,16 +133,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             app.devices.admin = EngineDeviceAdminService(engine: engine)
             app.section = .devices
             // A ready transport is kept only while the app is in front and visible (`remote_prewarm`).
+            // AppDelegate.init() runs inside MixelRemoteMacApp.init() before NSApplicationMain sets NSApp,
+            // so NSApp is nil here and must never be force-unwrapped.
             let center = NotificationCenter.default
             for (name, active) in [(NSApplication.didBecomeActiveNotification, true), (NSApplication.didResignActiveNotification, false),
                                    (NSApplication.didHideNotification, false), (NSApplication.didUnhideNotification, true)] {
-                center.addObserver(forName: name, object: nil, queue: .main) { _ in MainActor.assumeIsolated { app.appActive = active && NSApp.isActive } }
+                center.addObserver(forName: name, object: nil, queue: .main) { _ in MainActor.assumeIsolated { app.appActive = active && (NSApp?.isActive ?? true) } }
             }
-            app.appActive = NSApp.isActive
+            app.appActive = NSApp?.isActive ?? true
             app.checksForUpdates = true
             app.quit = { [weak self] in
                 self?.quitting = true
-                NSApp.terminate(nil)
+                NSApp?.terminate(nil)
             }
             app.openURL = { NSWorkspace.shared.open($0) }
             app.openSignIn = { [weak self] url in self?.presentSignIn(url) }
@@ -158,7 +160,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         #if DEBUG
         // Lab only: MIXEL_QA_APPEARANCE=dark|light shows the app in that appearance without touching the system setting.
         if let mode = ProcessInfo.processInfo.environment["MIXEL_QA_APPEARANCE"] {
-            NSApp.appearance = NSAppearance(named: mode == "dark" ? .darkAqua : .aqua)
+            NSApp?.appearance = NSAppearance(named: mode == "dark" ? .darkAqua : .aqua)
         }
         // Lab only: MIXEL_QA_COMMANDS=<file> reads lines from that file about once a second and deletes it:
         // `connect <id> [attended]`, `end <id>`, `window <id>`, `tab <id>`, `sessions-focus <id>`. A way to drive the app without
@@ -176,6 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             }
         }
         #endif
+        model?.appActive = NSApp?.isActive ?? true
         model?.start()
     }
 
@@ -251,7 +254,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         quitting = true
         Task { @MainActor in
             await model.shutdown()
-            NSApp.reply(toApplicationShouldTerminate: true)
+            NSApp?.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
     }
@@ -297,7 +300,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
 extension AppDelegate: ASWebAuthenticationPresentationContextProviding {
     nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        MainActor.assumeIsolated { NSApp.keyWindow ?? NSApp.windows.first ?? ASPresentationAnchor() }
+        MainActor.assumeIsolated { NSApp?.keyWindow ?? NSApp?.windows.first ?? ASPresentationAnchor() }
     }
 }
 
