@@ -53,6 +53,10 @@ pub mod desktop_files;
 pub mod windows_capture;
 
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)] // Owner-thread Media Foundation hardware H.264 MFT with OpenH264 fallback.
+pub mod windows_mf_encoder;
+
+#[cfg(target_os = "windows")]
 #[allow(unsafe_code)] // Initialized SendInput unions and current desktop metric calls.
 pub mod windows_input;
 

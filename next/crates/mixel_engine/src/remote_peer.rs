@@ -1563,9 +1563,9 @@ mod bitrate_tests {
     }
 }
 
-/// Capture and encoder target FPS: 60 on macOS (VideoToolbox hardware), 30 on Windows/Linux
-/// (gives OpenH264 2x per-frame bit budget at WAN bitrates).
-const TARGET_FPS: u32 = if cfg!(target_os = "macos") { 60 } else { 30 };
+/// Capture and encoder target FPS: 60 on macOS (VideoToolbox) and Windows (Media Foundation
+/// hardware H.264; falls back internally to 30 FPS when software OpenH264 is used), 30 on Linux.
+const TARGET_FPS: u32 = if cfg!(any(target_os = "macos", target_os = "windows")) { 60 } else { 30 };
 
 fn start_encoder(size: (usize, usize), bitrate: u32) -> Result<mpsc::Sender<EncodeRequest>, String> {
     // A rotation may briefly overlap the previous encoder's cleanup. Bound

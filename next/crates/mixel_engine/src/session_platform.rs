@@ -1,7 +1,11 @@
 //! Session-only platform boundary. The broker and authenticated grants never
 //! call capture or input before the local host has accepted a selected display.
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 pub use native_os_capture::desktop_h264::{H264Decoder, ScreenH264Encoder};
+#[cfg(target_os = "windows")]
+pub use native_os_capture::{
+    desktop_h264::H264Decoder, windows_mf_encoder::WindowsScreenH264Encoder as ScreenH264Encoder,
+};
 use native_os_capture::input::{InjectionError, Injector};
 #[cfg(target_os = "macos")]
 pub use native_os_capture::{macos_decoder::H264Decoder, macos_screen_encoder::ScreenH264Encoder};
