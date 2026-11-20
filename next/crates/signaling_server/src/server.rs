@@ -72,6 +72,10 @@ pub struct AppState {
     origins: Arc<HashSet<String>>,
     connections: Arc<Semaphore>,
     auth_slots: Arc<Semaphore>,
+    /// Separate slots for renewing already-authenticated sessions so unauthenticated handshakes cannot drop live sessions.
+    renew_slots: Arc<Semaphore>,
+    /// Unix second of the last global `registry.expire(now)` sweep (caps sweep rate to <= 1/s across all connections).
+    last_expire_sec: Arc<std::sync::atomic::AtomicU64>,
     turn: Option<Arc<crate::turn::TurnConfig>>,
     policy: Option<Arc<SupportPolicy>>,
     policy_slots: Arc<Semaphore>,
@@ -165,6 +169,8 @@ impl AppState {
             origins: Arc::new(origins),
             connections: Arc::new(Semaphore::new(1000)), // with_max_connections sets the broker's limit
             auth_slots: Arc::new(Semaphore::new(32)),
+            renew_slots: Arc::new(Semaphore::new(32)),
+            last_expire_sec: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             turn: None,
             policy: None,
             policy_slots: Arc::new(Semaphore::new(64)),
@@ -343,7 +349,15 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                 let now = Instant::now();
                 let unix = unix_now();
                 if !authorization_live(expires_at, authorized_at, now, unix) || now.duration_since(last_activity) >= Duration::from_secs(180) { break; }
-                match state.registry.lock() { Ok(mut r) => r.expire(now), Err(_) => break }
+                let prev_sec = state.last_expire_sec.load(Ordering::Relaxed);
+                if unix > prev_sec
+                    && state
+                        .last_expire_sec
+                        .compare_exchange(prev_sec, unix, Ordering::AcqRel, Ordering::Relaxed)
+                        .is_ok()
+                {
+                    match state.registry.lock() { Ok(mut r) => r.expire(now), Err(_) => break }
+                }
                 if now.duration_since(last_ping) >= Duration::from_secs(20) {
                     if !matches!(tokio::time::timeout(Duration::from_secs(2), socket.send(Message::Ping(Vec::new().into()))).await, Ok(Ok(()))) { break; }
                     last_ping = now;
@@ -423,7 +437,10 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                             let remaining = Duration::from_secs(expires_at.saturating_sub(unix))
                                 .min(Duration::from_secs(900).saturating_sub(now.duration_since(authorized_at)));
                             if remaining.is_zero() { break; }
-                            let Ok(slot) = state.auth_slots.clone().try_acquire_owned() else { break; };
+                            let Ok(Ok(slot)) = tokio::time::timeout(
+                                remaining.min(Duration::from_secs(5)),
+                                state.renew_slots.clone().acquire_owned(),
+                            ).await else { break; };
                             let authentication_budget = Duration::from_secs(if enrolled.is_some() {17} else {13});
                             let result = tokio::time::timeout(remaining.min(authentication_budget), async {
                                 if let Some(previous) = &enrolled {

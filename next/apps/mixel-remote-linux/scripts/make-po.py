@@ -18,6 +18,11 @@ LANGS = ['de', 'fr', 'it']
 # English: (German (Swiss spelling), French, Italian) — texts only the Linux app shows.
 LINUX = {
     "Connecting control…": ("Steuerung wird verbunden…", "Connexion du contrôle…", "Connessione del controllo…"),
+    "Back to Sign In": ("Zurück zur Anmeldung", "Retour à la connexion", "Torna all’accesso"),
+    "Getting your connection ID…": ("Verbindungs-ID wird abgerufen…", "Obtention de votre ID de connexion…", "Recupero del tuo ID di connessione…"),
+    "Input delivery stalled; the session has been stopped": ("Die Eingabeübertragung wurde unterbrochen; die Sitzung wurde beendet", "La transmission des entrées s’est bloquée ; la session a été arrêtée", "La trasmissione degli input si è bloccata; la sessione è stata interrotta"),
+    "Share the 9-digit Connection ID below with your technician. You will be asked to confirm before anyone can view or control your screen.": ("Teilen Sie die 9-stellige Verbindungs-ID unten mit Ihrem Techniker. Sie werden um Bestätigung gebeten, bevor jemand Ihren Bildschirm sehen oder steuern kann.", "Communiquez l’ID de connexion à 9 chiffres ci-dessous à votre technicien. Une confirmation vous sera demandée avant que quiconque puisse voir ou contrôler votre écran.", "Condividi l’ID di connessione a 9 cifre qui sotto con il tuo tecnico. Ti verrà chiesta conferma prima che qualcuno possa vedere o controllare il tuo schermo."),
+    "Your Connection ID": ("Ihre Verbindungs-ID", "Votre ID de connexion", "Il tuo ID di connessione"),
     'Unattended access: who may connect…': ('Unbeaufsichtigter Zugriff: wer sich verbinden darf…', 'Accès sans surveillance : qui peut se connecter…', 'Accesso non presidiato: chi può collegarsi…'),
     "Reconnecting...": ("Verbindung wird wiederhergestellt ...", "Reconnexion en cours...", "Riconnessione in corso..."),
     "Could not reconnect": ("Verbindung konnte nicht wiederhergestellt werden", "Reconnexion impossible", "Impossibile riconnettersi"),

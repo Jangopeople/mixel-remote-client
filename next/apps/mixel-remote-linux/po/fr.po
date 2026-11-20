@@ -193,6 +193,9 @@ msgstr "Automatique (langue de cet ordinateur)"
 msgid "Back into a tab"
 msgstr "Retour dans un onglet"
 
+msgid "Back to Sign In"
+msgstr "Retour à la connexion"
+
 msgid "Block input"
 msgstr "Bloquer la saisie"
 
@@ -261,6 +264,9 @@ msgstr "Couleur"
 
 msgid "Company"
 msgstr "Entreprise"
+
+msgid "Company *"
+msgstr "Entreprise *"
 
 msgid "Company administration"
 msgstr "Administration de l’entreprise"
@@ -469,6 +475,9 @@ msgstr "Limite d’appareils de votre forfait atteinte. Retirez un appareil ou p
 msgid "Device name"
 msgstr "Nom de l’appareil"
 
+msgid "Device name *"
+msgstr "Nom de l’appareil *"
+
 msgid "Devices"
 msgstr "Appareils"
 
@@ -577,11 +586,20 @@ msgstr "Saisissez l’ID à 9 chiffres affiché sur l’autre ordinateur."
 msgid "Enter the code from the authenticator entry “%@”."
 msgstr "Saisissez le code de l’entrée d’authentificateur « %@ »."
 
+msgid "Enter the company name."
+msgstr "Saisissez le nom de l’entreprise."
+
+msgid "Enter the device name."
+msgstr "Saisissez le nom de l’appareil."
+
 msgid "Enter the period as YYYY-MM-DD, the start before the end."
 msgstr "Saisissez la période au format AAAA-MM-JJ, le début avant la fin."
 
 msgid "Enter the ticket number."
 msgstr "Saisissez le numéro du ticket."
+
+msgid "Enter the user name."
+msgstr "Saisissez le nom d’utilisateur."
 
 msgid "Expires %@"
 msgstr "Expire le %@"
@@ -630,6 +648,9 @@ msgstr "Récupérer le presse-papiers distant"
 
 msgid "Getting this computer ready…"
 msgstr "Préparation de cet ordinateur…"
+
+msgid "Getting your connection ID…"
+msgstr "Obtention de votre ID de connexion…"
 
 msgid "Go offline"
 msgstr "Passer hors ligne"
@@ -683,7 +704,7 @@ msgid "In session"
 msgstr "En session"
 
 msgid "Input delivery stalled; the session has been stopped"
-msgstr "Les saisies ne passaient plus ; la session a été arrêtée"
+msgstr "La transmission des entrées s’est bloquée ; la session a été arrêtée"
 
 msgid "Installing Mixel Remote %@… The app restarts by itself."
 msgstr "Installation de Mixel Remote %@… L’app redémarre d’elle-même."
@@ -1081,6 +1102,9 @@ msgstr "Prêt. La personne sur place accepte votre demande, sauf si l’accès s
 msgid "Recent"
 msgstr "Récents"
 
+msgid "Recent connections"
+msgstr "Connexions récentes"
+
 msgid "Reconnect now"
 msgstr "Se reconnecter maintenant"
 
@@ -1204,11 +1228,20 @@ msgstr "En cours"
 msgid "Save"
 msgstr "Enregistrer"
 
+msgid "Save device"
+msgstr "Enregistrer l’appareil"
+
+msgid "Save device…"
+msgstr "Enregistrer l’appareil…"
+
 msgid "Save in ticket"
 msgstr "Enregistrer dans le ticket"
 
 msgid "Save note"
 msgstr "Enregistrer la note"
+
+msgid "Save this device for next time?"
+msgstr "Enregistrer cet appareil pour la prochaine fois ?"
 
 msgid "Saved as internal note in %@"
 msgstr "Enregistré comme note interne dans %@"
@@ -1285,6 +1318,9 @@ msgstr "Les rapports de session nécessitent un forfait payant. Choisissez un fo
 msgid "Session with %@"
 msgstr "Session avec %@"
 
+msgid "Session with %@ ended. Fill in the Device Name, Company, and User to save this computer to your Devices list."
+msgstr "Session avec %@ terminée. Renseignez le nom de l’appareil, l’entreprise et l’utilisateur pour enregistrer cet ordinateur dans votre liste d’appareils."
+
 msgid "Session with %@ is ready"
 msgstr "La session avec %@ est prête"
 
@@ -1302,6 +1338,9 @@ msgstr "Réglages"
 
 msgid "Several sessions in tabs or windows"
 msgstr "Plusieurs sessions dans des onglets ou des fenêtres"
+
+msgid "Share the 9-digit Connection ID below with your technician. You will be asked to confirm before anyone can view or control your screen."
+msgstr "Communiquez l’ID de connexion à 9 chiffres ci-dessous à votre technicien. Une confirmation vous sera demandée avant que quiconque puisse voir ou contrôler votre écran."
 
 msgid "Share this password with your technician. It stays on until you turn it off, and it works every time you connect."
 msgstr "Communiquez ce mot de passe à votre technicien. Il reste actif jusqu’à ce que vous le désactiviez, et il fonctionne à chaque connexion."
@@ -1672,6 +1711,9 @@ msgstr "Utiliser un autre navigateur"
 msgid "Use your Mixel ID. Your company decides which sign-in methods its members may use."
 msgstr "Utilisez votre Mixel ID. Votre entreprise décide des méthodes de connexion autorisées pour ses membres."
 
+msgid "User *"
+msgstr "Utilisateur *"
+
 msgid "Valid for (days)"
 msgstr "Valable (jours)"
 
@@ -1761,6 +1803,9 @@ msgstr "Vous êtes déjà connecté à cet ordinateur."
 
 msgid "You are using this device."
 msgstr "Vous utilisez cet appareil."
+
+msgid "Your Connection ID"
+msgstr "Votre ID de connexion"
 
 msgid "Your browser opens; come back here when it says you are signed in."
 msgstr "Votre navigateur s’ouvre ; revenez ici quand il indique que vous êtes connecté."

@@ -28,7 +28,8 @@ impl SessionsPage {
     }
 
     pub fn render(&self, app: &Rc<App>, state: &State) {
-        let key = format!("{:?}{}", state.workspace, crate::i18n::choice());
+        let recent = app.recent_connections();
+        let key = format!("{:?}{:?}{}", state.workspace, recent, crate::i18n::choice());
         if *self.key.borrow() == key {
             return;
         }
@@ -43,7 +44,7 @@ impl SessionsPage {
                 tf("%d sessions", &[&workspace.tabs.len()])
             },
         );
-        if workspace.tabs.is_empty() {
+        if workspace.tabs.is_empty() && recent.is_empty() {
             let status = adw::StatusPage::builder()
                 .icon_name("view-dual-symbolic")
                 .title(t("No sessions yet"))
@@ -93,6 +94,35 @@ impl SessionsPage {
                 end.upcast_ref(),
             ]));
             self.body.append(&frame);
+        }
+        if !recent.is_empty() {
+            let heading = gtk::Label::builder().label(t("Recent connections")).xalign(0.0).build();
+            heading.add_css_class("title-3");
+            heading.set_margin_top(12);
+            self.body.append(&heading);
+            for conn_id in recent {
+                let known = state
+                    .devices
+                    .devices
+                    .iter()
+                    .chain(state.devices.company_all.iter())
+                    .find(|d| d.connection_id == conn_id);
+                let title_text = known
+                    .map(|d| d.name.clone())
+                    .unwrap_or_else(|| format::remote_id(Some(conn_id)));
+                let os_icon = known.map(|d| format::os_icon(&d.os));
+                let (frame, content) = card(&title_text, os_icon);
+                content.append(&dim(&format::remote_id(Some(conn_id))));
+                let a_save = app.clone();
+                let save_btn = button(&t("Save device…"), move || {
+                    a_save.edit(|st| st.save_for = Some(conn_id));
+                });
+                let a_conn = app.clone();
+                let unattended = known.is_some();
+                let conn_btn = primary(&t("Connect"), move || a_conn.connect(conn_id, None, unattended));
+                content.append(&buttons(&[save_btn.upcast_ref(), conn_btn.upcast_ref()]));
+                self.body.append(&frame);
+            }
         }
     }
 }

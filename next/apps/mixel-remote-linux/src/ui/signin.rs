@@ -186,6 +186,17 @@ impl SigninPage {
                 id_row.append(&copy_btn);
                 card.append(&id_row);
                 self.form.append(&card);
+                if state.remote.phase == "active" && state.remote.sharing {
+                    let active_row = hbox(10);
+                    active_row.set_margin_top(8);
+                    let msg = label(&t("A technician is connected to this computer."));
+                    msg.set_hexpand(true);
+                    msg.set_wrap(true);
+                    active_row.append(&msg);
+                    let a_end = app.clone();
+                    active_row.append(&destructive(&t("End session"), move || a_end.end_session()));
+                    self.form.append(&active_row);
+                }
             } else {
                 self.form.append(&spinner_line(&t("Getting your connection ID…")));
                 if !state.busy {

@@ -1213,7 +1213,10 @@ impl Registry {
                         password_until,
                         warned,
                         parked: None,
-                        renewed_from: before.filter(|_| renew_again).map(|before| Box::new((session, before))),
+                        renewed_from: before.filter(|_| renew_again).map(|mut before| {
+                            before.renewed_from = None;
+                            Box::new((session, before))
+                        }),
                     },
                 );
                 self.retired.insert(

@@ -485,6 +485,50 @@
         }
       }
     },
+    "1. Screen Recording": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1. Bildschirmaufnahme"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1. Enregistrement de l’écran"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1. Registrazione schermo"
+          }
+        }
+      }
+    },
+    "2. Accessibility (Keyboard & Mouse)": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "2. Bedienungshilfen (Tastatur & Maus)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "2. Accessibilité (clavier et souris)"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "2. Accessibilità (tastiera e mouse)"
+          }
+        }
+      }
+    },
     "30 days": {
       "localizations": {
         "de": {
@@ -899,6 +943,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Account…"
+          }
+        }
+      }
+    },
+    "Action required": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aktion erforderlich"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Action requise"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Azione richiesta"
           }
         }
       }
@@ -1339,6 +1405,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Consenti il controllo di tastiera e mouse"
+          }
+        }
+      }
+    },
+    "Allow macOS permissions first": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zuerst macOS-Berechtigungen erlauben"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autorisez d’abord les autorisations macOS"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Concedi prima i permessi di macOS"
           }
         }
       }
@@ -1893,6 +1981,28 @@
         }
       }
     },
+    "Check again": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erneut prüfen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérifier à nouveau"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Controlla di nuovo"
+          }
+        }
+      }
+    },
     "Check for pairing": {
       "localizations": {
         "de": {
@@ -2021,6 +2131,50 @@
           "stringUnit": {
             "state": "translated",
             "value": "Scelga un’azienda e inserisca un nome"
+          }
+        }
+      }
+    },
+    "Choose a company or type below…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Firma wählen oder unten eingeben…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choisir une entreprise ou saisir ci-dessous…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scegli un’azienda o digita sotto…"
+          }
+        }
+      }
+    },
+    "Choose a company/group or type below…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Firma/Gruppe wählen oder unten eingeben…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choisir une entreprise/un groupe ou saisir ci-dessous…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scegli un’azienda/un gruppo o digita sotto…"
           }
         }
       }
@@ -2307,6 +2461,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Azienda"
+          }
+        }
+      }
+    },
+    "Company *": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Firma *"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entreprise *"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Azienda *"
           }
         }
       }
@@ -3895,6 +4071,28 @@
         }
       }
     },
+    "Device name *": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gerätename *"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nom de l’appareil *"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nome del dispositivo *"
+          }
+        }
+      }
+    },
     "Device, ticket or note": {
       "localizations": {
         "de": {
@@ -4995,6 +5193,50 @@
         }
       }
     },
+    "Enter the company name.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Geben Sie den Firmennamen ein."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saisissez le nom de l’entreprise."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inserisci il nome dell’azienda."
+          }
+        }
+      }
+    },
+    "Enter the device name.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Geben Sie den Gerätenamen ein."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saisissez le nom de l’appareil."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inserisci il nome del dispositivo."
+          }
+        }
+      }
+    },
     "Enter the ticket number.": {
       "localizations": {
         "de": {
@@ -5013,6 +5255,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Inserisci il numero del ticket."
+          }
+        }
+      }
+    },
+    "Enter the user name.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Geben Sie den Benutzernamen ein."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saisissez le nom d’utilisateur."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inserisci il nome utente."
           }
         }
       }
@@ -5523,6 +5787,94 @@
         }
       }
     },
+    "Grant Accessibility…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bedienungshilfen erlauben…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autoriser l’accessibilité…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Concedi Accessibilità…"
+          }
+        }
+      }
+    },
+    "Grant Screen Recording and Accessibility in macOS so your connection ID appears and the technician can see and control your Mac immediately.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erlauben Sie Bildschirmaufnahme und Bedienungshilfen in macOS, damit Ihre Verbindungs-ID erscheint und der Techniker Ihren Mac sofort sehen und steuern kann."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autorisez l’enregistrement de l’écran et l’accessibilité dans macOS afin que votre ID de connexion apparaisse et que le technicien puisse voir et contrôler votre Mac immédiatement."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Concedi Registrazione schermo e Accessibilità in macOS così da mostrare il tuo ID di connessione e permettere al tecnico di vedere e controllare subito il tuo Mac."
+          }
+        }
+      }
+    },
+    "Grant Screen Recording…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bildschirmaufnahme erlauben…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autoriser l’enregistrement de l’écran…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Concedi Registrazione schermo…"
+          }
+        }
+      }
+    },
+    "Grant macOS permissions to see ID": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS-Berechtigungen erlauben, um ID anzuzeigen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autorisez macOS pour afficher l’ID"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Concedi i permessi di macOS per vedere l’ID"
+          }
+        }
+      }
+    },
     "Green": {
       "localizations": {
         "de": {
@@ -5827,28 +6179,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "In sessione"
-          }
-        }
-      }
-    },
-    "Input delivery stalled; the session has been stopped": {
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Die Eingaben kamen nicht mehr an; die Sitzung wurde beendet"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Les saisies ne passaient plus ; la session a été arrêtée"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gli input non arrivavano più; la sessione è stata interrotta"
           }
         }
       }
@@ -6443,6 +6773,50 @@
           "stringUnit": {
             "state": "translated",
             "value": "Consente ai tecnici autorizzati della sua azienda di collegarsi a questo computer senza conferma."
+          }
+        }
+      }
+    },
+    "Lets the technician move the pointer and type": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ermöglicht dem Techniker, den Zeiger zu bewegen und zu tippen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permet au technicien de déplacer le pointeur et de saisir du texte"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permette al tecnico di muovere il puntatore e digitare"
+          }
+        }
+      }
+    },
+    "Lets the technician see your screen": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ermöglicht dem Techniker, Ihren Bildschirm zu sehen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permet au technicien de voir votre écran"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permette al tecnico di vedere il tuo schermo"
           }
         }
       }
@@ -9439,6 +9813,28 @@
         }
       }
     },
+    "Remote support — no account or admin needed": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fernwartung — kein Konto und keine Adminrechte nötig"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Assistance à distance — sans compte ni droits d’administrateur"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Supporto remoto — nessun account o permesso di amministratore necessario"
+          }
+        }
+      }
+    },
     "Remove": {
       "localizations": {
         "de": {
@@ -10165,6 +10561,50 @@
         }
       }
     },
+    "Save device": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gerät speichern"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistrer l’appareil"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salva dispositivo"
+          }
+        }
+      }
+    },
+    "Save device…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gerät speichern…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistrer l’appareil…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salva dispositivo…"
+          }
+        }
+      }
+    },
     "Save in ISM ticket": {
       "localizations": {
         "de": {
@@ -10205,6 +10645,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Salva nota"
+          }
+        }
+      }
+    },
+    "Save this device for next time?": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieses Gerät für das nächste Mal speichern?"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistrer cet appareil pour la prochaine fois ?"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salvare questo dispositivo per la prossima volta?"
           }
         }
       }
@@ -10781,6 +11243,28 @@
         }
       }
     },
+    "Session with %@ ended. Fill in the Device Name, Company, and User to save this computer to your Devices list.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sitzung mit %@ beendet. Geben Sie Gerätename, Firma und Benutzer ein, um diesen Computer in Ihrer Geräteliste zu speichern."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Session avec %@ terminée. Renseignez le nom de l’appareil, l’entreprise et l’utilisateur pour enregistrer cet ordinateur dans votre liste d’appareils."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sessione con %@ terminata. Inserisci Nome del dispositivo, Azienda e Utente per salvare questo computer nell’elenco dei dispositivi."
+          }
+        }
+      }
+    },
     "Session with %@ is ready": {
       "localizations": {
         "de": {
@@ -10931,6 +11415,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Più sessioni in schede o finestre"
+          }
+        }
+      }
+    },
+    "Share this 9-digit ID with the person helping you. When they connect, you approve the connection on your screen.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Teilen Sie diese 9-stellige ID mit der Person, die Ihnen hilft. Wenn sie sich verbindet, bestätigen Sie die Verbindung auf Ihrem Bildschirm."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Communiquez cet ID à 9 chiffres à la personne qui vous aide. Lorsqu’elle se connecte, vous approuvez la connexion sur votre écran."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Condividi questo ID a 9 cifre con la persona che ti aiuta. Quando si collega, approvi la connessione sul tuo schermo."
           }
         }
       }
@@ -11591,6 +12097,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Accesso eseguito"
+          }
+        }
+      }
+    },
+    "Signing in…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anmeldung läuft…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connexion en cours…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accesso in corso…"
           }
         }
       }
@@ -14015,6 +14543,50 @@
         }
       }
     },
+    "User": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Benutzer"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Utilisateur"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Utente"
+          }
+        }
+      }
+    },
+    "User *": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Benutzer *"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Utilisateur *"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Utente *"
+          }
+        }
+      }
+    },
     "Valid for %d days": {
       "localizations": {
         "de": {
@@ -14785,6 +15357,50 @@
         }
       }
     },
+    "Your 9-digit connection ID will appear automatically as soon as both permissions are switched on.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ihre 9-stellige Verbindungs-ID erscheint automatisch, sobald beide Berechtigungen aktiviert sind."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Votre ID de connexion à 9 chiffres apparaîtra automatiquement dès que les deux autorisations seront activées."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il tuo ID di connessione a 9 cifre apparirà automaticamente non appena entrambi i permessi saranno attivi."
+          }
+        }
+      }
+    },
+    "Your approval is required for every connection": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jede Verbindung braucht Ihre Zustimmung"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chaque connexion nécessite votre accord"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ogni connessione richiede il tuo consenso"
+          }
+        }
+      }
+    },
     "Your browser opens; you confirm your e-mail address there.": {
       "localizations": {
         "de": {
@@ -15027,6 +15643,50 @@
         }
       }
     },
+    "e.g. Jane Doe": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "z. B. Erika Muster"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "p. ex. Marie Dupont"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "es. Maria Rossi"
+          }
+        }
+      }
+    },
+    "e.g. Reception MacBook Pro": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "z. B. Empfang MacBook Pro"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "p. ex. MacBook Pro Réception"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "es. MacBook Pro Reception"
+          }
+        }
+      }
+    },
     "in progress": {
       "localizations": {
         "de": {
@@ -15221,6 +15881,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "o"
+          }
+        }
+      }
+    },
+    "permissions required": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Berechtigungen erforderlich"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "autorisations requises"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "permessi richiesti"
           }
         }
       }
