@@ -235,10 +235,14 @@ impl RateControl {
             return false;
         }
         let mut window = self.limit * 0.6 * (self.base + QUEUE_ALLOWED).as_secs_f64() + 20_000.0;
-        if self.queue <= QUEUE_LOW && self.base <= Duration::from_millis(30) {
-            // A low-latency link (LAN) with no queue: one 200 ms report interval must not stall
-            // 30 FPS pictures or a keyframe between reports.
-            window = window.max(250_000.0);
+        if self.queue <= QUEUE_LOW {
+            // A clean link (no queue): a single 1080p keyframe or burst between reports must not
+            // stall the capture loop (250 kB on LAN, 150 kB on WAN).
+            window = window.max(if self.base <= Duration::from_millis(30) {
+                250_000.0
+            } else {
+                150_000.0
+            });
         }
         self.in_flight() as f64 > window
     }

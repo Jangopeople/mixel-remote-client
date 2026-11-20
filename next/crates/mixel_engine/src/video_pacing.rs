@@ -43,8 +43,9 @@ const MIN_BURST: f64 = 2_500.0;
 /// picture that takes more than two seconds).
 pub const PICTURE_LIMIT: Duration = Duration::from_millis(1200);
 /// A request for a complete picture this long after one was sent means that one did not arrive.
-/// Requests that come sooner were under way when it was sent.
-pub const GRACE: Duration = Duration::from_millis(500);
+/// Requests that come sooner were under way when it was sent (800 ms covers ~300 ms WAN RTT +
+/// paced keyframe without falsely cutting pace on high-latency links).
+pub const GRACE: Duration = Duration::from_millis(800);
 /// A complete picture arrived when no request followed it for this long: the technician's side
 /// asks once a second while it has no picture, and at once when a picture it had is damaged.
 pub const CONFIRM: Duration = Duration::from_millis(1500);
@@ -71,6 +72,9 @@ pub struct Pacer {
     /// The delay on the line is low (`video_rate`: no queue): a lost picture is then loss on the
     /// way (random, or a burst), not a line that is too full, and must not cut the ceiling.
     line_clean: bool,
+    /// Last time a clean line (`video_rate` active, no queue) climbed `rate` without waiting for
+    /// a periodic keyframe (keyframes are 10 s apart).
+    last_clean_climb: Instant,
     /// Lab statistics: complete pictures counted as lost.
     pub losses: u32,
 }
@@ -89,6 +93,7 @@ impl Pacer {
             last_loss: None,
             untroubled: true,
             line_clean: false,
+            last_clean_climb: now,
             losses: 0,
         }
     }
@@ -118,6 +123,21 @@ impl Pacer {
             self.complete_sent = self.latest_complete.filter(|latest| *latest > sent);
             if self.rate < self.ceiling {
                 self.rate = (self.rate * if self.untroubled { 4.0 } else { 2.0 }).min(self.ceiling);
+            } else if self.ceiling < MAX_RATE
+                && self.last_loss.is_none_or(|loss| now.saturating_duration_since(loss) >= PROBE_AFTER)
+            {
+                self.ceiling = (self.ceiling * 1.25).min(MAX_RATE);
+                self.rate = self.ceiling;
+            }
+            self.last_clean_climb = now;
+        } else if self.line_clean
+            && now.saturating_duration_since(self.last_clean_climb) >= Duration::from_secs(1)
+        {
+            // When `video_rate` confirms a clean line (no queue), climb steadily toward `cap`
+            // without waiting 10+ seconds for the next periodic keyframe.
+            self.last_clean_climb = now;
+            if self.rate < self.ceiling {
+                self.rate = (self.rate * 1.5).min(self.ceiling);
             } else if self.ceiling < MAX_RATE
                 && self.last_loss.is_none_or(|loss| now.saturating_duration_since(loss) >= PROBE_AFTER)
             {

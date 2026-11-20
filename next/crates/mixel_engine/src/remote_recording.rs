@@ -327,6 +327,14 @@ impl RecordingHub {
 }
 
 impl RecordingScope {
+    /// True only while a recording job is actively writing frames on this scope (not merely permitted).
+    pub fn is_recording(&self) -> bool {
+        self.hub.grant.lock().is_ok_and(|entry| {
+            entry.iter().any(|grant| {
+                grant.scope == self.scope && grant.job.as_ref().is_some_and(|job| job.output.is_some())
+            })
+        })
+    }
     pub fn needs_keyframe(&self) -> bool {
         self.hub.grant.lock().is_ok_and(|entry| entry.iter().any(|grant| grant.scope == self.scope))
             && (matches!(self.hub.view(self.session), Some(View::WaitingForVideo))

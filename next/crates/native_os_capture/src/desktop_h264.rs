@@ -45,11 +45,14 @@ impl ScreenH264Encoder {
         // Software encoding is the slowest step of a session: use the processor's
         // cores (one stays free for capture and the session itself).
         let threads = std::thread::available_parallelism()
-            .map(|count| count.get().saturating_sub(1).clamp(1, 4) as u16)
+            .map(|count| count.get().saturating_sub(1).clamp(1, 8) as u16)
             .unwrap_or(1);
         // Measured at 1920x1080 with motion: the screen-content mode needs about three
         // times as long per picture and ignores extra cores; the real-time mode with
         // slices spreads the work over the cores (pictures are about a quarter larger).
+        // `skip_frames(false)` is critical: Mixel's own video_rate/video_pacing controls
+        // network load; with `skip_frames(true)` OpenH264's internal VBV drops 80-95% of
+        // 1080p frames on WAN bitrates, collapsing sessions to 1-2 FPS.
         let mut config = EncoderConfig::new()
             .num_threads(threads)
             .complexity(openh264::encoder::Complexity::Low)
@@ -71,7 +74,7 @@ impl ScreenH264Encoder {
             .rate_control_mode(RateControlMode::Bitrate)
             .adaptive_quantization(false)
             .background_detection(false)
-            .skip_frames(true);
+            .skip_frames(false);
         if threads > 1 {
             config = config.max_slice_len(60_000);
         }
@@ -352,38 +355,24 @@ mod tests {
             let picture = decoder.decode(&encoded.annex_b, time).unwrap().expect("a picture that came out decodes");
             Some(picture.pixels()[0])
         };
-        // Up to 40 rounds of moving picture, each followed by a last change, until the encoder
-        // leaves such a last change out (it does in the first rounds).
-        let (mut time, mut left_out_once) = (0u64, false);
-        for round in 0..40u8 {
+        // With `skip_frames(false)`, the encoder adapts QP instead of dropping frames under load:
+        // every changed picture is emitted immediately and an unchanged picture still emits None.
+        let mut time = 0u64;
+        for round in 0..8u8 {
             for _ in 0..6 {
-                send(&mut encoder, &noise(), time);
+                assert!(send(&mut encoder, &noise(), time).is_some(), "moving picture must not be skipped");
+                assert!(!encoder.left_out());
                 time += 1;
             }
             let last = still(200 + round);
-            let mut shown = send(&mut encoder, &last, time);
+            let shown = send(&mut encoder, &last, time).expect("last changed picture emitted immediately");
             time += 1;
-            assert_eq!(encoder.left_out(), shown.is_none(), "left out exactly when nothing came out for a changed picture");
-            if shown.is_some() {
-                continue;
-            }
-            left_out_once = true;
-            // The screen stays still: the same picture is given again until it comes out.
-            let mut tries = 0;
-            while encoder.left_out() {
-                tries += 1;
-                assert!(tries <= 600, "the picture that was left out never came out");
-                shown = send(&mut encoder, &last, time);
-                time += 1;
-            }
-            let blue = shown.expect("the picture came out");
-            assert!(blue.abs_diff(200 + round) < 24, "the technician sees the last change ({blue} for {})", 200 + round);
+            assert!(!encoder.left_out());
+            assert!(shown.abs_diff(200 + round) < 24, "the technician sees the last change ({shown} for {})", 200 + round);
             // Sent now: an unchanged screen gives nothing more.
             assert!(send(&mut encoder, &last, time).is_none());
             assert!(!encoder.left_out());
-            break;
         }
-        assert!(left_out_once, "the rate control never left a picture out: the test did not test anything");
     }
 
     /// A phone shares an upright picture (Quick Support for phones): both decoders show it,

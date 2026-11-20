@@ -702,7 +702,7 @@ async fn negotiate(
     };
     let sender = if config.host {
         Some(
-            H264VideoSender::new(transport, size.0, size.1, 60)
+            H264VideoSender::new(transport, size.0, size.1, TARGET_FPS)
                 .await
                 .map_err(|error| error.to_string())?,
         )
@@ -1522,6 +1522,10 @@ mod bitrate_tests {
     }
 }
 
+/// Capture and encoder target FPS: 60 on macOS (VideoToolbox hardware), 30 on Windows/Linux
+/// (gives OpenH264 2x per-frame bit budget at WAN bitrates).
+const TARGET_FPS: u32 = if cfg!(target_os = "macos") { 60 } else { 30 };
+
 fn start_encoder(size: (usize, usize), bitrate: u32) -> Result<mpsc::Sender<EncodeRequest>, String> {
     // A rotation may briefly overlap the previous encoder's cleanup. Bound
     // owners even if a VideoToolbox driver call never returns.
@@ -1534,7 +1538,7 @@ fn start_encoder(size: (usize, usize), bitrate: u32) -> Result<mpsc::Sender<Enco
         .name("mixel-screen-encoder".into())
         .spawn(move || {
             let _permit = permit;
-            let mut encoder = ScreenH264Encoder::new(size.0, size.1, 60, bitrate);
+            let mut encoder = ScreenH264Encoder::new(size.0, size.1, TARGET_FPS, bitrate);
             while let Some(request) = worker.blocking_recv() {
                 let result = match &mut encoder {
                     Ok(encoder) => encoder
@@ -1851,10 +1855,10 @@ async fn host_media(
                 .try_send(EncodeRequest {
                     frame,
                     timestamp: started.elapsed().as_micros() as u64,
-                    // One complete picture to start with and one every 600 pictures (~10 s at 60 FPS).
+                    // One complete picture to start with and one every ~10 s (600 frames on macOS, 300 on Windows/Linux).
                     // Lost packets trigger an immediate explicit keyframe request via `force_keyframe`,
                     // and pictures left out by the encoder are retried via `encode_again`.
-                    keyframe: force_keyframe || sent.is_multiple_of(600),
+                    keyframe: force_keyframe || sent.is_multiple_of(u64::from(TARGET_FPS) * 10),
                     reply,
                 })
                 .map_err(|_| "Screen video encoder stopped")?;
@@ -2247,7 +2251,7 @@ async fn viewer_media(
     #[cfg(feature = "qa-session")]
     let mut qa_jumps: Vec<String> = Vec::new();
     let (mut window_decodes, mut waiting_for_key) = (
-        config.video.wants_compressed() && recording.is_none(),
+        config.video.wants_compressed() && !recording.as_ref().is_some_and(|scope| scope.is_recording()),
         false,
     );
     let mut seed_keyframe: Option<(u64, Vec<u8>)> = None;
@@ -2414,8 +2418,10 @@ async fn viewer_media(
                             .ok_or("Video timestamp exhausted")?
                             / 90_000;
                         // The window decodes itself when it can (much faster for large pictures);
-                        // a recording needs the picture size, so it keeps the native decoder.
-                        let compressed = config.video.wants_compressed() && recording.is_none();
+                        // an active recording needs the decoded picture size, so it temporarily
+                        // switches to the native decoder only while recording is actually running.
+                        let compressed = config.video.wants_compressed()
+                            && !recording.as_ref().is_some_and(|scope| scope.is_recording());
                         if compressed != window_decodes {
                             window_decodes = compressed;
                             waiting_for_key = true;

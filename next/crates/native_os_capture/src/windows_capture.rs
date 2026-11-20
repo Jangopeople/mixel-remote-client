@@ -436,16 +436,19 @@ impl WindowsCapture {
             return Err(CaptureError::Native("Invalid mapped desktop layout".into()));
         }
         let mut pixels = Zeroizing::new(vec![0; length]);
-        for row in 0..height {
-            // SAFETY: Map guarantees RowPitch rows for this texture. Bounds and
-            // products were checked above; copy active pixels only, never padding.
-            let source = unsafe {
-                std::slice::from_raw_parts(mapping.pData.cast::<u8>().add(row * pitch), stride)
-            };
-            pixels[row * stride..(row + 1) * stride].copy_from_slice(source);
-        }
-        for pixel in pixels.as_chunks_mut::<4>().0 {
-            pixel[3] = 255;
+        if pitch == stride {
+            // Fast path: tightly packed DXGI staging texture — single contiguous copy.
+            let source = unsafe { std::slice::from_raw_parts(mapping.pData.cast::<u8>(), length) };
+            pixels.copy_from_slice(source);
+        } else {
+            for row in 0..height {
+                // SAFETY: Map guarantees RowPitch rows for this texture. Bounds and
+                // products were checked above; copy active pixels only, never padding.
+                let source = unsafe {
+                    std::slice::from_raw_parts(mapping.pData.cast::<u8>().add(row * pitch), stride)
+                };
+                pixels[row * stride..(row + 1) * stride].copy_from_slice(source);
+            }
         }
         drop(mapped);
         let black = (!self.received_visible_frame || self.fallback.is_some())
