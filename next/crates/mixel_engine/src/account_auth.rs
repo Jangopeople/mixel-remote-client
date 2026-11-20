@@ -1308,7 +1308,7 @@ async fn receive_code(listener: TcpListener, state: &str) -> Result<Zeroizing<St
             let read=tokio::time::timeout(Duration::from_secs(2),async {
                 let mut chunk=[0;1024];
                 while !request.windows(4).any(|bytes|bytes==b"\r\n\r\n") {
-                    let count=stream.read(&mut chunk).await.map_err(|_|())?;if count==0||request.len()+count>8192{return Err(());}
+                    let count=stream.read(&mut chunk).await.map_err(|_|())?;if count==0||request.len()+count>65536{return Err(());}
                     request.extend_from_slice(&chunk[..count]);
                 }Ok::<_,()>(())
             }).await;
