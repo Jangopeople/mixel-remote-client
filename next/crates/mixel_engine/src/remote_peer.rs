@@ -702,7 +702,7 @@ async fn negotiate(
     };
     let sender = if config.host {
         Some(
-            H264VideoSender::new(transport, size.0, size.1, 30)
+            H264VideoSender::new(transport, size.0, size.1, 60)
                 .await
                 .map_err(|error| error.to_string())?,
         )
@@ -1472,7 +1472,7 @@ struct EncodeReply {
 /// lossy line the encoder used to aim at 3 to 6 Mbit/s whatever the line carried, so the pace held
 /// big pictures back and the technician saw a few a second; smaller pictures come more often.
 pub(crate) fn encoder_bitrate(size: (usize, usize), pace_bytes_per_second: f64) -> u32 {
-    let ceiling: u32 = if size.0 > 1280 || size.1 > 720 { 6_000_000 } else { 3_000_000 };
+    let ceiling: u32 = if size.0 > 1280 || size.1 > 720 { 10_000_000 } else { 4_500_000 };
     let carried = (pace_bytes_per_second * 8.0 * 0.6).clamp(0.0, f64::from(ceiling)) as u32;
     // Steps of 1.5x instead of every value: the encoder cannot change its bit rate while it runs
     // (a new encoder, a complete picture each time), so small moves in the pace must not restart it.
@@ -1480,7 +1480,7 @@ pub(crate) fn encoder_bitrate(size: (usize, usize), pace_bytes_per_second: f64) 
     if carried >= ceiling { ceiling } else { rung.clamp(ENCODER_MIN_BITRATE.min(ceiling), ceiling) }
 }
 /// The bit rates the encoder is set to (bit/s), 1.5x apart.
-const ENCODER_LADDER: [u32; 7] = [400_000, 600_000, 900_000, 1_350_000, 2_000_000, 3_000_000, 4_500_000];
+const ENCODER_LADDER: [u32; 8] = [400_000, 600_000, 900_000, 1_350_000, 2_000_000, 3_000_000, 4_500_000, 6_750_000];
 /// The encoder's next bit rate: down at once when the pace fell to less than two thirds of it, up
 /// by half at most when the pace allows 40 % more (the pace rises fast after a few complete
 /// pictures arrived, faster than a slow line can follow), otherwise unchanged.
@@ -1497,7 +1497,7 @@ pub(crate) fn next_bitrate(current: u32, wanted: u32) -> u32 {
 const ENCODER_MIN_BITRATE: u32 = 400_000;
 /// The encoder is set up again for a new bit rate at most this often, and only when the rate it
 /// would get differs by more than half.
-const BITRATE_SETTLE: Duration = Duration::from_secs(4);
+const BITRATE_SETTLE: Duration = Duration::from_millis(2500);
 
 #[cfg(test)]
 mod bitrate_tests {
@@ -1505,8 +1505,8 @@ mod bitrate_tests {
     #[test]
     fn the_bit_rate_follows_the_pace_within_bounds() {
         let full_hd = (1920, 1080);
-        assert_eq!(encoder_bitrate(full_hd, 12_000_000.0), 6_000_000, "a fast line: full rate");
-        assert_eq!(encoder_bitrate((1280, 720), 12_000_000.0), 3_000_000);
+        assert_eq!(encoder_bitrate(full_hd, 12_000_000.0), 10_000_000, "a fast line: full rate");
+        assert_eq!(encoder_bitrate((1280, 720), 12_000_000.0), 4_500_000);
         assert_eq!(encoder_bitrate(full_hd, 500_000.0), 2_000_000, "the start pace (4 Mbit/s): the rung below 2.4 Mbit/s");
         assert_eq!(encoder_bitrate(full_hd, 400_000.0), 1_350_000, "steps of 1.5x, so a small move in the pace does not restart the encoder");
         assert_eq!(encoder_bitrate(full_hd, 125_000.0), 600_000, "the slowest pace (1 Mbit/s)");
@@ -1534,7 +1534,7 @@ fn start_encoder(size: (usize, usize), bitrate: u32) -> Result<mpsc::Sender<Enco
         .name("mixel-screen-encoder".into())
         .spawn(move || {
             let _permit = permit;
-            let mut encoder = ScreenH264Encoder::new(size.0, size.1, 30, bitrate);
+            let mut encoder = ScreenH264Encoder::new(size.0, size.1, 60, bitrate);
             while let Some(request) = worker.blocking_recv() {
                 let result = match &mut encoder {
                     Ok(encoder) => encoder
@@ -1851,10 +1851,10 @@ async fn host_media(
                 .try_send(EncodeRequest {
                     frame,
                     timestamp: started.elapsed().as_micros() as u64,
-                    // One complete picture to start with and one every 300 pictures (10 s at 30 FPS).
+                    // One complete picture to start with and one every 600 pictures (~10 s at 60 FPS).
                     // Lost packets trigger an immediate explicit keyframe request via `force_keyframe`,
                     // and pictures left out by the encoder are retried via `encode_again`.
-                    keyframe: force_keyframe || sent.is_multiple_of(300),
+                    keyframe: force_keyframe || sent.is_multiple_of(600),
                     reply,
                 })
                 .map_err(|_| "Screen video encoder stopped")?;

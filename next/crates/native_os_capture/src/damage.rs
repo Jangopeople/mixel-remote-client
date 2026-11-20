@@ -142,6 +142,33 @@ impl DamageTracker {
         self.copy(frame);
         regions
     }
+    /// Fast change check for encoders that only need to know whether the frame changed
+    /// (and never use individual dirty rectangles). Short-circuits on the first differing row
+    /// and updates the stored reference frame only from that row onwards.
+    pub fn has_changed(&mut self, frame: &Frame<'_>) -> bool {
+        let row_bytes = frame.width * 4;
+        if self.width != frame.width || self.height != frame.height {
+            self.width = frame.width;
+            self.height = frame.height;
+            self.previous.resize(row_bytes * frame.height, 0);
+            self.copy(frame);
+            return true;
+        }
+        for y in 0..frame.height {
+            let offset = y * row_bytes;
+            let current = frame.row(y);
+            if current != &self.previous[offset..offset + row_bytes] {
+                self.previous[offset..offset + row_bytes].copy_from_slice(current);
+                for rest in (y + 1)..frame.height {
+                    let rest_offset = rest * row_bytes;
+                    self.previous[rest_offset..rest_offset + row_bytes]
+                        .copy_from_slice(frame.row(rest));
+                }
+                return true;
+            }
+        }
+        false
+    }
     fn merge(regions: &mut Vec<Rect>, rect: Rect) {
         if let Some(previous) = regions.iter_mut().rev().find(|prior| {
             prior.x == rect.x && prior.width == rect.width && prior.y + prior.height == rect.y
@@ -156,5 +183,26 @@ impl DamageTracker {
             self.previous[y * frame.width * 4..(y + 1) * frame.width * 4]
                 .copy_from_slice(frame.row(y));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn has_changed_detects_first_frame_idle_and_single_pixel_edits() {
+        let mut tracker = DamageTracker::new(32).unwrap();
+        let mut buf = vec![0x20u8; 64 * 64 * 4];
+        let frame = Frame::bgra(64, 64, 64 * 4, &buf).unwrap();
+        assert!(tracker.has_changed(&frame), "first frame is always changed");
+        assert!(!tracker.has_changed(&frame), "identical frame is unchanged");
+
+        // Modify a single byte in the last row.
+        let last = buf.len() - 1;
+        buf[last] = 0x21;
+        let edited = Frame::bgra(64, 64, 64 * 4, &buf).unwrap();
+        assert!(tracker.has_changed(&edited), "single pixel edit detected");
+        assert!(!tracker.has_changed(&edited), "subsequent identical frame is unchanged");
     }
 }

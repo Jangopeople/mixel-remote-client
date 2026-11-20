@@ -82,7 +82,7 @@ impl Progress {
         // VideoToolbox predictive units always encode the complete image.
         // Dirty tiles suppress redundant work, never crop an inter-frame unit.
         let force = requested_keyframe || !self.has_video || self.recovery_since.is_some();
-        if self.damage.update(&frame.frame()).is_empty() && !force {
+        if !self.damage.has_changed(&frame.frame()) && !force {
             return Ok(None);
         }
         match encode(force) {

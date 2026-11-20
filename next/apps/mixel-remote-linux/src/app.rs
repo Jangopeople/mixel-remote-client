@@ -2438,7 +2438,7 @@ impl App {
                     return;
                 }
                 match data {
-                    Ok(data) if data.is_empty() => glib::timeout_future(Duration::from_millis(16)).await,
+                    Ok(data) if data.is_empty() => glib::timeout_future(Duration::from_millis(4)).await,
                     Ok(data) => match video::decode(data, sequence) {
                         Ok(frame) => {
                             sequence = frame.sequence;

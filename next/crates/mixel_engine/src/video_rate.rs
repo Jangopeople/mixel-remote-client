@@ -32,8 +32,8 @@ pub const FEATURE_CLOCK: &str = "vrate2";
 pub const PREFIX: &[u8] = b"mixel-video-report-v1";
 /// The same report with the technician's clock appended.
 pub const PREFIX_CLOCK: &[u8] = b"mixel-video-report-v2";
-/// Reports this far apart.
-pub const REPORT_EVERY: Duration = Duration::from_millis(200);
+/// Reports this far apart (100 ms: halves in-flight lag and detects congestion twice as fast).
+pub const REPORT_EVERY: Duration = Duration::from_millis(100);
 /// Extra delay above the base that counts as a pile-up (the lowest delay of the last second).
 pub const QUEUE_HIGH: Duration = Duration::from_millis(150);
 /// Above this the queue is growing: no climbing, a gentle step back.
@@ -746,15 +746,15 @@ mod tests {
     }
 
     #[test]
-    fn the_receiver_reports_every_200_ms_with_the_newest_packet() {
+    fn the_receiver_reports_every_100_ms_with_the_newest_packet() {
         let t0 = Instant::now();
         let mut receiver = Receiver::new(t0);
         assert_eq!(receiver.due(t0 + Duration::from_secs(1)), None, "nothing arrived yet");
         receiver.packet(t0 + Duration::from_millis(10), 65_535, 1000);
         receiver.packet(t0 + Duration::from_millis(20), 0, 1000);
         receiver.packet(t0 + Duration::from_millis(30), 65_534, 1000);
-        assert_eq!(receiver.due(t0 + Duration::from_millis(100)), None);
-        let report = receiver.due(t0 + Duration::from_millis(250)).unwrap();
-        assert_eq!((report.seq, report.bytes, report.age), (0, 3000, Duration::from_millis(230)));
+        assert_eq!(receiver.due(t0 + Duration::from_millis(50)), None);
+        let report = receiver.due(t0 + Duration::from_millis(150)).unwrap();
+        assert_eq!((report.seq, report.bytes, report.age), (0, 3000, Duration::from_millis(130)));
     }
 }

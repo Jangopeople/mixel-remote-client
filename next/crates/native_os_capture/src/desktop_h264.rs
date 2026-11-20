@@ -37,8 +37,8 @@ impl ScreenH264Encoder {
             || !(16..=1088).contains(&height)
             || !width.is_multiple_of(2)
             || !height.is_multiple_of(2)
-            || !(1..=30).contains(&fps)
-            || !(1..=8_000_000).contains(&bitrate)
+            || !(1..=60).contains(&fps)
+            || !(1..=12_000_000).contains(&bitrate)
         {
             return Err(EncodeError::Configuration);
         }
@@ -63,7 +63,11 @@ impl ScreenH264Encoder {
             .bitrate(BitRate::from_bps(bitrate))
             .max_frame_rate(FrameRate::from_hz(fps as f32))
             .profile(Profile::Baseline)
-            .level(if width > 1280 || height > 720 { Level::Level_4_0 } else { Level::Level_3_1 })
+            .level(if width > 1280 || height > 720 {
+                if fps > 30 { Level::Level_4_2 } else { Level::Level_4_0 }
+            } else {
+                Level::Level_3_1
+            })
             .rate_control_mode(RateControlMode::Bitrate)
             .adaptive_quantization(false)
             .background_detection(false)
@@ -105,30 +109,36 @@ impl ScreenH264Encoder {
         force: bool,
     ) -> Result<Option<EncodedH264>, EncodeError> {
         let force = force || self.needs_keyframe;
-        if self.damage.update(&frame.frame()).is_empty() && !force && !self.left_out {
+        if !self.damage.has_changed(&frame.frame()) && !force && !self.left_out {
             return Ok(None);
         }
-        if frame.width() == self.width && frame.height() == self.height {
-            // The usual case (the caller already fitted the frame): copy whole rows.
-            let row = self.width * 4;
-            for y in 0..self.height {
-                let source = y * frame.stride();
-                self.pixels[y * row..(y + 1) * row]
-                    .copy_from_slice(&frame.pixels()[source..source + row]);
-            }
+        let row = self.width * 4;
+        if frame.width() == self.width && frame.height() == self.height && frame.stride() == row {
+            // Fast path: tightly packed frame — convert directly to YUV without an extra 8 MB copy.
+            let len = row * self.height;
+            self.yuv
+                .read_bgra8(BgraSliceU8::new(&frame.pixels()[..len], (self.width, self.height)));
         } else {
-            for y in 0..self.height {
-            let source_row = y * frame.height() / self.height * frame.stride();
-            for x in 0..self.width {
-                let source = source_row + x * frame.width() / self.width * 4;
-                let target = (y * self.width + x) * 4;
-                self.pixels[target..target + 4]
-                    .copy_from_slice(&frame.pixels()[source..source + 4]);
+            if frame.width() == self.width && frame.height() == self.height {
+                for y in 0..self.height {
+                    let source = y * frame.stride();
+                    self.pixels[y * row..(y + 1) * row]
+                        .copy_from_slice(&frame.pixels()[source..source + row]);
+                }
+            } else {
+                for y in 0..self.height {
+                    let source_row = y * frame.height() / self.height * frame.stride();
+                    for x in 0..self.width {
+                        let source = source_row + x * frame.width() / self.width * 4;
+                        let target = (y * self.width + x) * 4;
+                        self.pixels[target..target + 4]
+                            .copy_from_slice(&frame.pixels()[source..source + 4]);
+                    }
+                }
             }
-            }
+            self.yuv
+                .read_bgra8(BgraSliceU8::new(&self.pixels, (self.width, self.height)));
         }
-        self.yuv
-            .read_bgra8(BgraSliceU8::new(&self.pixels, (self.width, self.height)));
         if force && self.started {
             self.encoder.force_intra_frame();
         }

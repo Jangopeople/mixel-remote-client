@@ -227,8 +227,6 @@ public final class SessionModel: ObservableObject {
             var decoder: H264Decoder? = hardware ? H264Decoder() : nil
             while !Task.isCancelled {
                 guard let self else { return }
-                let stillViewing = await MainActor.run { self.viewingSession == session }
-                if !stillViewing { return }
                 do {
                     let data = try await engine.nextVideo(session: session, compressed: decoder != nil)
                     if Task.isCancelled { return }
@@ -257,10 +255,12 @@ public final class SessionModel: ObservableObject {
                                 }
                             }
                             sequence = 0
+                            let frameToShow = latest
+                            let frameCount = decodedCount
                             await MainActor.run {
                                 guard self.viewingSession == session else { return }
                                 self.decoding = .device
-                                self.show(latest, count: decodedCount)
+                                self.show(frameToShow, count: frameCount)
                             }
                         } catch H264Decoder.Problem.waitingForKeyframe {
                             continue

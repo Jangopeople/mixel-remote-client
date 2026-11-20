@@ -117,15 +117,19 @@ pub struct DisplayOffer {
     pub features: Vec<String>,
 }
 
-/// Release defaults 2.1.1: `vrate2` (new picture-rate control) is off unless the lab sets `MIXEL_VRATE2` to exactly `1`.
-/// The fast first picture (`fastpic`, incl. the early key-picture encode) and the client pre-warm are ON; they are
-/// switched off with `MIXEL_NO_FASTPIC=1` / `MIXEL_NO_PREWARM=1`.
+/// Release defaults 2.1.13: `vrate2` (one-way delay receive reports), `fastpic`, and client
+/// pre-warm are ON by default; switch them off with `MIXEL_NO_VRATE2=1` / `MIXEL_NO_FASTPIC=1` /
+/// `MIXEL_NO_PREWARM=1`.
 pub fn lab_flag_value(value: Option<&str>) -> bool {
     value == Some("1")
 }
-/// Whether the client pre-warm is on (release 2.1.1: on unless `MIXEL_NO_PREWARM` is set to exactly `1`).
+/// Whether the client pre-warm is on (on unless `MIXEL_NO_PREWARM` is set to exactly `1`).
 pub fn prewarm_enabled() -> bool {
     !lab_flag_value(std::env::var("MIXEL_NO_PREWARM").ok().as_deref())
+}
+/// Whether `vrate2` (clocked one-way delay receive reports) is on (on unless `MIXEL_NO_VRATE2=1`).
+pub fn vrate2_enabled() -> bool {
+    !lab_flag_value(std::env::var("MIXEL_NO_VRATE2").ok().as_deref())
 }
 
 /// Whether the lab variable `name` is set to `1`.
@@ -135,7 +139,7 @@ pub fn lab_flag(name: &str) -> bool {
 
 /// Optional features this app announces to the other side of a session.
 pub fn own_features() -> Vec<&'static str> {
-    own_features_with(lab_flag("MIXEL_VRATE2"))
+    own_features_with(vrate2_enabled())
 }
 /// The features announced, with the new receive report (`vrate2`) on or off.
 pub fn own_features_with(vrate2: bool) -> Vec<&'static str> {
@@ -179,17 +183,28 @@ mod release_defaults_tests {
     }
 
     #[test]
-    fn vrate2_is_not_announced_by_default_but_vrate_v1_is() {
+    fn vrate2_is_announced_by_default_and_can_be_disabled() {
         let off = own_features_with(false);
         assert!(!off.contains(&crate::video_rate::FEATURE_CLOCK));
         assert!(off.contains(&crate::video_rate::FEATURE));
         assert!(own_features_with(true).contains(&crate::video_rate::FEATURE_CLOCK));
+        if std::env::var_os("MIXEL_NO_VRATE2").is_none() {
+            assert!(vrate2_enabled());
+        }
     }
 }
 /// Feature: the controller can show "all monitors as one picture" as a display choice.
 pub const ALL_MONITORS: &str = "allmon";
 /// Feature: the app shows (and a host may send) pictures up to 1920x1080.
 pub const FULL_HD: &str = "hd";
+
+/// Controller: an in-flight clipboard request driven asynchronously across poll turns
+/// so waiting for the host's reply never blocks video reception or rate-control reports.
+struct ActiveClipboard {
+    request: crate::remote_clipboard::Request,
+    deadline: Instant,
+    reply: tokio::sync::oneshot::Sender<Result<(), String>>,
+}
 
 pub struct ControlPipe {
     crypto: ControlChannel,
@@ -240,6 +255,8 @@ pub struct ControlPipe {
     drawings_out: Option<mpsc::Receiver<core_protocol::annotation::Message>>,
     /// Controller: inputs sent whose acknowledgment has not arrived yet.
     acks: PendingAcks,
+    /// Controller: in-flight clipboard request (non-blocking).
+    active_clipboard: Option<ActiveClipboard>,
 }
 impl ControlPipe {
     pub async fn create(
@@ -392,7 +409,7 @@ impl ControlPipe {
             last_keyframe_request: None,
             force_keyframe: false,
             report_video: !config.host && features.iter().any(|name| name == crate::video_rate::FEATURE),
-            report_clock: !config.host && lab_flag("MIXEL_VRATE2") && features.iter().any(|name| name == crate::video_rate::FEATURE_CLOCK),
+            report_clock: !config.host && vrate2_enabled() && features.iter().any(|name| name == crate::video_rate::FEATURE_CLOCK),
             video_reports: Vec::new(),
             clipboard: {
                 let mut pipe = crate::remote_clipboard::ClipboardPipe::new(clipboard_rx, clipboard);
@@ -416,6 +433,7 @@ impl ControlPipe {
             drawings_in,
             drawings_out,
             acks: PendingAcks::default(),
+            active_clipboard: None,
         })
     }
     /// Host: this session forwards print jobs (the technician's app understands them).
@@ -459,6 +477,7 @@ impl ControlPipe {
             drawings_in: None,
             drawings_out: None,
             acks: PendingAcks::default(),
+            active_clipboard: None,
         }
     }
     /// Host: sends a finished print job to the technician, in small parts between frames.
@@ -688,62 +707,66 @@ impl ControlPipe {
         }
         Ok(false)
     }
-    /// Controller: takes the records the host sent (print jobs and sound arrive as many small
-    /// records: up to 64 at a time). Waits at most `wait` for the first one.
-    async fn receive_host_records(&mut self, channel: &Arc<dyn NativeDataChannel>, wait: Duration) -> Result<(), String> {
-        let mut record = match tokio::time::timeout(wait, received_record(channel)).await {
-            Ok(value) => value?,
-            Err(_) => return Ok(()),
+    /// Controller: expires an overdue in-flight clipboard request without blocking video.
+    fn expire_clipboard(&mut self, now: Instant) {
+        if self
+            .active_clipboard
+            .as_ref()
+            .is_some_and(|active| now >= active.deadline)
+            && let Some(active) = self.active_clipboard.take()
+        {
+            self.clipboard.give_up(&active.request);
+            let _ = active
+                .reply
+                .send(Err("The remote computer did not answer the clipboard request in time".into()));
+        }
+    }
+    /// Controller: takes the records the host sent (print jobs, sound and clipboard chunks arrive
+    /// as many small records: up to 64 at a time). When `wait` is zero, drains only records that
+    /// are already buffered so the video receive loop never pays a timer tick between frames.
+    async fn receive_host_records(
+        &mut self,
+        channel: &Arc<dyn NativeDataChannel>,
+        wait: Duration,
+        stopped: bool,
+    ) -> Result<(), String> {
+        let mut record = if wait.is_zero() {
+            match try_received_record(channel).await? {
+                Some(value) => value,
+                None => return Ok(()),
+            }
+        } else {
+            match tokio::time::timeout(wait, received_record(channel)).await {
+                Ok(value) => value?,
+                Err(_) => return Ok(()),
+            }
         };
         for _ in 0..64 {
             let plain = Zeroizing::new(self.crypto.open(&record).map_err(|error| error.to_string())?);
             if self.take_host_record(&plain)? {
-                return Err("Unexpected clipboard answer from the host".into());
+                let outcome = match self.active_clipboard.as_mut() {
+                    Some(active) => active.request.accept_deduped(
+                        &plain,
+                        stopped,
+                        &mut self.clipboard.last_digest,
+                    )?,
+                    None => return Err("Unexpected clipboard answer from the host".into()),
+                };
+                if let Some(result) = outcome
+                    && let Some(active) = self.active_clipboard.take()
+                {
+                    let _ = active.reply.send(result);
+                }
             }
-            record = match tokio::time::timeout(Duration::from_micros(200), received_record(channel)).await {
-                Ok(value) => value?,
-                Err(_) => break,
+            record = match try_received_record(channel).await? {
+                Some(value) => value,
+                None => break,
             };
         }
-        self.acks.expire(Instant::now());
+        let now = Instant::now();
+        self.acks.expire(now);
+        self.expire_clipboard(now);
         Ok(())
-    }
-    /// Controller: one clipboard request. The outer error is a broken transport or a host that
-    /// breaks the protocol; a host that answers too late fails only this request (its late
-    /// answer is recognised by number and dropped).
-    async fn clipboard_request(
-        &mut self,
-        config: &Config,
-        channel: &Arc<dyn NativeDataChannel>,
-        push: bool,
-        wait: Duration,
-    ) -> Result<Result<(), String>, String> {
-        let mut request = match self.clipboard.begin(config, &mut self.crypto, channel, push).await? {
-            Ok(request) => request,
-            Err(error) => return Ok(Err(error)),
-        };
-        let deadline = Instant::now() + wait;
-        loop {
-            if config.stopped() {
-                return Err("The clipboard transfer stopped".into());
-            }
-            self.acks.expire(Instant::now());
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                self.clipboard.give_up(&request);
-                return Ok(Err("The remote computer did not answer the clipboard request in time".into()));
-            }
-            let record = match tokio::time::timeout(left.min(Duration::from_millis(250)), received_record(channel)).await {
-                Ok(value) => value?,
-                Err(_) => continue,
-            };
-            let plain = Zeroizing::new(self.crypto.open(&record).map_err(|error| error.to_string())?);
-            if self.take_host_record(&plain)?
-                && let Some(result) = request.accept_deduped(&plain, config.stopped(), &mut self.clipboard.last_digest)?
-            {
-                return Ok(result);
-            }
-        }
     }
     /// Controller: sends the queued drawing messages (no acknowledgment).
     async fn send_drawings(&mut self, channel: &Arc<dyn NativeDataChannel>) -> Result<(), String> {
@@ -840,39 +863,54 @@ impl ControlPipe {
             self.send_drawings(channel).await?;
         }
         if !self.host {
-            self.acks.expire(Instant::now());
+            let now = Instant::now();
+            self.acks.expire(now);
+            self.expire_clipboard(now);
             self.send_inputs(channel).await?;
-            if let Ok(command) = self.clipboard.commands.try_recv() {
+            if self.active_clipboard.is_none()
+                && let Ok(command) = self.clipboard.commands.try_recv()
+            {
                 if Instant::now() >= command.deadline {
                     let _ = command.reply.send(Err("The clipboard request expired".into()));
-                    return Ok(());
+                } else {
+                    let wait = command
+                        .deadline
+                        .saturating_duration_since(Instant::now())
+                        .min(if self.clipboard.rich {
+                            core_protocol::clipboard::RICH_LIFETIME
+                        } else {
+                            core_protocol::clipboard::LIFETIME
+                        });
+                    match self
+                        .clipboard
+                        .begin(config, &mut self.crypto, channel, command.push)
+                        .await
+                    {
+                        Ok(Ok(request)) => {
+                            self.active_clipboard = Some(ActiveClipboard {
+                                request,
+                                deadline: Instant::now() + wait,
+                                reply: command.reply,
+                            });
+                        }
+                        Ok(Err(error)) => {
+                            let _ = command.reply.send(Err(error));
+                        }
+                        Err(error) => {
+                            let _ = command.reply.send(Err(error.clone()));
+                            return Err(error);
+                        }
+                    }
                 }
-                let wait = command
-                    .deadline
-                    .saturating_duration_since(Instant::now())
-                    .min(if self.clipboard.rich {
-                        core_protocol::clipboard::RICH_LIFETIME
-                    } else {
-                        core_protocol::clipboard::LIFETIME
-                    });
-                let result = self.clipboard_request(config, channel, command.push, wait).await;
-                let _ = command.reply.send(match &result {
-                    Ok(result) => result.clone(),
-                    Err(error) => Err(error.clone()),
-                });
-                return result.map(|_| ());
             }
-            return self.receive_host_records(channel, Duration::from_millis(1)).await;
+            return self
+                .receive_host_records(channel, Duration::ZERO, config.stopped())
+                .await;
         }
-        for turn in 0..32 {
-            let wait = if turn == 0 {
-                Duration::from_millis(1)
-            } else {
-                Duration::from_micros(100)
-            };
-            let mut record = match tokio::time::timeout(wait, received_record(channel)).await {
-                Ok(value) => value?,
-                Err(_) => return Ok(()),
+        for _ in 0..32 {
+            let mut record = match try_received_record(channel).await? {
+                Some(value) => value,
+                None => return Ok(()),
             };
             if config.stopped() {
                 return Err("The session stopped before control processing".into());
@@ -893,9 +931,9 @@ impl ControlPipe {
                 if drawn >= 64 {
                     return Ok(());
                 }
-                record = match tokio::time::timeout(Duration::from_micros(200), received_record(channel)).await {
-                    Ok(value) => value?,
-                    Err(_) => return Ok(()),
+                record = match try_received_record(channel).await? {
+                    Some(value) => value,
+                    None => return Ok(()),
                 };
                 plain = Zeroizing::new(self.crypto.open(&record).map_err(|error| error.to_string())?);
             }
@@ -1011,6 +1049,16 @@ impl ControlPipe {
             eprintln!("QA input answered at {} ms (clock {}){}", crate::remote_control::qa_clock(), qa_wall_clock(), if handed_over.elapsed() > Duration::from_millis(200) { format!(" (the channel took {} ms to accept the answer)", handed_over.elapsed().as_millis()) } else { String::new() });
         }
         Ok(())
+    }
+}
+/// Non-blocking poll for an already-buffered control record (zero timer tick).
+async fn try_received_record(
+    channel: &Arc<dyn NativeDataChannel>,
+) -> Result<Option<Vec<u8>>, String> {
+    tokio::select! {
+        biased;
+        record = received_record(channel) => record.map(Some),
+        _ = std::future::ready(()) => Ok(None),
     }
 }
 pub async fn received_record(
@@ -1132,8 +1180,9 @@ mod input_ack_tests {
         /// What the controller's media loop does between pictures (no clipboard request).
         async fn step(&mut self) -> Result<(), String> {
             self.pipe.acks.expire(Instant::now());
+            self.pipe.expire_clipboard(Instant::now());
             self.pipe.send_inputs(&self.controller).await?;
-            self.pipe.receive_host_records(&self.controller, Duration::from_millis(5)).await
+            self.pipe.receive_host_records(&self.controller, Duration::from_millis(5), false).await
         }
         /// Steps until `reply` is answered; every step must keep the session.
         async fn until(&mut self, reply: &mut oneshot::Receiver<Result<bool, String>>, limit: Duration) -> Result<bool, String> {
@@ -1283,5 +1332,48 @@ mod input_ack_tests {
         print.extend_from_slice(&Message::Chunk { id: 9, offset: 0, bytes: b"x" }.encode().unwrap());
         assert_eq!(pipe.take_host_record(&print), Ok(false));
         assert!(pipe.take_print_job().is_none());
+    }
+
+    #[tokio::test]
+    async fn clipboard_request_does_not_block_poll_while_waiting_for_host() {
+        use core_protocol::clipboard::Message;
+        let mut lab = lab().await;
+        // Start an in-flight clipboard pull request (simulating `poll()` after `clipboard.begin()`).
+        let req = lab.pipe.clipboard.test_request(1, false);
+        let (tx, mut rx) = oneshot::channel();
+        lab.pipe.active_clipboard = Some(ActiveClipboard {
+            request: req,
+            deadline: Instant::now() + Duration::from_secs(5),
+            reply: tx,
+        });
+        // Polling with Duration::ZERO must return immediately even while the host has not replied.
+        let started = Instant::now();
+        lab.pipe
+            .receive_host_records(&lab.controller, Duration::ZERO, false)
+            .await
+            .unwrap();
+        assert!(started.elapsed() < Duration::from_millis(50), "non-blocking poll took {:?}", started.elapsed());
+        assert!(rx.try_recv().is_err(), "clipboard still in flight");
+
+        // Inputs still work while clipboard is in flight.
+        let mut key_reply = lab.input(7);
+        lab.step().await.unwrap();
+        assert_eq!(lab.host_reads_input().await, 7);
+        lab.host_sends(INPUT_POSTED).await;
+        assert_eq!(lab.until(&mut key_reply, Duration::from_secs(2)).await, Ok(true));
+
+        // When the host finally replies with Ack(1) (unchanged), the clipboard future resolves.
+        let ack = Message::Ack(1).encode().unwrap();
+        lab.host_sends(&ack).await;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let outcome = loop {
+            lab.step().await.unwrap();
+            if let Ok(res) = rx.try_recv() {
+                break res;
+            }
+            assert!(Instant::now() < deadline, "clipboard reply did not resolve");
+        };
+        assert_eq!(outcome, Ok(()));
+        assert!(lab.pipe.active_clipboard.is_none());
     }
 }

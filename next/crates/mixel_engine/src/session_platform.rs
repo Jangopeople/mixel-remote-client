@@ -346,9 +346,9 @@ pub fn capture(
                 .into_iter()
                 .find(|window| window.title == "Mixel-Remote Capture Fixture")
                 .ok_or("The QA test window is unavailable")?;
-            Capture::start_own_window(window.id, width, height, 30)
+            Capture::start_own_window(window.id, width, height, 60)
         } else {
-            Capture::start(selected(source)?.id, width, height, 30)
+            Capture::start(selected(source)?.id, width, height, 60)
         };
         stream.map_err(|error| error.to_string())
     }

@@ -227,6 +227,29 @@ impl NativeTransport {
         if relay_only && !has_relay {
             return Err(TransportError::Configuration);
         }
+        // When direct connections are allowed, also derive a `stun:` URL from any original UDP
+        // `turn:` URL (before StreamRuntime rewrites TCP TURN aliases) so ICE gathers `srflx`
+        // candidates and can punch direct peer-to-peer UDP on WAN instead of always relaying.
+        let mut servers = servers;
+        if !relay_only {
+            for server in &mut servers {
+                let mut stun_urls = Vec::new();
+                for raw in &server.urls {
+                    if let Some(rest) = raw.strip_prefix("turn:") {
+                        let (authority, query) = rest
+                            .split_once('?')
+                            .map_or((rest, None), |(a, q)| (a, Some(q)));
+                        if matches!(query, None | Some("transport=udp")) {
+                            let stun = format!("stun:{authority}");
+                            if !server.urls.contains(&stun) && !stun_urls.contains(&stun) {
+                                stun_urls.push(stun);
+                            }
+                        }
+                    }
+                }
+                server.urls.extend(stun_urls);
+            }
+        }
         let (streams, servers) =
             match crate::stream_turn::StreamRuntime::prepare(&bind, servers.clone(), tls)? {
                 Some((runtime, rewritten)) => (Some(runtime), rewritten),
