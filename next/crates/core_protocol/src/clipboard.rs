@@ -14,6 +14,10 @@ pub const LIFETIME: Duration = Duration::from_secs(15);
 pub const MAX_RICH: usize = 32 * 1024 * 1024;
 pub const RICH_LIFETIME: Duration = Duration::from_secs(120);
 pub const FEATURE: &str = "clip2";
+/// The controller accepts `Ack(id)` as the answer to a pull when the host clipboard did not change
+/// (2.1.7+). Apps without it treat such an Ack as a protocol error and end the session, so a host
+/// sends it only to controllers that announced this feature.
+pub const FEATURE_UNCHANGED: &str = "clip-same";
 #[derive(Debug, Error, PartialEq, Eq)]
 #[error("invalid, expired or incomplete clipboard transaction")]
 pub struct ClipboardError;

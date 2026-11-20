@@ -319,10 +319,10 @@ impl IsmAuth {
         }
         Ok(code)
     }
-    /// Quick Support for phones: claims the phone with this Remote ID for this team member (it then
-    /// goes online and asks the person). `false` when the ID is not a phone (an ordinary computer).
+    /// Quick Support for phones/computers: claims the device with this Remote ID for the signed-in user
+    /// (it then goes online and asks the person). `false` when the ID is not a Quick Support device.
     pub async fn quick_phone_claim(&self, token: &str, connection_id: u32) -> Result<bool, AuthError> {
-        if !(100_000_000..=999_999_999).contains(&connection_id) || !self.authenticate_scope(token, false).await?.staff {
+        if !(100_000_000..=999_999_999).contains(&connection_id) {
             return Err(AuthError);
         }
         let response = self
@@ -335,6 +335,50 @@ impl IsmAuth {
             .await
             .map_err(|_| AuthError)?;
         Self::decode_response(response).await
+    }
+
+    /// Saves a connected device after a remote session with its Device Name, Company, and User.
+    pub async fn save_connected_device(
+        &self,
+        token: &str,
+        connection_id: u32,
+        device_name: &str,
+        company_name: &str,
+        user_name: &str,
+        target_client: Option<Uuid>,
+    ) -> Result<serde_json::Value, String> {
+        let name = device_name.trim();
+        let company = company_name.trim();
+        let user = user_name.trim();
+        if !(100_000_000..=999_999_999).contains(&connection_id) {
+            return Err("Enter a valid 9-digit connection ID".into());
+        }
+        if name.is_empty() || name.chars().count() > 60 || name.chars().any(char::is_control) {
+            return Err("Enter a device name of 1 to 60 characters".into());
+        }
+        if company.is_empty() || company.chars().count() > 60 || company.chars().any(char::is_control) {
+            return Err("Enter a company name of 1 to 60 characters".into());
+        }
+        if user.is_empty() || user.chars().count() > 80 || user.chars().any(char::is_control) {
+            return Err("Enter a user name of 1 to 80 characters".into());
+        }
+        let unavailable = "The device could not be saved. Please try again.";
+        let response = self
+            .client
+            .post(self.base.join("/rest/v1/rpc/remote_save_connected_device").map_err(|_| unavailable)?)
+            .header("apikey", &self.api_key)
+            .bearer_auth(token)
+            .json(&serde_json::json!({
+                "target_connection_id": connection_id,
+                "device_name": name,
+                "company_name": company,
+                "user_name": user,
+                "target_client": target_client,
+            }))
+            .send()
+            .await
+            .map_err(|_| unavailable)?;
+        Self::decode_response(response).await.map_err(|_| unavailable.into())
     }
     /// The phone that registered with a support code this team member created, if any yet.
     pub async fn support_code_device(&self, token: &str, code: &str) -> Result<Option<SupportDevice>, AuthError> {

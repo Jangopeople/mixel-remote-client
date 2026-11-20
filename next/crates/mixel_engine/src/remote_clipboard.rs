@@ -35,6 +35,12 @@ pub struct ClipboardPipe {
     /// When a background pull (`push == false`) receives identical bytes, the local pasteboard is
     /// not rewritten so local copies are never clobbered by an unchanged remote clipboard.
     pub last_digest: Option<[u8; 32]>,
+    /// Host: the SHA-256 digest of the last clipboard payload sent to or received from the
+    /// controller. When a pull (`Get` / `GetRich`) finds the host clipboard unchanged, the host
+    /// replies with a short `Ack(id)` instead of re-sending megabytes of unchanged clipboard data.
+    pub last_host_digest: Option<[u8; 32]>,
+    /// Host: the controller announced `clip-same` and understands `Ack(id)` as "unchanged".
+    pub peer_accepts_unchanged: bool,
 }
 /// Controller: a clipboard request waiting for the host's answer.
 pub struct Request {
@@ -66,6 +72,8 @@ impl ClipboardPipe {
             expired_id: None,
             abandoned: 0,
             last_digest: None,
+            last_host_digest: None,
+            peer_accepts_unchanged: false,
         }
     }
     /// Host: a transfer from the technician that did not finish in time is dropped (the session
@@ -80,6 +88,11 @@ impl ClipboardPipe {
             self.expired_id = Some(self.receiving_id);
         }
         Ok(())
+    }
+    /// Host: answer a pull with a short `Ack` ("unchanged") instead of the payload. Only for a
+    /// controller that announced `clip-same`: older apps end the session on an unexpected Ack.
+    pub fn reply_unchanged(&self, digest: &[u8; 32]) -> bool {
+        self.peer_accepts_unchanged && self.last_host_digest.as_ref() == Some(digest)
     }
     pub fn receiving(&self) -> bool {
         self.receiver.is_some()
@@ -100,7 +113,18 @@ impl ClipboardPipe {
             Message::Get(id) => {
                 self.start_request(id)?;
                 match read_text() {
-                    Ok(text) => send_text(config, crypto, channel, id, &text).await,
+                    Ok(text) => {
+                        let digest: [u8; 32] = sha2::Sha256::digest(text.as_bytes()).into();
+                        if self.reply_unchanged(&digest) {
+                            send(crypto, channel, Message::Ack(id)).await
+                        } else {
+                            let res = send_text(config, crypto, channel, id, &text).await;
+                            if res.is_ok() {
+                                self.last_host_digest = Some(digest);
+                            }
+                            res
+                        }
+                    }
                     Err(_) => send(crypto, channel, Message::Unavailable(id)).await,
                 }
             }
@@ -109,7 +133,18 @@ impl ClipboardPipe {
                 match read_content(true).and_then(|content| {
                     content.encode().map_err(|error| error.to_string())
                 }) {
-                    Ok(payload) => send_payload(config, crypto, channel, id, &payload).await,
+                    Ok(payload) => {
+                        let digest: [u8; 32] = sha2::Sha256::digest(&payload[..]).into();
+                        if self.reply_unchanged(&digest) {
+                            send(crypto, channel, Message::Ack(id)).await
+                        } else {
+                            let res = send_payload(config, crypto, channel, id, &payload).await;
+                            if res.is_ok() {
+                                self.last_host_digest = Some(digest);
+                            }
+                            res
+                        }
+                    }
                     Err(_) => send(crypto, channel, Message::Unavailable(id)).await,
                 }
             }
@@ -149,7 +184,14 @@ impl ClipboardPipe {
                 if config.stopped() {
                     return Err("The session stopped before clipboard replacement".into());
                 }
+                let encoded_digest = content
+                    .encode()
+                    .ok()
+                    .map(|bytes| sha2::Sha256::digest(&bytes[..]).into());
                 let reply = if write_content(content).is_ok() {
+                    if let Some(digest) = encoded_digest {
+                        self.last_host_digest = Some(digest);
+                    }
                     Message::Ack(id)
                 } else {
                     Message::Unavailable(id)
@@ -287,6 +329,9 @@ impl Request {
                 if let Some(digest) = self.payload_digest {
                     *last_digest = Some(digest);
                 }
+                Ok(Some(Ok(())))
+            }
+            Message::Ack(reply) if !push && reply == id && self.receiver.is_none() => {
                 Ok(Some(Ok(())))
             }
             Message::Unavailable(reply) if reply == id => Ok(Some(Err(if rich {
@@ -457,5 +502,41 @@ mod tests {
             Ok(Some(Ok(())))
         );
         assert_eq!(pipe.last_digest, Some(digest));
+    }
+
+    #[test]
+    fn an_unchanged_host_clipboard_answers_a_pull_with_a_short_ack() {
+        // The host answers a background pull with Ack(id) when its clipboard did not change; the
+        // controller takes that as "nothing new" and leaves its own clipboard alone.
+        let (_tx, rx) = mpsc::channel(1);
+        let mut pipe = ClipboardPipe::new(rx, true);
+        let mut request = pipe.test_request(9, false);
+        let ack = Message::Ack(9).encode().unwrap();
+        assert_eq!(request.accept_deduped(&ack, false, &mut pipe.last_digest), Ok(Some(Ok(()))));
+        assert_eq!(pipe.last_digest, None);
+        // An Ack for another request is a protocol error, not silently accepted.
+        let mut other = pipe.test_request(10, false);
+        let stray = Message::Ack(3).encode().unwrap();
+        assert!(other.accept_deduped(&stray, false, &mut pipe.last_digest).is_err());
+    }
+
+    #[test]
+    fn a_host_never_sends_the_short_unchanged_answer_to_an_older_controller() {
+        // 2.1.6 and older controllers end the session on an Ack to a pull (lab, 20 Nov 2026: sessions
+        // to a 2.1.7 Mac dropped after a few seconds). They must always get the full clipboard.
+        let (_tx, rx) = mpsc::channel(1);
+        let mut pipe = ClipboardPipe::new(rx, true);
+        let digest: [u8; 32] = sha2::Sha256::digest(b"same").into();
+        pipe.last_host_digest = Some(digest);
+        assert!(!pipe.reply_unchanged(&digest), "older controller: full payload");
+        pipe.peer_accepts_unchanged = true;
+        assert!(pipe.reply_unchanged(&digest), "clip-same controller: short Ack");
+        let other: [u8; 32] = sha2::Sha256::digest(b"changed").into();
+        assert!(!pipe.reply_unchanged(&other), "a changed clipboard is always sent");
+    }
+
+    #[test]
+    fn this_app_announces_that_it_understands_the_unchanged_answer() {
+        assert!(crate::remote_control::own_features().contains(&core_protocol::clipboard::FEATURE_UNCHANGED));
     }
 }

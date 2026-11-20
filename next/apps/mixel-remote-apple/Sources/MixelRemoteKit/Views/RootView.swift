@@ -37,7 +37,10 @@ public struct RootView: View {
         .sheet(isPresented: Binding(get: { app.host.asking }, set: { _ in })) {
             ConsentSheet(app: app).interactiveDismissDisabled()
         }
-        .sheet(item: Binding(get: { app.host.asking ? nil : app.reports.noteFor.map(NoteTarget.init) }, set: { if $0 == nil { app.reports.noteFor = nil } })) { target in
+        .sheet(item: Binding(get: { app.host.asking ? nil : app.devices.savePromptFor.map(NoteTarget.init) }, set: { if $0 == nil { app.devices.savePromptFor = nil } })) { target in
+            SaveConnectedDeviceDialog(app: app, model: app.devices, connectionId: target.id)
+        }
+        .sheet(item: Binding(get: { (app.host.asking || app.devices.savePromptFor != nil) ? nil : app.reports.noteFor.map(NoteTarget.init) }, set: { if $0 == nil { app.reports.noteFor = nil } })) { target in
             SessionNoteSheet(reports: app.reports, host: target.id, name: app.devices.name(of: target.id))
         }
     }
@@ -270,14 +273,14 @@ struct Sidebar: View {
                     item(.sessions, badge: workspace.tabs.count)
                     if app.company.tenant != nil { item(.reports) }
                     item(.settings)
-                    if app.signedIn, !devices.allDevices.isEmpty {
+                    if app.signedIn, !devices.allDevices.isEmpty || !devices.recentConnectionIds.isEmpty {
                         heading(L("Views"))
                         view(.all, L("All devices"), "laptopcomputer")
                         view(.online, L("Online now"), "bolt")
-                        if devices.tenant != nil {
+                        if devices.tenant != nil || devices.adminAvailable {
                             view(.favorites, L("Favourites"), "star")
-                            view(.recent, L("Recent"), "clock")
                         }
+                        view(.recent, L("Recent"), "clock")
                         if !devices.groupNames.isEmpty || devices.deploys && devices.groupsOn {
                             HStack {
                                 heading(L("Groups"))
@@ -424,19 +427,28 @@ struct SidebarRow: View {
 /// "This computer · online" with its ID; a click opens this computer's page (being helped, passwords).
 struct ThisComputerCard: View {
     @ObservedObject var app: AppModel
+    @ObservedObject var host: HostModel
+
+    init(app: AppModel) {
+        self.app = app
+        host = app.host
+    }
 
     var body: some View {
         let remote = app.remote
         Button { app.section = .remote; app.workspace.selected = .console } label: {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
-                    Circle().fill(remote.connected ? Theme.success : remote.phase == "error" ? Theme.brand : Color.secondary).frame(width: 7, height: 7)
-                    Text(verbatim: L("This computer") + " · " + (remote.connected ? L("online") : remote.phase == "error" ? L("Connection problem") : L("offline")))
+                    Circle().fill(!host.permissionsReady ? Theme.warning : remote.connected ? Theme.success : remote.phase == "error" ? Theme.brand : Color.secondary).frame(width: 7, height: 7)
+                    Text(verbatim: L("This computer") + " · " + (!host.permissionsReady ? L("permissions required") : remote.connected ? L("online") : remote.phase == "error" ? L("Connection problem") : L("offline")))
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 HStack {
-                    if app.signedIn, let host = remote.host {
-                        Text(verbatim: Format.remoteId(host)).font(.system(size: 17, weight: .semibold, design: .monospaced))
+                    if !host.permissionsReady {
+                        Text(verbatim: L("Grant macOS permissions to see ID")).font(.callout.weight(.medium)).foregroundStyle(Theme.warning)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if app.signedIn, let hostId = remote.host {
+                        Text(verbatim: Format.remoteId(hostId)).font(.system(size: 17, weight: .semibold, design: .monospaced))
                     } else {
                         Text(verbatim: app.signedIn ? L("Not set up yet") : L("Sign in to get your connection ID.")).font(.callout).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -447,12 +459,12 @@ struct ThisComputerCard: View {
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Theme.page, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(app.section == .remote ? Theme.brand : Theme.hairline, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(!host.permissionsReady ? Theme.warning : app.section == .remote ? Theme.brand : Theme.hairline, lineWidth: 1))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .overlay(alignment: .topTrailing) {
-            if app.signedIn, remote.host != nil {
+            if app.signedIn, remote.host != nil, host.permissionsReady {
                 Button { app.host.copyId() } label: { Image(systemName: "doc.on.doc").frame(width: 26, height: 26) }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
                     .help(L("Copy ID"))
@@ -460,7 +472,7 @@ struct ThisComputerCard: View {
                     .padding(.top, 22).padding(.trailing, 6)
             }
         }
-        .accessibilityLabel(Text(verbatim: L("This computer") + ", " + (app.signedIn ? Format.remoteId(remote.host) : L("offline"))))
+        .accessibilityLabel(Text(verbatim: L("This computer") + ", " + (!host.permissionsReady ? L("permissions required") : app.signedIn ? Format.remoteId(remote.host) : L("offline"))))
     }
 }
 

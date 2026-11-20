@@ -201,8 +201,86 @@ public sealed partial class DevicesModel : Observable
         try { await app.Engine.PerformAsync("remote_prewarm", ("on", wanted)); } catch (EngineFailure) { }
     }
 
+    private uint? savePromptFor;
+    public uint? SavePromptFor { get => savePromptFor; set => Set(ref savePromptFor, value); }
+    private readonly HashSet<uint> activeSessionPeers = [];
+    private const string RecentConnectionsKey = "mixel.remote.recentConnections.v1";
+
+    public IReadOnlyList<uint> RecentConnectionIds
+    {
+        get
+        {
+            try
+            {
+                var list = System.Text.Json.JsonSerializer.Deserialize<List<uint>>(app.Preferences.Get(RecentConnectionsKey) ?? "[]") ?? [];
+                return [.. list.Where(id => id is >= 100_000_000 and <= 999_999_999)];
+            }
+            catch (System.Text.Json.JsonException) { return []; }
+        }
+    }
+
+    public void RecordConnection(uint connectionId)
+    {
+        if (connectionId is < 100_000_000 or > 999_999_999 || connectionId == app.Remote.Host) return;
+        var list = RecentConnectionIds.Where(id => id != connectionId).ToList();
+        list.Insert(0, connectionId);
+        if (list.Count > 50) list = [.. list.Take(50)];
+        app.Preferences.Set(RecentConnectionsKey, System.Text.Json.JsonSerializer.Serialize(list));
+        Raise(nameof(RecentConnectionIds));
+        Raise(nameof(Devices));
+    }
+
+    public async Task<bool> SaveConnectedDevice(uint connectionId, string deviceName, string companyName, string userName, string? targetClient = null)
+    {
+        var cleanName = deviceName.Trim();
+        var cleanCompany = companyName.Trim();
+        var cleanUser = userName.Trim();
+        if (cleanName.Length == 0) { Error = L("Enter the device name."); return false; }
+        if (cleanCompany.Length == 0) { Error = L("Enter the company name."); return false; }
+        if (cleanUser.Length == 0) { Error = L("Enter the user name."); return false; }
+        Error = "";
+        try
+        {
+            await app.Engine.PerformAsync("save_connected_device",
+                ("connection_id", connectionId),
+                ("device_name", cleanName),
+                ("company_name", cleanCompany),
+                ("user_name", cleanUser),
+                ("target_client", targetClient));
+            RecordConnection(connectionId);
+            await Load(0);
+            return true;
+        }
+        catch (EngineFailure failure)
+        {
+            Error = failure.Translated;
+            return false;
+        }
+    }
+
     internal void StatusChanged(RemoteStatus previous, RemoteStatus next)
     {
+        var currentActive = new HashSet<uint>();
+        var newlyActivated = false;
+        foreach (var item in next.TechnicianSessions.Where(item => item.Phase == "active" && item.Peer is > 0))
+        {
+            currentActive.Add(item.Peer);
+            if (!activeSessionPeers.Contains(item.Peer))
+            {
+                RecordConnection(item.Peer);
+                if (!AllDevices.Any(device => device.ConnectionId == item.Peer)) newlyActivated = true;
+            }
+        }
+        var stillListed = next.TechnicianSessions.Where(item => item.Phase != "closing" && item.Peer is > 0).Select(item => item.Peer).ToHashSet();
+        foreach (var endedPeer in activeSessionPeers.Where(peer => !stillListed.Contains(peer)))
+        {
+            RecordConnection(endedPeer);
+            newlyActivated = true;
+            if (SavePromptFor is null) SavePromptFor = endedPeer;
+        }
+        activeSessionPeers.Clear();
+        foreach (var peer in currentActive) activeSessionPeers.Add(peer);
+        if (newlyActivated && app.SignedIn && !Loading) _ = Load(Page);
         if (next.Connected && !previous.Connected) lastPresence = DateTimeOffset.MinValue;
         if (next.Connected) _ = CheckPresence();
         _ = UpdatePrewarm();

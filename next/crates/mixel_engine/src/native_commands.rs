@@ -415,6 +415,25 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
                 .await
                 .map_err(|_| "The device could not be reached through Mixel. Please try again.")?)
         }
+        "save_connected_device" => {
+            let connection_id: u32 = args.get("connection_id")?;
+            let device_name: String = args.get("device_name")?;
+            let company_name: String = args.get("company_name")?;
+            let user_name: String = args.get("user_name")?;
+            let target_client: Option<Uuid> = args.get("target_client").unwrap_or(None);
+            let credential = auth.credential(None).await?;
+            out(credential
+                .ism
+                .save_connected_device(
+                    &credential.token,
+                    connection_id,
+                    &device_name,
+                    &company_name,
+                    &user_name,
+                    target_client,
+                )
+                .await?)
+        }
         #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         "quick_support_start" => {
             #[cfg(target_os = "macos")]

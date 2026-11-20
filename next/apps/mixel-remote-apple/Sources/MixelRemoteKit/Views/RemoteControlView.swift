@@ -104,6 +104,20 @@ public struct RemoteControlView: View {
     }
 
     private var allowCard: some View {
+        Group {
+            #if os(macOS)
+            if !remote.controllerOnly, !host.permissionsReady {
+                MacPermissionsRequiredCard(host: host)
+            } else {
+                allowCardContent
+            }
+            #else
+            allowCardContent
+            #endif
+        }
+    }
+
+    private var allowCardContent: some View {
         Card {
             CardTitle(L("Allow remote access"), symbol: "lock.open.display")
             if remote.controllerOnly {

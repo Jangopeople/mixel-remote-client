@@ -120,7 +120,7 @@ impl HardwareH264Encoder {
             )?;
             encoder.property(
                 kVTCompressionPropertyKey_MaxKeyFrameInterval,
-                CFNumber::new_i32(fps as i32).as_ref(),
+                CFNumber::new_i32((fps * 10) as i32).as_ref(),
             )?;
             encoder.property(
                 kVTCompressionPropertyKey_ColorPrimaries,
@@ -240,18 +240,20 @@ impl HardwareH264Encoder {
             }
         }
         let result = if self.may_buffer {
-            match rx.recv_timeout(Duration::from_millis(33)) {
+            match rx.try_recv() {
                 Ok(result) => result,
-                Err(mpsc::RecvTimeoutError::Disconnected) => Err(EncodeError::Timeout),
-                Err(mpsc::RecvTimeoutError::Timeout) => {
+                Err(mpsc::TryRecvError::Disconnected) => Err(EncodeError::Timeout),
+                Err(mpsc::TryRecvError::Empty) => {
                     // SAFETY: the owned session is still active. Only the
                     // current frame can be pending on this serial owner.
                     let code = unsafe {
                         self.session
                             .complete_frames(CMTime::new(timestamp_us as i64, 1_000_000))
                     };
-                    status("complete frame", code)
-                        .and_then(|()| rx.try_recv().unwrap_or(Err(EncodeError::Timeout)))
+                    status("complete frame", code).and_then(|()| {
+                        rx.recv_timeout(Duration::from_millis(500))
+                            .unwrap_or(Err(EncodeError::Timeout))
+                    })
                 }
             }
         } else {
@@ -337,11 +339,15 @@ fn pixel_buffer(frame: &CapturedFrame) -> Result<CFRetained<CVPixelBuffer>, Enco
             }
             // SAFETY: storage size checked against CoreVideo; buffer write-locked.
             let bytes = std::slice::from_raw_parts_mut(base.cast::<u8>(), length);
-            bytes.fill(0);
-            for y in 0..frame.height() {
-                bytes[y * stride..y * stride + frame.width() * 4].copy_from_slice(
-                    &frame.pixels()[y * frame.stride()..y * frame.stride() + frame.width() * 4],
-                );
+            let row_bytes = frame.width() * 4;
+            if stride == row_bytes && frame.stride() == row_bytes {
+                bytes.copy_from_slice(&frame.pixels()[..length]);
+            } else {
+                for y in 0..frame.height() {
+                    bytes[y * stride..y * stride + row_bytes].copy_from_slice(
+                        &frame.pixels()[y * frame.stride()..y * frame.stride() + row_bytes],
+                    );
+                }
             }
         }
         let color =

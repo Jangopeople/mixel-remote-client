@@ -136,6 +136,21 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
     public var lastRefusal: Refusal?
     public var isReconnecting: Bool { reconnecting == true }
 
+    /// A copy with rapidly incrementing counters (`received`, `sessions[].received`, `sessions[].quality`)
+    /// normalized so SwiftUI does not rebuild the entire window hierarchy 12.5 times a second during video streaming.
+    public var withoutVolatileCounters: RemoteStatus {
+        var copy = self
+        copy.received = received > 0 ? 1 : 0
+        if var list = copy.sessions {
+            for index in list.indices {
+                list[index].received = list[index].received > 0 ? 1 : 0
+                list[index].quality = nil
+            }
+            copy.sessions = list
+        }
+        return copy
+    }
+
     public static let offline = RemoteStatus(phase: "offline")
 
     public init(phase: String, message: String = "", controllerOnly: Bool = false, platform: String = "macos", host: UInt32? = nil, session: String? = nil, consent: String? = nil, peer: UInt32? = nil, received: UInt64 = 0, sharing: Bool = false, control: Bool = false, clipboard: Bool = false, files: Bool = false, recordingPermitted: Bool = false, recording: RecordingView? = nil, inputAccess: Bool = true, online: [UInt32] = [], displays: UInt16 = 0, display: UInt16 = 0, displayAll: Bool = false, hostActions: [String] = [], colleagues: [Colleague] = [], joinRequest: JoinRequest? = nil, invitations: [Invitation] = [], peerFeatures: [String] = [], unattendedSession: Bool = false, switched: Bool = false, printJobs: [String] = [], sessions: [RemoteSessionItem]? = nil, maxSessions: Int? = nil) {

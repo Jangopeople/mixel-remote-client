@@ -118,6 +118,7 @@ public final class AppModel: ObservableObject {
     }
     private var loop: Task<Void, Never>?
     private var lastAccountRead = Date.distantPast
+    private var lastRemotePublish = Date.distantPast
     private var accountKey = ""
 
     public init(engine: EngineAPI) {
@@ -135,6 +136,7 @@ public final class AppModel: ObservableObject {
         loop = Task { [weak self] in
             await self?.refreshAccount()
             await self?.settings.flushPendingRemoval()
+            await self?.host.checkPermissions(promptIfMissing: true)
             while !Task.isCancelled {
                 guard let self else { return }
                 await self.tick()
@@ -175,7 +177,11 @@ public final class AppModel: ObservableObject {
     public func refreshRemote() async {
         guard let next: RemoteStatus = try? await engine.run("remote_status") else { return }
         let previous = remote
-        if next != previous { remote = next }
+        let now = Date()
+        if next.withoutVolatileCounters != previous.withoutVolatileCounters || now.timeIntervalSince(lastRemotePublish) >= 1.0 {
+            lastRemotePublish = now
+            if next != previous { remote = next }
+        }
         if next.phase == "ready" { autoTries = 0; nextAutoTry = .distantPast }
         syncSessions(next)
         idleSession.statusChanged(from: previous, to: next)
@@ -386,6 +392,7 @@ public final class AppModel: ObservableObject {
         quickSupportMode = true
         error = ""
         Task {
+            await host.checkPermissions(promptIfMissing: true)
             do {
                 let deviceName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
                 _ = try await engine.run("quick_support_start", ["device_name": deviceName], as: UInt32.self)

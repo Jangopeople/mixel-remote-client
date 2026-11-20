@@ -42,6 +42,31 @@ internal sealed class SessionsPage : PageView
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(card, L("Session with %@", tab.Name));
             stack.Children.Add(card);
         }
+        if (App.Devices.RecentConnectionIds.Count > 0)
+        {
+            stack.Children.Add(Ui.Hairline());
+            stack.Children.Add(Ui.Text(L("Recent connections"), bold: true, size: 16));
+            foreach (var connId in App.Devices.RecentConnectionIds)
+            {
+                var known = App.Devices.AllDevices.FirstOrDefault(d => d.ConnectionId == connId);
+                var admin = known is not null ? App.Devices.AdminOf(known) : null;
+                var sub = Format.RemoteId(connId);
+                if (known?.GroupName is { Length: > 0 } grp) sub += " · " + grp;
+                else if (admin?.GroupName is { Length: > 0 } agrp) sub += " · " + agrp;
+                if (admin?.Note is { Length: > 0 } note) sub += " · " + note;
+                var info = Ui.Column(2, Ui.Text(known?.Name ?? Format.RemoteId(connId), bold: true, wrap: false), Ui.Text(sub, secondary: true, wrap: false));
+                var left = Ui.Row(12, Ui.OsTile(known?.Os ?? "windows", known is not null && App.Devices.IsOnline(known) ? "MixelSuccess" : null, 32), info);
+                var actions = Ui.Row(8,
+                    Ui.Plain(L("Save device…"), () => App.Devices.SavePromptFor = connId),
+                    Ui.Primary(L("Connect"), () => workspace.Connect(connId, known?.Name, known?.Os ?? "", unattended: known is not null, checkPhone: known is null)));
+                var card = new Border
+                {
+                    Child = Ui.Split(left, actions), Padding = new Thickness(12), CornerRadius = new CornerRadius(10), BorderThickness = new Thickness(1),
+                    Background = Ui.Brush("MixelPaper"), BorderBrush = Ui.Brush("MixelHairline"),
+                };
+                stack.Children.Add(card);
+            }
+        }
         return new Border { Child = new ScrollViewer { Content = stack, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled }, Background = Ui.Brush("MixelPaper") };
     }
 

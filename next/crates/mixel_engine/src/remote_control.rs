@@ -141,6 +141,7 @@ pub fn own_features() -> Vec<&'static str> {
 pub fn own_features_with(vrate2: bool) -> Vec<&'static str> {
     let mut features = vec![
         core_protocol::clipboard::FEATURE,
+        core_protocol::clipboard::FEATURE_UNCHANGED,
         ALL_MONITORS,
         crate::host_print::FEATURE,
         core_protocol::sound::FEATURE,
@@ -396,6 +397,7 @@ impl ControlPipe {
             clipboard: {
                 let mut pipe = crate::remote_clipboard::ClipboardPipe::new(clipboard_rx, clipboard);
                 pipe.rich = features.iter().any(|name| name == core_protocol::clipboard::FEATURE);
+                pipe.peer_accepts_unchanged = features.iter().any(|name| name == core_protocol::clipboard::FEATURE_UNCHANGED);
                 pipe
             },
             pending_display: None,

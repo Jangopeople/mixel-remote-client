@@ -24,6 +24,24 @@ pub struct Settings {
     /// The e-mail address last used on the sign-in screen (the field is pre-filled with it; any other
     /// address can be typed). Not a secret.
     pub last_signin_email: String,
+    /// Every 9-digit Connection ID this technician connected to, newest first (at most 50).
+    pub recent_connections: Vec<u32>,
+}
+
+impl Settings {
+    /// Puts `id` first in the recent connections; true when the list changed.
+    pub fn remember_connection(&mut self, id: u32) -> bool {
+        if !(100_000_000..=999_999_999).contains(&id) {
+            return false;
+        }
+        if self.recent_connections.first() == Some(&id) {
+            return false;
+        }
+        self.recent_connections.retain(|known| *known != id);
+        self.recent_connections.insert(0, id);
+        self.recent_connections.truncate(50);
+        true
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

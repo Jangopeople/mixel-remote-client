@@ -276,6 +276,39 @@ impl Ui {
                 }),
             );
         }
+        if let Some(peer) = state.save_for
+            && state.note_for.is_none()
+        {
+            app.state.borrow_mut().save_for = None;
+            let (name, company, user) = {
+                let device = state.devices.devices.iter().find(|device| device.connection_id == peer);
+                let meta = state.devices.meta.get(&peer);
+                let name = device.map(|device| device.name.clone()).unwrap_or_default();
+                let company = meta
+                    .and_then(|meta| meta.group_name.clone())
+                    .or_else(|| state.company.data.tenant().map(|tenant| tenant.name.clone()))
+                    .unwrap_or_default();
+                let user = meta
+                    .and_then(|meta| meta.note.as_deref())
+                    .and_then(|note| note.split("User: ").nth(1))
+                    .map(|text| text.trim().to_owned())
+                    .unwrap_or_default();
+                (name, company, user)
+            };
+            let a = app.clone();
+            dialogs::form(
+                &self.window,
+                &t("Save this device for next time?"),
+                &tf("Session with %@ ended. Fill in the Device Name, Company, and User to save this computer to your Devices list.", &[&crate::format::remote_id(Some(peer))]),
+                &[(&t("Device name *"), name.as_str()), (&t("Company *"), company.as_str()), (&t("User *"), user.as_str())],
+                &t("Save device"),
+                false,
+                Rc::new(move |values| {
+                    let a = a.clone();
+                    Box::pin(async move { a.save_connected_device(peer, values[0].clone(), values[1].clone(), values[2].clone()).await })
+                }),
+            );
+        }
         // The app's own shortcuts go to the remote computer while its screen is in front.
         let viewing = state.focus.is_some() && state.remote.viewing() && (state.workspace.is_in_window(state.remote.peer.unwrap_or(0)) || matches!(state.workspace.selected, Tab::Session(_)));
         if viewing != self.session_keys.get() {

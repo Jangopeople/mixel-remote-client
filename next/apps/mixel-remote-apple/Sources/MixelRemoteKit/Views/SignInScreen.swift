@@ -219,8 +219,78 @@ struct SignInScreen: View {
     }
 }
 
+/// Card shown on macOS before displaying this computer's 9-digit Connection ID whenever Screen Recording
+/// or Accessibility / Input Control permissions are still missing.
+public struct MacPermissionsRequiredCard: View {
+    @ObservedObject var host: HostModel
+
+    public init(host: HostModel) {
+        self.host = host
+    }
+
+    public var body: some View {
+        Card {
+            HStack {
+                CardTitle(L("Allow macOS permissions first"), symbol: "hand.raised.shield.fill")
+                Spacer()
+                StatusBadge(.attention, L("Action required"))
+            }
+            Text(verbatim: L("Grant Screen Recording and Accessibility in macOS so your connection ID appears and the technician can see and control your Mac immediately."))
+                .foregroundStyle(.secondary).font(.callout)
+            VStack(spacing: 10) {
+                permissionRow(
+                    granted: host.screenAccess,
+                    title: L("1. Screen Recording"),
+                    detail: L("Lets the technician see your screen"),
+                    buttonTitle: L("Grant Screen Recording…"),
+                    action: { host.requestScreenAccess() }
+                )
+                permissionRow(
+                    granted: host.inputAccess,
+                    title: L("2. Accessibility (Keyboard & Mouse)"),
+                    detail: L("Lets the technician move the pointer and type"),
+                    buttonTitle: L("Grant Accessibility…"),
+                    action: { host.requestInputAccess() }
+                )
+            }
+            HStack(spacing: 8) {
+                Image(systemName: "info.circle").foregroundStyle(Theme.brand)
+                Text(verbatim: L("Your 9-digit connection ID will appear automatically as soon as both permissions are switched on."))
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button(L("Check again")) {
+                    Task { await host.checkPermissions(promptIfMissing: true) }
+                }
+            }
+        }
+    }
+
+    private func permissionRow(granted: Bool, title: String, detail: String, buttonTitle: String, action: @escaping () -> Void) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: granted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                .font(.title3)
+                .foregroundStyle(granted ? Theme.success : Theme.warning)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: title).font(.callout.weight(.semibold))
+                Text(verbatim: detail).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if granted {
+                StatusBadge(.online, L("Allowed"))
+            } else {
+                Button(buttonTitle, action: action)
+                    .buttonStyle(PrimaryButtonStyle())
+            }
+        }
+        .padding(12)
+        .background(Theme.chrome, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(granted ? Theme.success.opacity(0.4) : Theme.warning.opacity(0.5), lineWidth: 1))
+    }
+}
+
 /// Short, clean Quick Support view matching the Main App design: displays this computer's 9-digit
-/// Connection ID immediately without requiring an account or administrator rights.
+/// Connection ID immediately without requiring an account or administrator rights, once macOS
+/// Screen Recording and Accessibility permissions are granted.
 public struct QuickSupportConsoleView: View {
     @ObservedObject var app: AppModel
     @ObservedObject var host: HostModel
@@ -257,38 +327,42 @@ public struct QuickSupportConsoleView: View {
                     if remote.phase == "active", remote.sharing {
                         HostedSessionCard(app: app, host: host)
                     }
-                    Card {
-                        HStack {
-                            CardTitle(L("Allow remote access"), symbol: "bolt.shield.fill")
-                            Spacer()
-                            StatusBadge(remote.host != nil ? .online : .attention,
-                                        remote.host != nil ? L("Online") : L("Connecting"))
-                        }
-                        Text(verbatim: L("Share this 9-digit ID with the person helping you. When they connect, you approve the connection on your screen."))
-                            .foregroundStyle(.secondary).font(.callout)
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(verbatim: L("Your connection ID")).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                            HStack(spacing: 14) {
-                                RemoteIdText(remote.host)
+                    if !host.permissionsReady {
+                        MacPermissionsRequiredCard(host: host)
+                    } else {
+                        Card {
+                            HStack {
+                                CardTitle(L("Allow remote access"), symbol: "bolt.shield.fill")
                                 Spacer()
-                                Button {
-                                    host.copyId()
-                                } label: {
-                                    Label(L("Copy ID"), systemImage: "doc.on.doc")
-                                }
-                                .buttonStyle(PrimaryButtonStyle())
-                                .disabled(remote.host == nil)
+                                StatusBadge(remote.host != nil ? .online : .attention,
+                                            remote.host != nil ? L("Online") : L("Connecting"))
                             }
-                            .padding(14)
-                            .background(Theme.chrome, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Theme.hairline, lineWidth: 1))
-                        }
-                        HStack(spacing: 8) {
-                            Image(systemName: "lock.shield").foregroundStyle(Theme.brand)
-                            Text(verbatim: L("Your approval is required for every connection")).font(.caption).foregroundStyle(.secondary)
-                            Spacer()
-                            if remote.host == nil {
-                                Button(L("Reconnect now")) { app.startQuickSupport(standalone: app.quickSupportStandalone) }
+                            Text(verbatim: L("Share this 9-digit ID with the person helping you. When they connect, you approve the connection on your screen."))
+                                .foregroundStyle(.secondary).font(.callout)
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(verbatim: L("Your connection ID")).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                                HStack(spacing: 14) {
+                                    RemoteIdText(remote.host)
+                                    Spacer()
+                                    Button {
+                                        host.copyId()
+                                    } label: {
+                                        Label(L("Copy ID"), systemImage: "doc.on.doc")
+                                    }
+                                    .buttonStyle(PrimaryButtonStyle())
+                                    .disabled(remote.host == nil)
+                                }
+                                .padding(14)
+                                .background(Theme.chrome, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Theme.hairline, lineWidth: 1))
+                            }
+                            HStack(spacing: 8) {
+                                Image(systemName: "lock.shield").foregroundStyle(Theme.brand)
+                                Text(verbatim: L("Your approval is required for every connection")).font(.caption).foregroundStyle(.secondary)
+                                Spacer()
+                                if remote.host == nil {
+                                    Button(L("Reconnect now")) { app.startQuickSupport(standalone: app.quickSupportStandalone) }
+                                }
                             }
                         }
                     }
@@ -302,6 +376,7 @@ public struct QuickSupportConsoleView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.page)
         .onAppear {
+            Task { await host.checkPermissions(promptIfMissing: true) }
             if remote.host == nil {
                 app.startQuickSupport(standalone: app.quickSupportStandalone)
             }

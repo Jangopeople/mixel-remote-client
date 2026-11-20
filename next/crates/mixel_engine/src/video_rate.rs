@@ -234,7 +234,12 @@ impl RateControl {
         if now.saturating_duration_since(last) >= SILENCE {
             return false;
         }
-        let window = self.limit * 0.6 * (self.base + QUEUE_ALLOWED).as_secs_f64() + 20_000.0;
+        let mut window = self.limit * 0.6 * (self.base + QUEUE_ALLOWED).as_secs_f64() + 20_000.0;
+        if self.queue <= QUEUE_LOW && self.base <= Duration::from_millis(30) {
+            // A low-latency link (LAN) with no queue: one 200 ms report interval must not stall
+            // 30 FPS pictures or a keyframe between reports.
+            window = window.max(250_000.0);
+        }
         self.in_flight() as f64 > window
     }
     /// Call regularly: decays the limit when the reports stopped.
@@ -291,7 +296,14 @@ impl RateControl {
         self.max_queue = self.max_queue.max(queue);
         if !report.interval.is_zero() && report.bytes > 0 {
             let rate = f64::from(report.bytes) / report.interval.as_secs_f64();
-            self.delivered = if self.delivered == 0.0 { rate } else { self.delivered * 0.7 + rate * 0.3 };
+            if self.delivered == 0.0 {
+                self.delivered = rate;
+            } else if rate >= self.delivered
+                || queue > QUEUE_LOW
+                || self.in_flight() as f64 > self.limit * 0.15
+            {
+                self.delivered = self.delivered * 0.7 + rate * 0.3;
+            }
         }
         let dt = now.saturating_duration_since(self.last_change).as_secs_f64().min(1.0);
         let since = |at: Option<Instant>| at.map_or(Duration::from_secs(3600), |at| now.saturating_duration_since(at));
@@ -621,6 +633,37 @@ mod tests {
             control.report(at, Report { seq, age: Duration::from_millis(100), interval: Duration::from_millis(600), bytes: 36_000, clock: None });
         }
         assert!(control.limit() < steady * 0.9, "a lasting queue cuts: {} vs {steady}", control.limit());
+    }
+
+    #[test]
+    fn a_still_screen_on_a_lan_keeps_the_limit_and_never_stalls_on_one_burst() {
+        // Mac to Mac on one LAN: 1 ms round trip. First a busy screen raises the limit, then the screen
+        // stays still (2 kB per report: the encoder has nothing to send) for 10 s. The idle rate must
+        // not drag the delivery estimate down, so a following burst is not cut to the floor and a
+        // 200 kB keyframe between two reports does not stop the pictures.
+        let t0 = Instant::now();
+        let mut control = RateControl::new(t0);
+        let mut at = t0;
+        let mut seq = 0u16;
+        for _ in 0..50 {
+            seq += 1;
+            control.sent(at, seq, 400_000);
+            at += Duration::from_millis(200);
+            control.report(at, Report { seq, age: Duration::from_millis(1), interval: Duration::from_millis(200), bytes: 400_000, clock: None });
+        }
+        let busy = control.limit();
+        assert!(busy >= 1_500_000.0, "a fast LAN reaches a high limit: {busy}");
+        for _ in 0..50 {
+            seq += 1;
+            control.sent(at, seq, 2_000);
+            at += Duration::from_millis(200);
+            control.report(at, Report { seq, age: Duration::from_millis(1), interval: Duration::from_millis(200), bytes: 2_000, clock: None });
+        }
+        assert!(control.limit() >= busy * 0.95, "a still screen keeps the limit: {} vs {busy}", control.limit());
+        assert!(control.delivered >= 1_000_000.0, "idle reports do not decay delivery: {}", control.delivered);
+        seq += 1;
+        control.sent(at, seq, 200_000);
+        assert!(!control.backlogged(at + Duration::from_millis(5)), "one keyframe between reports does not stall a LAN");
     }
 
     #[test]

@@ -111,16 +111,16 @@ internal sealed partial class MainWindow
         sidebarItems.Children.Add(NavRow(AppSection.Sessions, "", L("Sessions"), null, workspace.Tabs.Count, inConsole));
         if (app.Company.Tenant is not null) sidebarItems.Children.Add(NavRow(AppSection.Reports, "", L("Reports"), null, 0, inConsole));
         sidebarItems.Children.Add(NavRow(AppSection.Settings, "", L("Settings"), null, 0, inConsole));
-        if (app.SignedIn && devices.AllDevices.Count > 0)
+        if (app.SignedIn && (devices.AllDevices.Count > 0 || devices.RecentConnectionIds.Count > 0))
         {
             sidebarItems.Children.Add(SideHeading(L("Views")));
             sidebarItems.Children.Add(ViewRow(DeviceView.All, "", L("All devices"), devices.DevicesIn(DeviceView.All).Count));
             sidebarItems.Children.Add(ViewRow(DeviceView.Online, "", L("Online now"), devices.DevicesIn(DeviceView.Online).Count));
-            if (devices.Tenant is not null)
+            if (devices.Tenant is not null || devices.AdminAvailable)
             {
                 sidebarItems.Children.Add(ViewRow(DeviceView.Favorites, "", L("Favourites"), devices.DevicesIn(DeviceView.Favorites).Count));
-                sidebarItems.Children.Add(ViewRow(DeviceView.Recent, "", L("Recent"), devices.DevicesIn(DeviceView.Recent).Count));
             }
+            sidebarItems.Children.Add(ViewRow(DeviceView.Recent, "", L("Recent"), devices.DevicesIn(DeviceView.Recent).Count));
             var canCreate = devices.Deploys && devices.GroupsOn && devices.Writable;
             if (devices.GroupNames.Count > 0 || canCreate)
             {
@@ -271,12 +271,63 @@ internal sealed partial class MainWindow
     {
         var workspace = app.Workspace;
         notices.Children.Clear();
+        if (app.Devices.SavePromptFor is { } savePeer) notices.Children.Add(SaveDeviceNotice(savePeer));
         foreach (var peer in workspace.ReadyNotices)
         {
             if (workspace.Tab(peer) is { } tab) notices.Children.Add(ReadyNotice(tab));
         }
         if (workspace.Attempt is { } attempt) notices.Children.Add(AttemptPanel(attempt));
         if (app.Settings.UpdatePrompt is { } update) notices.Children.Add(UpdateNotice(update));
+    }
+
+    private UIElement SaveDeviceNotice(uint peer)
+    {
+        var devices = app.Devices;
+        var text = Ui.Column(2,
+            Ui.Text(L("Save this device for next time?"), bold: true, wrap: false),
+            Ui.Caption(L("Session with %@ ended. Save Device Name, Company, and User.", Format.RemoteId(peer))));
+        var save = Ui.Primary(L("Save device…"), () => _ = OpenSaveDeviceDialog(peer));
+        var dismiss = Ui.IconButton("", L("Dismiss"), () => devices.SavePromptFor = null);
+        dismiss.Style = null;
+        dismiss.Background = new SolidColorBrush(Colors.Transparent);
+        dismiss.BorderThickness = new Thickness(0);
+        var grid = new Grid { ColumnSpacing = 10 };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.Children.Add(text);
+        Grid.SetColumn(save, 1);
+        grid.Children.Add(save);
+        Grid.SetColumn(dismiss, 2);
+        grid.Children.Add(dismiss);
+        return Floating(grid, 12);
+    }
+
+    internal async Task OpenSaveDeviceDialog(uint peer)
+    {
+        if (root.XamlRoot is not { } xaml) return;
+        var devices = app.Devices;
+        devices.SavePromptFor = null;
+        var existing = devices.AllDevices.FirstOrDefault(d => d.ConnectionId == peer);
+        var admin = existing is not null ? devices.AdminOf(existing) : null;
+        var initialName = existing?.Name ?? devices.NameOf(peer);
+        var initialCompany = existing?.GroupName ?? admin?.GroupName ?? devices.Tenant?.Name ?? "";
+        var initialUser = "";
+        if (admin?.Note is { } note && note.IndexOf("User: ", StringComparison.Ordinal) is >= 0 and var idx)
+        {
+            initialUser = note[(idx + 6)..].Trim();
+        }
+        await Dialogs.Form(
+            xaml,
+            L("Save this device for next time?"),
+            L("Connection ID: %@", Format.RemoteId(peer)),
+            [
+                (L("Device name *"), initialName),
+                (L("Company *"), initialCompany),
+                (L("User *"), initialUser),
+            ],
+            L("Save device"),
+            async values => await devices.SaveConnectedDevice(peer, values[0], values[1], values[2]) ? null : devices.Error);
     }
 
     /// <summary>A newer version that would sign the person out is not installed in secret: say so, one click installs it.</summary>

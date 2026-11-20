@@ -220,15 +220,18 @@ public final class SessionModel: ObservableObject {
         clear()
         viewingSession = session
         let hardware = useHardwareDecoding
-        video = Task { [weak self] in
+        let engine = app.engine
+        video = Task.detached(priority: .userInitiated) { [weak self] in
             var sequence: UInt64 = 0
-            // H.264 is decoded here (VideoToolbox) when it works; otherwise the engine decodes.
+            // H.264 is decoded on this background worker (VideoToolbox) when it works; otherwise the engine decodes.
             var decoder: H264Decoder? = hardware ? H264Decoder() : nil
             while !Task.isCancelled {
                 guard let self else { return }
+                let stillViewing = await MainActor.run { self.viewingSession == session }
+                if !stillViewing { return }
                 do {
-                    let data = try await self.app.engine.nextVideo(session: session, compressed: decoder != nil)
-                    if Task.isCancelled || self.viewingSession != session { return }
+                    let data = try await engine.nextVideo(session: session, compressed: decoder != nil)
+                    if Task.isCancelled { return }
                     if data.isEmpty {
                         try? await Task.sleep(nanoseconds: 2_000_000)
                         continue
@@ -237,38 +240,50 @@ public final class SessionModel: ObservableObject {
                         guard let active = decoder else { continue }
                         do {
                             var latest = try active.decode(data)
-                            // Drain up to 4 already-queued compressed frames so any burst backlog collapses to 0 ms display lag.
-                            for _ in 0..<4 {
-                                let nextData = try await self.app.engine.nextVideo(session: session, compressed: true)
-                                if nextData.isEmpty || Task.isCancelled || self.viewingSession != session { break }
+                            var decodedCount = 1
+                            // Drain up to 3 already-queued compressed frames if the queue had a burst.
+                            for _ in 0..<3 {
+                                let nextData = try await engine.nextVideo(session: session, compressed: true)
+                                if nextData.isEmpty || Task.isCancelled { break }
                                 if VideoFrame.isCompressed(nextData) {
                                     latest = try active.decode(nextData)
+                                    decodedCount += 1
                                 }
                             }
                             sequence = 0
-                            self.decoding = .device
-                            self.show(latest)
+                            await MainActor.run {
+                                guard self.viewingSession == session else { return }
+                                self.decoding = .device
+                                self.show(latest, count: decodedCount)
+                            }
                         } catch H264Decoder.Problem.waitingForKeyframe {
                             continue
                         } catch {
                             // This device could not decode the stream: the engine decodes from now on.
                             decoder = nil
-                            self.decoding = .engine
+                            await MainActor.run {
+                                if self.viewingSession == session { self.decoding = .engine }
+                            }
                         }
                         continue
                     }
                     let decoded = try VideoFrame.decode(data, after: sequence)
                     sequence = decoded.sequence
-                    if decoder == nil { self.decoding = .engine }
-                    self.show(decoded)
+                    let isEngine = decoder == nil
+                    await MainActor.run {
+                        guard self.viewingSession == session else { return }
+                        if isEngine { self.decoding = .engine }
+                        self.show(decoded, count: 1)
+                    }
                 } catch is CancellationError {
                     return
                 } catch VideoFrame.Problem.compressed {
                     continue
                 } catch {
-                    if self.viewingSession == session {
+                    await MainActor.run {
+                        guard self.viewingSession == session else { return }
                         self.error = error is VideoFrame.Problem ? L("Invalid native video frame") : AppModel.message(error)
-                        try? await self.app.engine.perform("remote_close", ["session": session])
+                        Task { try? await self.app.engine.perform("remote_close", ["session": session]) }
                         self.clear()
                     }
                     return
@@ -277,14 +292,16 @@ public final class SessionModel: ObservableObject {
         }
     }
 
-    private func show(_ decoded: VideoFrame) {
+    private func show(_ decoded: VideoFrame, count: Int = 1) {
         let first = frame == nil
         frame = decoded.image
         if first { app.workspace.refresh() }
         let next = CGSize(width: decoded.width, height: decoded.height)
         if next != size { size = next }
         let now = Date()
-        shownTimes.append(now)
+        for _ in 0..<max(1, count) {
+            shownTimes.append(now)
+        }
         shownTimes.removeAll { now.timeIntervalSince($0) > 1 }
         if fps != shownTimes.count { fps = shownTimes.count }
     }

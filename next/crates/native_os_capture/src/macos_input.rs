@@ -39,7 +39,9 @@ impl MacInjector {
     /// Call only from an explicit local user's permission action. macOS owns
     /// the approval dialog; this does not grant or bypass the OS permission.
     pub fn request_post_access() -> bool {
-        CGRequestPostEventAccess()
+        let post = CGRequestPostEventAccess();
+        let ax = crate::macos_guard::accessibility_request();
+        post || ax
     }
     pub fn desktop() -> Result<Self, InjectionError> {
         if !CGPreflightPostEventAccess() {

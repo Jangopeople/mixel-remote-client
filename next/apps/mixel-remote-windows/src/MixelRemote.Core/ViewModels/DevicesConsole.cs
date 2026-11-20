@@ -84,14 +84,18 @@ public sealed partial class DevicesModel
         {
             DeviceViewKind.Online => [.. all.Where(device => IsOnline(device) || InSessionWithThis(device))],
             DeviceViewKind.Favorites => [.. all.Where(device => Favorites.Contains(device.DeviceId))],
-            DeviceViewKind.Recent => [.. Recent.Select(row => all.FirstOrDefault(device => device.DeviceId == row.DeviceId)).OfType<Device>()],
-            DeviceViewKind.Group => [.. all.Where(device => (device.GroupName ?? "") == wanted.Group)],
+            DeviceViewKind.Recent => [.. RecentConnectionIds
+                .Select(connId => all.FirstOrDefault(device => device.ConnectionId == connId))
+                .Concat(Recent.Select(row => all.FirstOrDefault(device => device.DeviceId == row.DeviceId)))
+                .OfType<Device>()
+                .DistinctBy(device => device.ConnectionId)],
+            DeviceViewKind.Group => [.. all.Where(device => (device.GroupName ?? AdminOf(device)?.GroupName ?? "") == wanted.Group)],
             _ => [.. all],
         };
     }
 
     /// <summary>The groups of the listed devices by name, with their counts.</summary>
-    public IReadOnlyList<string> GroupNames => [.. AllDevices.Select(device => device.GroupName).OfType<string>().Where(name => name.Length > 0)
+    public IReadOnlyList<string> GroupNames => [.. AllDevices.Select(device => device.GroupName ?? AdminOf(device)?.GroupName).OfType<string>().Where(name => name.Length > 0)
         .Distinct().OrderBy(name => name, StringComparer.Create(Translator.Shared.Culture, CompareOptions.IgnoreCase | CompareOptions.NumericOrdering))];
 
     /// <summary>The devices of the current view after the filters.</summary>

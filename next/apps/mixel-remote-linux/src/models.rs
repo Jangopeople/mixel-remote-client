@@ -836,6 +836,8 @@ pub struct AdminDevice {
     pub unattended_default: Option<bool>,
     pub unattended_setting: Option<String>,
     pub note: Option<String>,
+    pub group_name: Option<String>,
+    pub company_name: Option<String>,
     pub can_admin: bool,
     pub last_seen: Option<String>,
     pub updated_at: Option<String>,

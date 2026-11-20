@@ -193,7 +193,7 @@ internal sealed partial class MainWindow : Window
     {
         if (change.PropertyName is nameof(AppModel.Section) or nameof(AppModel.Remote) or nameof(AppModel.Account) or nameof(AppModel.Progress) or nameof(AppModel.Error)
             or nameof(AppModel.Busy) or nameof(AppModel.QuickSupportMode) or nameof(WorkspaceModel.Tabs) or nameof(WorkspaceModel.Selected) or nameof(WorkspaceModel.Attempt)
-            or nameof(WorkspaceModel.ReadyNotices) or nameof(WorkspaceModel.Windows) or nameof(DevicesModel.Devices) or nameof(DevicesModel.View)) Refresh();
+            or nameof(WorkspaceModel.ReadyNotices) or nameof(WorkspaceModel.Windows) or nameof(DevicesModel.Devices) or nameof(DevicesModel.View) or nameof(DevicesModel.SavePromptFor)) Refresh();
     }
 
     /// <summary>Settings > Appearance: System, Light or Dark.</summary>

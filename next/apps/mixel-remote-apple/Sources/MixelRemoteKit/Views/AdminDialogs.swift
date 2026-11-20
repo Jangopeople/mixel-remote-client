@@ -145,6 +145,134 @@ struct RemoveDeviceDialog: View {
         }) { EmptyView() }
     }
 }
+
+/// Shown after a technician's remote session ends: asks if the technician wants to save this device
+/// for next time, requiring Device Name, Company, and User.
+struct SaveConnectedDeviceDialog: View {
+    @ObservedObject var app: AppModel
+    @ObservedObject var model: DevicesModel
+    let connectionId: UInt32
+    @Environment(\.dismiss) private var dismiss
+    @State private var deviceName: String = ""
+    @State private var companyName: String = ""
+    @State private var userName: String = ""
+    @State private var selectedClientId: String?
+    @State private var companies: [EnrollmentModel.EnrollmentCompany] = []
+    @State private var working = false
+    @State private var error = ""
+
+    private var cleanDevice: String { deviceName.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var cleanCompany: String { companyName.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var cleanUser: String { userName.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var valid: Bool { !cleanDevice.isEmpty && !cleanCompany.isEmpty && !cleanUser.isEmpty }
+
+    var body: some View {
+        ConsoleDialog(
+            title: L("Save this device for next time?"),
+            symbol: "externaldrive.badge.checkmark",
+            text: L("Session with %@ ended. Fill in the Device Name, Company, and User to save this computer to your Devices list.", Format.remoteId(connectionId)),
+            confirm: L("Save device"),
+            enabled: valid,
+            error: error,
+            working: working,
+            cancel: { dismiss() },
+            submit: {
+                working = true
+                Task {
+                    if await model.saveConnectedDevice(
+                        connectionId: connectionId,
+                        deviceName: String(cleanDevice.prefix(60)),
+                        companyName: String(cleanCompany.prefix(60)),
+                        userName: String(cleanUser.prefix(80)),
+                        targetClient: selectedClientId
+                    ) {
+                        dismiss()
+                    } else {
+                        error = model.error
+                    }
+                    working = false
+                }
+            }
+        ) {
+            VStack(alignment: .leading, spacing: 10) {
+                FieldRow(L("Connection ID")) {
+                    Text(verbatim: Format.remoteId(connectionId))
+                        .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                        .padding(.vertical, 4)
+                }
+                FieldRow(L("Device name *")) {
+                    TextField(text: $deviceName, prompt: Text(verbatim: L("e.g. Reception MacBook Pro"))) { Text(verbatim: L("Device name")) }
+                        .textFieldStyle(.roundedBorder)
+                }
+                FieldRow(L("Company *")) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if !companies.isEmpty {
+                            Picker(selection: Binding(
+                                get: { selectedClientId },
+                                set: { nextId in
+                                    selectedClientId = nextId
+                                    if let nextId, let found = companies.first(where: { $0.clientId == nextId }) {
+                                        companyName = found.clientName
+                                    }
+                                }
+                            )) {
+                                Text(verbatim: L("Choose a company or type below…")).tag(String?.none)
+                                ForEach(companies) { company in
+                                    Text(verbatim: company.clientName).tag(Optional(company.clientId))
+                                }
+                            } label: { EmptyView() }
+                            .labelsHidden()
+                        } else if !model.groups.isEmpty {
+                            Picker(selection: Binding(
+                                get: { companyName },
+                                set: { if !$0.isEmpty { companyName = $0 } }
+                            )) {
+                                Text(verbatim: L("Choose a company/group or type below…")).tag("")
+                                ForEach(model.groups) { group in
+                                    Text(verbatim: group.name).tag(group.name)
+                                }
+                            } label: { EmptyView() }
+                            .labelsHidden()
+                        }
+                        TextField(text: $companyName, prompt: Text(verbatim: L("Company name"))) { Text(verbatim: L("Company")) }
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
+                FieldRow(L("User *")) {
+                    TextField(text: $userName, prompt: Text(verbatim: L("e.g. Jane Doe"))) { Text(verbatim: L("User")) }
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+        }
+        .task {
+            let existing = model.allDevices.first { $0.connectionId == connectionId }
+            let admin = existing.flatMap { model.adminRow($0) }
+            if let existingName = existing?.name, !existingName.isEmpty, existingName != Format.remoteId(connectionId) {
+                deviceName = existingName
+            } else {
+                deviceName = model.name(of: connectionId)
+            }
+            if let grp = existing?.groupName ?? admin?.groupName, !grp.isEmpty {
+                companyName = grp
+            } else if let comp = admin?.companyName, !comp.isEmpty, comp != "Mixel IT and Corporate Services (Remote devices)" {
+                companyName = comp
+            } else if let tenantName = model.tenant?.name, !tenantName.isEmpty {
+                companyName = tenantName
+            }
+            if let note = admin?.note, let range = note.range(of: "User: ") {
+                userName = String(note[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if app.account.account?.staff == true {
+                if let loaded: [EnrollmentModel.EnrollmentCompany] = try? await app.engine.run("enrollment_companies") {
+                    companies = loaded
+                    if let match = loaded.first(where: { $0.clientName.caseInsensitiveCompare(companyName) == .orderedSame }) {
+                        selectedClientId = match.clientId
+                    }
+                }
+            }
+        }
+    }
+}
 #endif
 
 /// "Unattended access, Who may connect…": the company's technicians with a switch each (owners and administrators only).

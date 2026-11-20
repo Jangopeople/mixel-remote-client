@@ -24,6 +24,11 @@ public final class DevicesModel: ObservableObject {
     /// Favorites (device ids) and the devices of the person's own recent sessions, newest first.
     @Published public private(set) var favorites: Set<String> = []
     @Published public private(set) var recent: [String] = []
+    /// All 9-digit Connection IDs the technician connected to from this computer, newest first.
+    @Published public private(set) var recentConnectionIds: [UInt32] = []
+    /// Set when a remote session ends so the technician is prompted to save the device (Device Name, Company, User).
+    @Published public var savePromptFor: UInt32?
+    private var activeSessionPeers: Set<UInt32> = []
     private var checked: Set<UInt32> = []
     private var cursors: [UInt32?] = [nil]
     private var nextCursor: UInt32?
@@ -32,8 +37,54 @@ public final class DevicesModel: ObservableObject {
     private var prewarmOn = false
     private var prewarmSent = Date.distantPast
     static let pageSize = 50
+    static let recentConnectionsKey = "mixel.remote.recentConnections.v1"
 
-    init(app: AppModel) { self.app = app }
+    init(app: AppModel) {
+        self.app = app
+        self.recentConnectionIds = Self.loadRecentConnectionIds()
+    }
+
+    private static func loadRecentConnectionIds() -> [UInt32] {
+        let saved = UserDefaults.standard.array(forKey: recentConnectionsKey) as? [NSNumber] ?? []
+        return saved.map(\.uint32Value).filter { (100_000_000...999_999_999).contains($0) }
+    }
+
+    public func recordConnection(_ connectionId: UInt32) {
+        guard (100_000_000...999_999_999).contains(connectionId), connectionId != app.remote.host else { return }
+        var list = recentConnectionIds.filter { $0 != connectionId }
+        list.insert(connectionId, at: 0)
+        if list.count > 50 { list = Array(list.prefix(50)) }
+        if list != recentConnectionIds {
+            recentConnectionIds = list
+            UserDefaults.standard.set(list.map(NSNumber.init), forKey: Self.recentConnectionsKey)
+        }
+    }
+
+    /// Saves a connected device after a session with its required Device Name, Company, and User.
+    public func saveConnectedDevice(connectionId: UInt32, deviceName: String, companyName: String, userName: String, targetClient: String? = nil) async -> Bool {
+        let cleanName = deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanCompany = companyName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanUser = userName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanName.isEmpty else { error = L("Enter the device name."); return false }
+        guard !cleanCompany.isEmpty else { error = L("Enter the company name."); return false }
+        guard !cleanUser.isEmpty else { error = L("Enter the user name."); return false }
+        error = ""
+        do {
+            try await app.engine.perform("save_connected_device", [
+                "connection_id": connectionId,
+                "device_name": cleanName,
+                "company_name": cleanCompany,
+                "user_name": cleanUser,
+                "target_client": targetClient
+            ])
+            recordConnection(connectionId)
+            await load(page: 0)
+            return true
+        } catch {
+            self.error = AppModel.message(error)
+            return false
+        }
+    }
 
     // MARK: Device administration (docs/mixel-remote-device-admin-api.md)
 
@@ -262,14 +313,27 @@ public final class DevicesModel: ObservableObject {
         case .all: return all
         case .online: return all.filter { isOnline($0) || app.workspace.state(of: $0.connectionId) != nil }
         case .favorites: return all.filter { favorites.contains($0.device) }
-        case .recent: return recent.compactMap { id in all.first { $0.device == id } }
-        case .group(let name): return all.filter { ($0.groupName ?? "") == name }
+        case .recent:
+            var seen = Set<UInt32>()
+            var result: [Device] = []
+            for connId in recentConnectionIds {
+                if let match = all.first(where: { $0.connectionId == connId }), seen.insert(match.connectionId).inserted {
+                    result.append(match)
+                }
+            }
+            for devId in recent {
+                if let match = all.first(where: { $0.device == devId }), seen.insert(match.connectionId).inserted {
+                    result.append(match)
+                }
+            }
+            return result
+        case .group(let name): return all.filter { ($0.groupName ?? adminRow($0)?.groupName ?? "") == name }
         }
     }
 
     /// The groups of the listed devices, by name ("" = no group), with their counts.
     public var groupNames: [String] {
-        Array(Set(allDevices.compactMap(\.groupName))).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        Array(Set(allDevices.compactMap { $0.groupName ?? adminRow($0)?.groupName })).filter { !$0.isEmpty }.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
     public var filtered: [Device] {
@@ -282,7 +346,8 @@ public final class DevicesModel: ObservableObject {
             if text.isEmpty { return true }
             if note(of: device).lowercased().contains(text) { return true }
             if device.name.lowercased().contains(text) { return true }
-            if let group = device.groupName, group.lowercased().contains(text) { return true }
+            if let group = device.groupName ?? adminRow(device)?.groupName, group.lowercased().contains(text) { return true }
+            if let companyName = adminRow(device)?.companyName, companyName.lowercased().contains(text) { return true }
             if !digits.isEmpty, digits.count == text.filter({ !$0.isWhitespace }).count, String(device.connectionId).contains(digits) { return true }
             return false
         }
@@ -303,7 +368,7 @@ public final class DevicesModel: ObservableObject {
     /// The table: grouped by group (no group last), each sorted by status, then name.
     public var rowGroups: [RowGroup] {
         let rows = filtered
-        let byGroup = Dictionary(grouping: rows) { $0.groupName ?? "" }
+        let byGroup = Dictionary(grouping: rows) { $0.groupName ?? adminRow($0)?.groupName ?? "" }
         let names = byGroup.keys.sorted { a, b in
             if a.isEmpty != b.isEmpty { return !a.isEmpty }
             return a.localizedStandardCompare(b) == .orderedAscending
@@ -332,12 +397,12 @@ public final class DevicesModel: ObservableObject {
 
     /// Shown above all devices on the first page without a search: favorites, then recent ones.
     public var favoriteDevices: [Device] {
-        guard tenant != nil, page == 0, search.isEmpty else { return [] }
-        return companyAll.filter { favorites.contains($0.device) }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        guard page == 0, search.isEmpty else { return [] }
+        return allDevices.filter { favorites.contains($0.device) }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
     public var recentDevices: [Device] {
-        guard tenant != nil, page == 0, search.isEmpty else { return [] }
-        return recent.filter { !favorites.contains($0) }.compactMap { id in companyAll.first { $0.device == id } }.prefix(5).map { $0 }
+        guard page == 0, search.isEmpty else { return [] }
+        return devices(in: .recent).filter { !favorites.contains($0.device) }.prefix(5).map { $0 }
     }
 
     public func isFavorite(_ device: Device) -> Bool { favorites.contains(device.device) }
@@ -406,9 +471,37 @@ public final class DevicesModel: ObservableObject {
 
     func statusChanged(from previous: RemoteStatus, to next: RemoteStatus) {
         let before = Dictionary(previous.viewerSessions.compactMap { item in item.peer.map { ($0, item) } }, uniquingKeysWith: { first, _ in first })
-        for item in next.viewerSessions where item.phase == "active" && !item.hostMacs.isEmpty {
+        var currentActive = Set<UInt32>()
+        var newlyActivated = false
+        for item in next.viewerSessions where item.phase == "active" {
             guard let peer = item.peer else { continue }
-            if before[peer]?.hostMacs != item.hostMacs || before[peer]?.phase != "active" { remember(macs: item.hostMacs, of: peer) }
+            currentActive.insert(peer)
+            if !activeSessionPeers.contains(peer) {
+                recordConnection(peer)
+                if !allDevices.contains(where: { $0.connectionId == peer }) {
+                    newlyActivated = true
+                }
+            }
+            if !item.hostMacs.isEmpty, before[peer]?.hostMacs != item.hostMacs || before[peer]?.phase != "active" {
+                remember(macs: item.hostMacs, of: peer)
+            }
+        }
+        // Detect any active technician session that has now ended (not reconnecting).
+        let stillListed = Set(next.viewerSessions.filter { $0.phase != "closing" }.compactMap(\.peer))
+        for endedPeer in activeSessionPeers where !stillListed.contains(endedPeer) {
+            recordConnection(endedPeer)
+            newlyActivated = true
+            let peerToSave = endedPeer
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                if self.savePromptFor == nil {
+                    self.savePromptFor = peerToSave
+                }
+            }
+        }
+        activeSessionPeers = currentActive
+        if newlyActivated, app.signedIn, !loading {
+            Task { await load(page: page) }
         }
         if next.connected, !previous.connected { lastPresence = .distantPast }
         if next.connected { Task { await checkPresence() } }

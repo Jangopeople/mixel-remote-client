@@ -18,6 +18,7 @@ unsafe extern "C" {
     fn mixel_draw_show(shapes: *const f64, count: usize, alpha: f64);
     fn mixel_draw_close();
     fn mixel_accessibility_trusted() -> bool;
+    fn mixel_accessibility_request() -> bool;
     fn mixel_block_start() -> i32;
     fn mixel_block_stop();
     fn mixel_block_active() -> bool;
@@ -107,6 +108,12 @@ pub fn draw_close() {
 pub fn accessibility_trusted() -> bool {
     // SAFETY: no arguments; reads the permission state.
     unsafe { mixel_accessibility_trusted() }
+}
+
+/// Prompts macOS to open the Accessibility permission dialog for this app if not yet trusted.
+pub fn accessibility_request() -> bool {
+    // SAFETY: no arguments; invokes AXIsProcessTrustedWithOptions with prompt=YES.
+    unsafe { mixel_accessibility_request() }
 }
 
 #[derive(Debug, PartialEq, Eq)]

@@ -27,6 +27,8 @@ public struct AdminDevice: Codable, Equatable, Sendable, Identifiable {
     public var updatedAt: String?
     /// The caller may rename, move, note, switch unattended access and remove this device.
     public var canAdmin: Bool?
+    /// The ISM company (or SaaS tenant client) the device belongs to.
+    public var companyName: String? = nil
     public var id: String { deviceId }
 
     public init(deviceId: String, connectionId: UInt32, name: String, os: String, groupName: String? = nil, note: String? = nil, favorite: Bool? = nil,

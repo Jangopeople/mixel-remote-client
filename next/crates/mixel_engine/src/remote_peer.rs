@@ -1841,11 +1841,10 @@ async fn host_media(
                 .try_send(EncodeRequest {
                     frame,
                     timestamp: started.elapsed().as_micros() as u64,
-                    // One complete picture to start with and one every 60 pictures. The snapshot's
-                    // six in a row at the start (and at 30 and 90) cost a slow link its first seconds
-                    // and were there for a picture the encoder left out, which is now sent again
-                    // (`encode_again`).
-                    keyframe: force_keyframe || sent.is_multiple_of(60),
+                    // One complete picture to start with and one every 300 pictures (10 s at 30 FPS).
+                    // Lost packets trigger an immediate explicit keyframe request via `force_keyframe`,
+                    // and pictures left out by the encoder are retried via `encode_again`.
+                    keyframe: force_keyframe || sent.is_multiple_of(300),
                     reply,
                 })
                 .map_err(|_| "Screen video encoder stopped")?;

@@ -221,6 +221,8 @@ pub struct State {
     pub raw: RemoteStatus,
     /// After a controlled session with a company device: offer a session note for this Remote ID.
     pub note_for: Option<u32>,
+    /// After any technician session ended: offer to save the device (Device Name, Company, User).
+    pub save_for: Option<u32>,
     /// Devices connected with a one-time password (their session views warn about it) or as unattended.
     pub password_peers: BTreeSet<u32>,
     pub unattended_peers: BTreeSet<u32>,
@@ -1056,6 +1058,7 @@ impl App {
     /// The table's rows as the filters read them.
     pub fn console_rows(&self, state: &State) -> Vec<view::Row> {
         let latest = state.devices.meta.values().filter_map(|meta| meta.app_version.as_deref()).chain(std::iter::once(self.info.version.as_str())).fold("", |best, version| if view::version_older(best, version) { version } else { best }).to_owned();
+        let connections = self.recent_connections();
         state
             .devices
             .devices
@@ -1063,14 +1066,18 @@ impl App {
             .map(|device| {
                 let presence = state.presence(device);
                 let meta = state.devices.meta.get(&device.connection_id);
+                let recent = connections
+                    .iter()
+                    .position(|id| *id == device.connection_id)
+                    .or_else(|| state.devices.recent.iter().position(|id| *id == device.device).map(|index| index + connections.len()));
                 view::Row {
                     id: device.connection_id,
                     name: device.name.clone(),
                     os: device.os.clone(),
                     online: matches!(presence, Presence::Online | Presence::This),
                     favourite: state.devices.favorites.contains(&device.device),
-                    recent: state.devices.recent.iter().position(|id| *id == device.device),
-                    group: device.group_id.clone(),
+                    recent,
+                    group: device.group_id.clone().or_else(|| meta.and_then(|meta| meta.group_name.clone())),
                     unattended: meta.is_some_and(crate::models::AdminDevice::unattended_on),
                     update: meta.and_then(|meta| meta.app_version.as_deref()).is_some_and(|version| view::version_older(version, &latest)),
                     note: meta.and_then(|meta| meta.note.clone()).unwrap_or_default(),
@@ -2262,6 +2269,15 @@ impl App {
         if old.control && old.phase == "active" && company_device {
             self.edit(|state| state.note_for = Some(peer));
         }
+        if old.phase == "active" && !followed {
+            self.remember_connection(peer);
+            self.edit(|state| {
+                if state.save_for.is_none() {
+                    state.save_for = Some(peer);
+                }
+            });
+            self.reload_devices();
+        }
         if !followed {
             self.edit(|state| {
                 state.password_peers.remove(&peer);
@@ -2270,7 +2286,48 @@ impl App {
         }
     }
 
+    /// Records a Connection ID in this technician's recent connections.
+    pub fn remember_connection(self: &Rc<Self>, id: u32) {
+        if self.state.borrow().remote.host == Some(id) {
+            return;
+        }
+        let mut store = self.store.borrow_mut();
+        if store.settings.remember_connection(id) {
+            store.save();
+        }
+    }
+
+    /// The recent connections, newest first.
+    pub fn recent_connections(&self) -> Vec<u32> {
+        self.store.borrow().settings.recent_connections.clone()
+    }
+
+    /// Saves a connected device with its Device Name, Company and User (all required).
+    pub async fn save_connected_device(self: &Rc<Self>, id: u32, name: String, company: String, user: String) -> Result<(), String> {
+        let (name, company, user) = (name.trim().to_owned(), company.trim().to_owned(), user.trim().to_owned());
+        if name.is_empty() {
+            return Err(t("Enter the device name."));
+        }
+        if company.is_empty() {
+            return Err(t("Enter the company name."));
+        }
+        if user.is_empty() {
+            return Err(t("Enter the user name."));
+        }
+        self.perform("save_connected_device", json!({ "connection_id": id, "device_name": name, "company_name": company, "user_name": user, "target_client": Value::Null }))
+            .await
+            .map_err(|error| i18n::engine(&error))?;
+        self.remember_connection(id);
+        self.load_devices(0).await;
+        Ok(())
+    }
+
     fn session_seen(self: &Rc<Self>, item: &SessionItem) {
+        if item.phase == "active"
+            && let Some(peer) = item.peer
+        {
+            self.remember_connection(peer);
+        }
         let (start_video, stop_video, tools) = {
             let mut state = self.state.borrow_mut();
             let locally_stopped = item.consent.is_some() && state.session_state(&item.id).is_some_and(|session| item.consent == session.stopped_consent);

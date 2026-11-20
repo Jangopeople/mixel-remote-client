@@ -459,7 +459,11 @@ struct DeviceTableRow: View {
 
     private func subline(_ presence: DevicesModel.Presence) -> String {
         var parts = [Format.os(device.os)]
-        if model.listView == .all || model.listView == .online || model.listView == .favorites || model.listView == .recent, let group = device.groupName { parts.append(group) }
+        if model.listView == .all || model.listView == .online || model.listView == .favorites || model.listView == .recent, let group = device.groupName ?? model.adminRow(device)?.groupName, !group.isEmpty {
+            parts.append(group)
+        } else if let companyName = model.adminRow(device)?.companyName, !companyName.isEmpty, model.tenant == nil {
+            parts.append(companyName)
+        }
         if presence == .this { parts.append(L("This computer")) }
         let note = model.note(of: device)
         if !note.isEmpty { parts.append(note) }
@@ -746,6 +750,43 @@ struct SessionsPage: View {
                 .padding(14)
                 .background(Theme.page, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.hairline))
+            }
+            if !app.devices.recentConnectionIds.isEmpty {
+                Divider().padding(.vertical, 6)
+                Text(verbatim: L("Recent connections")).font(.system(size: 16, weight: .semibold))
+                ScrollView {
+                    VStack(spacing: 8) {
+                        ForEach(app.devices.recentConnectionIds, id: \.self) { connId in
+                            let known = app.devices.allDevices.first { $0.connectionId == connId }
+                            let admin = known.flatMap { app.devices.adminRow($0) }
+                            HStack(spacing: 12) {
+                                OSTile(os: known?.os ?? "macos", dot: known.map { app.devices.isOnline($0) ? Theme.success : Color.secondary }, size: 32)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(verbatim: known?.name ?? Format.remoteId(connId)).font(.system(size: 13, weight: .semibold))
+                                    HStack(spacing: 6) {
+                                        Text(verbatim: Format.remoteId(connId)).font(.system(size: 12, design: .monospaced))
+                                        if let group = known?.groupName ?? admin?.groupName ?? admin?.companyName, !group.isEmpty {
+                                            Text(verbatim: "· \(group)")
+                                        }
+                                        if let note = admin?.note, !note.isEmpty {
+                                            Text(verbatim: "· \(note)")
+                                        }
+                                    }
+                                    .font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Button(L("Save device…")) { app.devices.savePromptFor = connId }
+                                Button(L("Connect")) {
+                                    workspace.connect(peer: connId, name: known?.name, os: known?.os ?? "", unattended: known != nil, checkPhone: known == nil)
+                                }
+                                .buttonStyle(PrimaryButtonStyle())
+                            }
+                            .padding(12)
+                            .background(Theme.page, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Theme.hairline))
+                        }
+                    }
+                }
             }
             Spacer()
         }

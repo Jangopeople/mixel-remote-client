@@ -15,6 +15,7 @@ public final class HostModel: ObservableObject {
     @Published public var allowChat = false
     @Published public var allowRecording = false
     @Published public private(set) var screenAccess = true
+    @Published public private(set) var inputAccess = true
     @Published public var error = ""
     // Unattended access.
     @Published public private(set) var unattendedSources: [CaptureTarget] = []
@@ -24,21 +25,56 @@ public final class HostModel: ObservableObject {
 
     private static let unattendedKey = "mixel.remote.unattended.v1"
     private var restoring = false
+    private var lastPermissionCheck = Date.distantPast
+    private var promptedOnStart = false
 
     init(app: AppModel) { self.app = app }
 
     public var remote: RemoteStatus { app.remote }
+    /// Whether macOS has granted both Screen Recording and Accessibility / Input Control permissions.
+    public var permissionsReady: Bool { screenAccess && inputAccess }
     /// A technician asks to connect and this person decides.
     public var asking: Bool { remote.phase == "incoming" && !remote.unattendedSession }
     public var selected: CaptureTarget? { sources.first { $0.id == source } }
     public var canAccept: Bool { asking && !app.busy && screenAccess && selected?.fullDisplay == true }
-    public var controlAvailable: Bool { asking && (selected?.fullDisplay ?? false) && remote.inputAccess }
+    public var controlAvailable: Bool { asking && (selected?.fullDisplay ?? false) && inputAccess }
+
+    /// Polls macOS Screen Recording and Accessibility permissions; when `promptIfMissing` is true,
+    /// immediately triggers the native macOS permission dialogs so the user grants them before sharing their ID.
+    public func checkPermissions(promptIfMissing: Bool = false) async {
+        guard !app.isPhone, !(app.engine is MockEngine), !remote.controllerOnly else {
+            screenAccess = true
+            inputAccess = true
+            return
+        }
+        lastPermissionCheck = Date()
+        let screen = (try? await app.engine.run("screen_access", as: Bool.self)) ?? true
+        let input = remote.inputAccess
+        if screen != screenAccess { screenAccess = screen }
+        if input != inputAccess { inputAccess = input }
+        if promptIfMissing, !promptedOnStart {
+            promptedOnStart = true
+            if !screen {
+                _ = try? await app.engine.run("request_screen_access", as: Bool.self)
+            }
+            if !input {
+                _ = try? await app.engine.run("request_input_access", as: Bool.self)
+            }
+            let nextScreen = (try? await app.engine.run("screen_access", as: Bool.self)) ?? screen
+            if nextScreen != screenAccess { screenAccess = nextScreen }
+        }
+    }
 
     func statusChanged(from previous: RemoteStatus, to next: RemoteStatus) {
+        if !(app.engine is MockEngine), !app.isPhone, !next.controllerOnly {
+            if next.inputAccess != inputAccess { inputAccess = next.inputAccess }
+            if Date().timeIntervalSince(lastPermissionCheck) >= 1.5 {
+                Task { await checkPermissions(promptIfMissing: false) }
+            }
+        }
         if asking, !next.controllerOnly, previous.phase != "incoming" || previous.session != next.session {
             sources = []
             source = ""
-            screenAccess = true
             error = ""
             allowControl = true
             allowChat = false; allowRecording = false; allowFiles = false; allowClipboard = true
@@ -72,14 +108,25 @@ public final class HostModel: ObservableObject {
     }
 
     public func requestScreenAccess() {
-        app.act {
-            _ = try await self.app.engine.run("request_screen_access", as: Bool.self)
-            await self.loadSources()
+        Task {
+            _ = try? await self.app.engine.run("request_screen_access", as: Bool.self)
+            await self.checkPermissions(promptIfMissing: false)
+            if self.asking { await self.loadSources() }
+            if !self.screenAccess, let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                self.app.openURL(url)
+            }
         }
     }
 
     public func requestInputAccess() {
-        app.act { _ = try await self.app.engine.run("request_input_access", as: Bool.self) }
+        Task {
+            _ = try? await self.app.engine.run("request_input_access", as: Bool.self)
+            await self.app.refreshRemote()
+            await self.checkPermissions(promptIfMissing: false)
+            if !self.inputAccess, let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                self.app.openURL(url)
+            }
+        }
     }
 
     // MARK: During a hosted session

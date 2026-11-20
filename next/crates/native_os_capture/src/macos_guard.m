@@ -319,6 +319,11 @@ bool mixel_accessibility_trusted(void) {
     return AXIsProcessTrusted();
 }
 
+bool mixel_accessibility_request(void) {
+    NSDictionary *options = @{(__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES};
+    return AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options);
+}
+
 // 0: blocking, 1: the Accessibility permission is missing, 2: macOS refused the event tap.
 int32_t mixel_block_start(void) {
     pthread_mutex_lock(&tap_lock);
