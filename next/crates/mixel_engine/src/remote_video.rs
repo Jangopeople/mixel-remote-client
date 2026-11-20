@@ -19,6 +19,10 @@ impl VideoPacket {
         self
     }
     /// The sequence number every packet carries at bytes 16..24 ("MRF2" and "MRH1").
+    fn raw_sequence(&self) -> Option<u64> {
+        let field = self.bytes.get(16..24)?;
+        Some(u64::from_le_bytes(field.try_into().ok()?))
+    }
     fn renumber(&mut self, offset: u64) -> Option<u64> {
         let field = self.bytes.get_mut(16..24)?;
         let sequence = u64::from_le_bytes(field.try_into().ok()?).checked_add(offset)?;
@@ -153,6 +157,15 @@ impl VideoMailbox {
             }
             None if packet.transport == packet.session => slot.publisher = Some(packet.transport),
             _ => return Err("This video session has stopped".into()),
+        }
+        // Early-video -> main-video handover (or decoder switch) runs on the same transport with a
+        // fresh 1-based counter; bump `offset` so sequence numbers delivered to the UI stay strictly
+        // increasing instead of tripping out-of-order validation and closing the session.
+        if packet
+            .raw_sequence()
+            .is_some_and(|raw| raw.saturating_add(slot.offset) <= slot.last_sequence)
+        {
+            slot.offset = slot.last_sequence;
         }
         slot.last_sequence = packet.renumber(slot.offset).ok_or("Video sequence exhausted")?;
         Ok(())
@@ -349,5 +362,24 @@ mod handover_tests {
         assert_eq!(sequence(&mailbox.take(next).unwrap()), 1);
         mailbox.clear();
         assert!(mailbox.expect_successor(next, renewed).is_err());
+    }
+
+    #[test]
+    fn same_transport_counter_restart_keeps_sequences_monotonic() {
+        let mailbox = VideoMailbox::default();
+        let session = Uuid::from_u128(42);
+        mailbox.activate(session).unwrap();
+        // Early-video loop delivers frames 1, 2 on the session's transport.
+        mailbox.publish(picture(session, session, 1)).unwrap();
+        assert_eq!(sequence(&mailbox.take(session).unwrap()), 1);
+        mailbox.publish(picture(session, session, 2)).unwrap();
+        assert_eq!(sequence(&mailbox.take(session).unwrap()), 2);
+        // Main video loop starts on the same transport with a fresh 1-based counter.
+        mailbox.publish(picture(session, session, 1)).unwrap();
+        assert_eq!(sequence(&mailbox.take(session).unwrap()), 3);
+        mailbox.publish(picture(session, session, 2)).unwrap();
+        assert_eq!(sequence(&mailbox.take(session).unwrap()), 4);
+        mailbox.publish(picture(session, session, 3)).unwrap();
+        assert_eq!(sequence(&mailbox.take(session).unwrap()), 5);
     }
 }
