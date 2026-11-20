@@ -54,7 +54,7 @@ pub struct DevicesState {
     pub meta: HashMap<u32, AdminDevice>,
     cursors: Vec<Option<u32>>,
     next_cursor: Option<u32>,
-    company_all: Vec<Device>,
+    pub(crate) company_all: Vec<Device>,
     last_presence: f64,
 }
 
