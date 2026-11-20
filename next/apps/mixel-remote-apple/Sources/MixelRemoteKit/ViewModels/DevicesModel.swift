@@ -487,15 +487,19 @@ public final class DevicesModel: ObservableObject {
             }
         }
         // Detect any active technician session that has now ended (not reconnecting).
+        // Only offer to save devices that are NOT already in the technician's Devices list.
         let stillListed = Set(next.viewerSessions.filter { $0.phase != "closing" }.compactMap(\.peer))
         for endedPeer in activeSessionPeers where !stillListed.contains(endedPeer) {
             recordConnection(endedPeer)
-            newlyActivated = true
-            let peerToSave = endedPeer
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                if self.savePromptFor == nil {
-                    self.savePromptFor = peerToSave
+            let alreadySaved = allDevices.contains(where: { $0.connectionId == endedPeer })
+            if !alreadySaved {
+                newlyActivated = true
+                let peerToSave = endedPeer
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    if self.savePromptFor == nil && !self.allDevices.contains(where: { $0.connectionId == peerToSave }) {
+                        self.savePromptFor = peerToSave
+                    }
                 }
             }
         }

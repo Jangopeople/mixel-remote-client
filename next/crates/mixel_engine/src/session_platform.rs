@@ -98,10 +98,37 @@ pub fn capture_access() -> bool {
     }
 }
 
+#[cfg(target_os = "macos")]
+static INPUT_ACCESS_CACHE: std::sync::Mutex<Option<(bool, std::time::Instant)>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(target_os = "macos")]
+pub fn invalidate_input_access_cache() {
+    if let Ok(mut guard) = INPUT_ACCESS_CACHE.lock() {
+        *guard = None;
+    }
+}
+
 pub fn input_access() -> bool {
     #[cfg(target_os = "macos")]
     {
-        native_os_capture::macos_input::MacInjector::post_access()
+        if let Ok(guard) = INPUT_ACCESS_CACHE.lock()
+            && let Some((granted, checked_at)) = *guard
+        {
+            let ttl = if granted {
+                std::time::Duration::from_secs(30)
+            } else {
+                std::time::Duration::from_secs(2)
+            };
+            if checked_at.elapsed() < ttl {
+                return granted;
+            }
+        }
+        let granted = native_os_capture::macos_input::MacInjector::post_access();
+        if let Ok(mut guard) = INPUT_ACCESS_CACHE.lock() {
+            *guard = Some((granted, std::time::Instant::now()));
+        }
+        granted
     }
     #[cfg(not(target_os = "macos"))]
     {

@@ -68,7 +68,8 @@ public final class HostModel: ObservableObject {
     func statusChanged(from previous: RemoteStatus, to next: RemoteStatus) {
         if !(app.engine is MockEngine), !app.isPhone, !next.controllerOnly {
             if next.inputAccess != inputAccess { inputAccess = next.inputAccess }
-            if Date().timeIntervalSince(lastPermissionCheck) >= 1.5 {
+            let interval: TimeInterval = permissionsReady ? 30.0 : 1.5
+            if Date().timeIntervalSince(lastPermissionCheck) >= interval {
                 Task { await checkPermissions(promptIfMissing: false) }
             }
         }

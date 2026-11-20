@@ -275,8 +275,12 @@ public sealed partial class DevicesModel : Observable
         foreach (var endedPeer in activeSessionPeers.Where(peer => !stillListed.Contains(peer)))
         {
             RecordConnection(endedPeer);
-            newlyActivated = true;
-            if (SavePromptFor is null) SavePromptFor = endedPeer;
+            var alreadySaved = AllDevices.Any(device => device.ConnectionId == endedPeer);
+            if (!alreadySaved)
+            {
+                newlyActivated = true;
+                if (SavePromptFor is null) SavePromptFor = endedPeer;
+            }
         }
         activeSessionPeers.Clear();
         foreach (var peer in currentActive) activeSessionPeers.Add(peer);

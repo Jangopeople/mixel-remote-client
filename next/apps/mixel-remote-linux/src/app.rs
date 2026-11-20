@@ -2271,12 +2271,15 @@ impl App {
         }
         if old.phase == "active" && !followed {
             self.remember_connection(peer);
-            self.edit(|state| {
-                if state.save_for.is_none() {
-                    state.save_for = Some(peer);
-                }
-            });
-            self.reload_devices();
+            let already_saved = self.state.borrow().devices.devices.iter().any(|device| device.connection_id == peer);
+            if !already_saved {
+                self.edit(|state| {
+                    if state.save_for.is_none() {
+                        state.save_for = Some(peer);
+                    }
+                });
+                self.reload_devices();
+            }
         }
         if !followed {
             self.edit(|state| {

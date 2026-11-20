@@ -8,7 +8,7 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 NEXT=$(cd "$HERE/../.." && pwd)
 PLATFORMS=("$@"); [ ${#PLATFORMS[@]} -eq 0 ] && PLATFORMS=(macos ios)
-export MIXEL_ENGINE_APP_VERSION=${MIXEL_ENGINE_APP_VERSION:-2.1.8}
+export MIXEL_ENGINE_APP_VERSION=${MIXEL_ENGINE_APP_VERSION:-2.1.9}
 export MACOSX_DEPLOYMENT_TARGET=13.0 IPHONEOS_DEPLOYMENT_TARGET=16.0
 PROFILE=${PROFILE:-release}
 JOBS=${JOBS:-4}

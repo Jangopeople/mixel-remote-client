@@ -18,7 +18,8 @@ public struct RootView: View {
     }
 
     /// Signed out: the sign-in screen takes the whole window (Settings stay reachable from it).
-    private var showsSignIn: Bool { app.accountChecked && !app.signedIn && app.section != .settings }
+    /// Do not flash the sign-in screen while restoring a saved session ("verifying").
+    private var showsSignIn: Bool { app.accountChecked && !app.signedIn && app.account.phase != "verifying" && app.section != .settings }
 
     public var body: some View {
         Group {
@@ -26,8 +27,15 @@ public struct RootView: View {
                 QuickSupportConsoleView(app: app)
             } else if showsSignIn {
                 SignInScreen(app: app)
-            } else if !app.accountChecked {
-                Theme.page
+            } else if !app.accountChecked || (!app.signedIn && app.account.phase == "verifying") {
+                VStack(spacing: 12) {
+                    ProgressView().controlSize(.regular)
+                    Text(verbatim: L("Signing in…"))
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.muted)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Theme.page)
             } else {
                 shell
             }

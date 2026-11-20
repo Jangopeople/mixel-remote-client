@@ -159,8 +159,7 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
     match command {
         // ---- Account ----
         "account_status" => {
-            let restore = auth.clone();
-            tokio::spawn(async move { restore.restore().await });
+            auth.restore().await;
             out(auth.status().await)
         }
         "startup_settings" => {
@@ -1189,10 +1188,18 @@ async fn platform(context: &Context, command: &str, args: &Args) -> Result<Strin
                 .await
                 .map_err(|_| "Screen-recording permission request failed")?)
         }
-        "screen_access" => out(native_os_capture::macos::screen_access()),
+        "screen_access" => out(
+            tokio::task::spawn_blocking(native_os_capture::macos::screen_access)
+                .await
+                .unwrap_or(false),
+        ),
         "request_input_access" => {
             service_config::require_host()?;
-            out(native_os_capture::macos_input::MacInjector::request_post_access())
+            let granted = tokio::task::spawn_blocking(native_os_capture::macos_input::MacInjector::request_post_access)
+                .await
+                .unwrap_or(false);
+            crate::session_platform::invalidate_input_access_cache();
+            out(granted)
         }
         "copy_connection_id" => {
             service_config::require_host()?;

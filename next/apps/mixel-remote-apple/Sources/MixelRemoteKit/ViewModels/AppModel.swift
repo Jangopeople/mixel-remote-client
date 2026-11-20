@@ -154,7 +154,7 @@ public final class AppModel: ObservableObject {
     }
 
     func tick() async {
-        let accountEvery: TimeInterval = account.signingIn || account.phase == "mfa_required" ? 1 : 10
+        let accountEvery: TimeInterval = account.phase == "verifying" ? 0.25 : (account.signingIn || account.phase == "mfa_required" ? 1 : 10)
         if Date().timeIntervalSince(lastAccountRead) >= accountEvery { await refreshAccount() }
         await refreshRemote()
         if checksForUpdates { await settings.periodicUpdateCheck() }
