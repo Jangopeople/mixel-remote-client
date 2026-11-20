@@ -104,7 +104,7 @@ struct HostedBanner: View {
             Text(verbatim: L("A technician is connected to this computer.")).font(.callout.weight(.semibold))
             Spacer()
             Button(L("Show")) { app.section = .remote }
-            Button(L("End session")) { app.session.end() }.buttonStyle(.borderedProminent).tint(Theme.brand)
+            Button(L("End session")) { app.host.stopSharing() }.buttonStyle(.borderedProminent).tint(Theme.brand)
         }
         .padding(.horizontal, 20).padding(.vertical, 9)
         .background(Theme.activeRow)
@@ -531,7 +531,7 @@ public struct MenuBarContent: View {
         Text(verbatim: remote.connected ? L("Online · ID %@", Format.remoteId(remote.host)) : L("Offline"))
         if remote.inSession {
             Text(verbatim: app.connectionMessage)
-            Button(L("End session")) { app.session.end() }
+            Button(L("End session")) { if remote.sharing { app.host.stopSharing() } else { app.session.end() } }
         }
         Divider()
         Button(L("Open Mixel Remote")) { open() }.keyboardShortcut("o")

@@ -157,7 +157,7 @@ public final class HostModel: ObservableObject {
     }
 
     /// The helped person ends the session.
-    public func stopSharing() { app.session.end() }
+    public func stopSharing() { app.idleSession.end() }
 
     // MARK: Unattended access, one-time password, pairing
 

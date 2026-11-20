@@ -243,11 +243,17 @@ public final class SessionModel: ObservableObject {
                             var decodedCount = 1
                             // Drain up to 3 already-queued compressed frames if the queue had a burst.
                             for _ in 0..<3 {
-                                let nextData = try await engine.nextVideo(session: session, compressed: true)
+                                let nextData = (try? await engine.nextVideo(session: session, compressed: true)) ?? Data()
                                 if nextData.isEmpty || Task.isCancelled { break }
                                 if VideoFrame.isCompressed(nextData) {
-                                    latest = try active.decode(nextData)
-                                    decodedCount += 1
+                                    do {
+                                        latest = try active.decode(nextData)
+                                        decodedCount += 1
+                                    } catch {
+                                        break
+                                    }
+                                } else {
+                                    break
                                 }
                             }
                             sequence = 0
@@ -328,10 +334,9 @@ public final class SessionModel: ObservableObject {
                 inputQueue.remove(at: idx)
                 inputQueue.append(event)
             } else {
-                inputQueue.removeAll()
-                error = L("Input delivery stalled; the session has been stopped")
-                Task { try? await app.engine.perform("remote_close", ["session": session]) }
-                return
+                // Drop oldest queued event rather than terminating the session on key-repeat bursts.
+                inputQueue.removeFirst()
+                inputQueue.append(event)
             }
         } else {
             inputQueue.append(event)

@@ -236,6 +236,13 @@ struct SaveConnectedDeviceDialog: View {
                         }
                         TextField(text: $companyName, prompt: Text(verbatim: L("Company name"))) { Text(verbatim: L("Company")) }
                             .textFieldStyle(.roundedBorder)
+                            .onChange(of: companyName) { next in
+                                if let sel = selectedClientId,
+                                   let found = companies.first(where: { $0.clientId == sel }),
+                                   found.clientName != next {
+                                    selectedClientId = nil
+                                }
+                            }
                     }
                 }
                 FieldRow(L("User *")) {
@@ -250,7 +257,7 @@ struct SaveConnectedDeviceDialog: View {
             if let existingName = existing?.name, !existingName.isEmpty, existingName != Format.remoteId(connectionId) {
                 deviceName = existingName
             } else {
-                deviceName = model.name(of: connectionId)
+                deviceName = ""
             }
             if let grp = existing?.groupName ?? admin?.groupName, !grp.isEmpty {
                 companyName = grp

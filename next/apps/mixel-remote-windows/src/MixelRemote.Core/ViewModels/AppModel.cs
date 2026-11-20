@@ -63,6 +63,7 @@ public sealed class AppModel : Observable
     /// The session that is in front (the focused one), else the oldest; the model without a session when none is viewed
     /// (it also carries the hosted side). Screens of one session use <see cref="SessionFor"/>.
     /// </summary>
+    public SessionModel IdleSession => idle;
     public SessionModel Session => (Workspace.Focused is { } focused ? SessionFor(focused) : null) ?? Sessions.FirstOrDefault() ?? idle;
     /// <summary>After a session to a company computer: the computer the technician may add a note to (Remote ID).</summary>
     public uint? NoteFor { get; internal set; }
@@ -144,7 +145,9 @@ public sealed class AppModel : Observable
 
     public async Task Tick()
     {
-        var every = Account.SigningIn || Account.Phase == "mfa_required" ? TimeSpan.FromSeconds(1) : TimeSpan.FromSeconds(10);
+        var every = Account.Phase == "verifying"
+            ? TimeSpan.FromMilliseconds(250)
+            : (Account.SigningIn || Account.Phase == "mfa_required" ? TimeSpan.FromSeconds(1) : TimeSpan.FromSeconds(10));
         if (DateTimeOffset.UtcNow - lastAccountRead >= every) await RefreshAccount();
         await RefreshRemote();
     }

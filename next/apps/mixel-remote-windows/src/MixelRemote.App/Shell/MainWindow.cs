@@ -288,7 +288,7 @@ internal sealed partial class MainWindow : Window
         hosted.Background = Ui.Brush("MixelActiveRow");
         hosted.BorderBrush = Ui.Brush("MixelHairline");
         var message = Ui.Row(10, Ui.Icon("\uE95A", 16, Ui.BrandBrush), Ui.Text(L("A technician is connected to this computer."), bold: true, wrap: false));
-        hosted.Child = Ui.Split(message, Ui.Row(8, Ui.Plain(L("Show"), () => ShowSection(AppSection.Remote)), Ui.Primary(L("End session"), () => _ = app.Session.End())));
+        hosted.Child = Ui.Split(message, Ui.Row(8, Ui.Plain(L("Show"), () => ShowSection(AppSection.Remote)), Ui.Primary(L("End session"), () => _ = app.IdleSession.End())));
         AutomationProperties.SetName(hosted, L("A technician is connected to this computer."));
         AutomationProperties.SetLiveSetting(hosted, Microsoft.UI.Xaml.Automation.Peers.AutomationLiveSetting.Polite);
     }

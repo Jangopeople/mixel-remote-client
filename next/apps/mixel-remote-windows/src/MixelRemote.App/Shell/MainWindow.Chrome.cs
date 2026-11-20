@@ -310,7 +310,7 @@ internal sealed partial class MainWindow
         devices.SavePromptFor = null;
         var existing = devices.AllDevices.FirstOrDefault(d => d.ConnectionId == peer);
         var admin = existing is not null ? devices.AdminOf(existing) : null;
-        var initialName = existing?.Name ?? devices.NameOf(peer);
+        var initialName = existing?.Name is { Length: > 0 } n && n != Format.RemoteId(peer) ? n : "";
         var initialCompany = existing?.GroupName ?? admin?.GroupName ?? devices.Tenant?.Name ?? "";
         var initialUser = "";
         if (admin?.Note is { } note && note.IndexOf("User: ", StringComparison.Ordinal) is >= 0 and var idx)
@@ -338,7 +338,7 @@ internal sealed partial class MainWindow
             Ui.Text(L("Update available"), bold: true, wrap: false),
             Ui.Caption(L("Version %@ is ready. Installing restarts the app and signs you out.", update.Version)));
         var now = Ui.Primary(L("Update now"), () => _ = settings.InstallUpdate());
-        var later = Ui.IconButton("", L("Dismiss"), settings.DismissUpdatePrompt);
+        var later = Ui.IconButton("\uE711", L("Dismiss"), settings.DismissUpdatePrompt);
         later.Style = null;
         later.Background = new SolidColorBrush(Colors.Transparent);
         later.BorderThickness = new Thickness(0);

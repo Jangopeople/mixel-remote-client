@@ -542,7 +542,7 @@ impl App {
     async fn tick(self: &Rc<Self>) {
         let (every, last) = {
             let state = self.state.borrow();
-            (if state.account.signing_in() || state.account.phase == "mfa_required" { 1.0 } else { 10.0 }, state.last_account_read)
+            (if state.account.phase == "verifying" { 0.25 } else if state.account.signing_in() || state.account.phase == "mfa_required" { 1.0 } else { 10.0 }, state.last_account_read)
         };
         if clock() - last >= every || last == 0.0 {
             self.refresh_account().await;
@@ -2271,7 +2271,11 @@ impl App {
         }
         if old.phase == "active" && !followed {
             self.remember_connection(peer);
-            let already_saved = self.state.borrow().devices.devices.iter().any(|device| device.connection_id == peer);
+            let already_saved = {
+                let state = self.state.borrow();
+                state.devices.devices.iter().any(|device| device.connection_id == peer)
+                    || state.devices.company_all.iter().any(|device| device.connection_id == peer)
+            };
             if !already_saved {
                 self.edit(|state| {
                     if state.save_for.is_none() {

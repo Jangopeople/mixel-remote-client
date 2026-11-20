@@ -357,10 +357,9 @@ public sealed class SessionModel : Observable
             }
             else
             {
-                inputQueue.Clear();
-                Error = L("Input delivery stalled; the session has been stopped");
-                _ = app.Engine.PerformAsync("remote_close", ("session", session));
-                return;
+                // Drop oldest queued event rather than terminating the session on key-repeat bursts.
+                inputQueue.RemoveAt(0);
+                inputQueue.Add(input);
             }
         }
         else

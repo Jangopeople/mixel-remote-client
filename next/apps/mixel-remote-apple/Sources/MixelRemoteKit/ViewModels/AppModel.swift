@@ -135,6 +135,7 @@ public final class AppModel: ObservableObject {
         settings.applyAppearance()
         loop = Task { [weak self] in
             await self?.refreshAccount()
+            await self?.refreshRemote()
             await self?.settings.flushPendingRemoval()
             await self?.host.checkPermissions(promptIfMissing: true)
             while !Task.isCancelled {
@@ -387,11 +388,17 @@ public final class AppModel: ObservableObject {
         }
     }
 
+    private var quickSupportStarting = false
+
     public func startQuickSupport(standalone: Bool = false) {
         if standalone { quickSupportStandalone = true }
         quickSupportMode = true
         error = ""
+        guard !quickSupportStarting else { return }
+        quickSupportStarting = true
         Task {
+            defer { quickSupportStarting = false }
+            await refreshRemote()
             await host.checkPermissions(promptIfMissing: true)
             do {
                 let deviceName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName

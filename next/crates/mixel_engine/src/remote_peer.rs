@@ -332,10 +332,16 @@ pub fn start_warm(
     state.spawn_media(cancel, false, Uuid::new_v4(), false, move || {
         let Ok(runtime) = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build() else {
             thread_release.store(true, Ordering::Release);
+            if let Ok(config) = adopted.try_recv() {
+                own_media(config, None, None);
+            }
             return;
         };
         let Ok(parts) = runtime.block_on(async { tokio::time::timeout(Duration::from_secs(20), prepare_warm(servers, strict)).await }).map_err(|_| ()).and_then(|made| made.map_err(|_| ())) else {
             thread_release.store(true, Ordering::Release);
+            if let Ok(config) = adopted.try_recv() {
+                own_media(config, Some(runtime), None);
+            }
             return;
         };
         let started = Instant::now();
@@ -648,7 +654,11 @@ async fn negotiate(
             .find_map(|line| line.strip_prefix(FEATURES_PREFIX))
             .map(|list| {
                 list.split(',')
-                    .filter(|name| !name.is_empty() && name.len() <= 16 && name.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+                    .filter(|name| {
+                        !name.is_empty()
+                            && name.len() <= 16
+                            && name.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                    })
                     .take(16)
                     .map(str::to_owned)
                     .collect()

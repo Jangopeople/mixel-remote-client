@@ -69,8 +69,12 @@ struct MainWindow: View {
         RootView(app: app)
             .padding(.top, isFullScreen ? 28 : 0)
             .ignoresSafeArea(.container, edges: isFullScreen ? [] : .top)
-            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in isFullScreen = true }
-            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in isFullScreen = false }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { note in
+                if let win = note.object as? NSWindow, win.title == "Mixel Remote" { isFullScreen = true }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { note in
+                if let win = note.object as? NSWindow, win.title == "Mixel Remote" { isFullScreen = false }
+            }
             .onAppear {
                 isFullScreen = NSApp?.windows.contains(where: { $0.styleMask.contains(.fullScreen) }) ?? false
                 app.workspace.openWindow = { peer in openWindow(id: "session", value: peer) }
