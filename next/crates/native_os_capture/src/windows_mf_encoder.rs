@@ -6,7 +6,10 @@ use crate::{
     h264::{EncodeError, EncodedH264, MAX_ACCESS_UNIT, annex_b_to_avcc},
     stream::CapturedFrame,
 };
-use std::mem::ManuallyDrop;
+use std::{
+    mem::ManuallyDrop,
+    time::{Duration, Instant},
+};
 use windows::{
     Win32::{
         Foundation::RPC_E_CHANGED_MODE,
@@ -19,6 +22,13 @@ use windows::{
     core::Interface,
 };
 use zeroize::Zeroizing;
+
+/// Maximum wall-clock wait for an async hardware MFT to accept input or emit an encoded frame
+/// before falling back seamlessly to OpenH264 (prevents any GPU driver stall or deadlock).
+const MF_EVENT_WAIT_LIMIT: Duration = Duration::from_millis(200);
+/// Maximum consecutive input frames an async MFT may buffer without emitting output before
+/// falling back to OpenH264.
+const MAX_EMPTY_ASYNC_FRAMES: u32 = 8;
 
 fn pack_u64(hi: u32, lo: u32) -> u64 {
     (u64::from(hi) << 32) | u64::from(lo)
@@ -119,7 +129,23 @@ struct MfHardwareEncoder {
     nv12: Zeroizing<Vec<u8>>,
     damage: DamageTracker,
     needs_keyframe: bool,
+    priming: bool,
     pending_inputs: u32,
+    consecutive_empty: u32,
+}
+
+fn apply_low_latency_codec_api(api: &ICodecAPI, fps: u32, bitrate: u32) {
+    unsafe {
+        let _ = api.SetValue(&CODECAPI_AVLowLatencyMode, &VARIANT::from(true));
+        let _ = api.SetValue(
+            &CODECAPI_AVEncCommonRateControlMode,
+            &VARIANT::from(eAVEncCommonRateControlMode_LowDelayVBR.0 as u32),
+        );
+        let _ = api.SetValue(&CODECAPI_AVEncCommonMeanBitRate, &VARIANT::from(bitrate));
+        let _ = api.SetValue(&CODECAPI_AVEncMPVDefaultBPictureCount, &VARIANT::from(0u32));
+        let _ = api.SetValue(&CODECAPI_AVEncMPVGOPSize, &VARIANT::from(fps * 10));
+        let _ = api.SetValue(&CODECAPI_AVEncCommonQualityVsSpeed, &VARIANT::from(0u32));
+    }
 }
 
 impl MfHardwareEncoder {
@@ -204,6 +230,14 @@ impl MfHardwareEncoder {
                 }
             }
 
+            // Set low-latency ICodecAPI properties BEFORE SetOutputType/SetInputType:
+            // Intel QuickSync MFT reads AVLowLatencyMode during type negotiation to
+            // configure a 0-B-frame, 1-in-1-out pipeline instead of multi-frame lookahead.
+            let codec_api = transform.cast::<ICodecAPI>().ok();
+            if let Some(api) = &codec_api {
+                apply_low_latency_codec_api(api, fps, bitrate);
+            }
+
             // Configure H.264 output type first (required by Media Foundation encoders).
             let out_type = MFCreateMediaType().map_err(|_| EncodeError::HardwareUnavailable)?;
             out_type
@@ -251,17 +285,10 @@ impl MfHardwareEncoder {
                 .SetInputType(0, &in_type, 0)
                 .map_err(|_| EncodeError::HardwareUnavailable)?;
 
-            // Low-latency real-time tuning via ICodecAPI (best-effort per GPU driver).
-            let codec_api = transform.cast::<ICodecAPI>().ok();
+            // Re-apply ICodecAPI after media types for drivers (e.g. NVENC/AMF) that only
+            // accept rate-control properties once stream types are configured.
             if let Some(api) = &codec_api {
-                let _ = api.SetValue(&CODECAPI_AVLowLatencyMode, &VARIANT::from(true));
-                let _ = api.SetValue(
-                    &CODECAPI_AVEncCommonRateControlMode,
-                    &VARIANT::from(eAVEncCommonRateControlMode_LowDelayVBR.0 as u32),
-                );
-                let _ = api.SetValue(&CODECAPI_AVEncCommonMeanBitRate, &VARIANT::from(bitrate));
-                let _ = api.SetValue(&CODECAPI_AVEncMPVDefaultBPictureCount, &VARIANT::from(0u32));
-                let _ = api.SetValue(&CODECAPI_AVEncMPVGOPSize, &VARIANT::from(fps * 10));
+                apply_low_latency_codec_api(api, fps, bitrate);
             }
 
             let out_info = transform
@@ -293,7 +320,9 @@ impl MfHardwareEncoder {
                 nv12: Zeroizing::new(vec![0u8; width * height * 3 / 2]),
                 damage: DamageTracker::new(32).expect("fixed valid damage tile size"),
                 needs_keyframe: true,
+                priming: false,
                 pending_inputs: 0,
+                consecutive_empty: 0,
             })
         }
     }
@@ -327,62 +356,80 @@ impl MfHardwareEncoder {
 
     fn pull_output(&mut self) -> Result<Option<Zeroizing<Vec<u8>>>, EncodeError> {
         unsafe {
-            let prealloc = if self.provides_samples {
-                None
-            } else {
-                let sample = MFCreateSample().map_err(|_| EncodeError::Failed)?;
-                let buffer =
-                    MFCreateMemoryBuffer(self.min_output_bytes).map_err(|_| EncodeError::Failed)?;
-                sample
-                    .AddBuffer(&buffer)
-                    .map_err(|_| EncodeError::Failed)?;
-                Some(sample)
-            };
-            let mut output_buffers = [MFT_OUTPUT_DATA_BUFFER {
-                dwStreamID: 0,
-                pSample: ManuallyDrop::new(prealloc),
-                dwStatus: 0,
-                pEvents: ManuallyDrop::new(None),
-            }];
-            let mut status = 0u32;
-            let result = self
-                .transform
-                .ProcessOutput(0, &mut output_buffers, &mut status);
-            let sample = ManuallyDrop::into_inner(output_buffers[0].pSample.clone());
-            let _events = ManuallyDrop::into_inner(output_buffers[0].pEvents.clone());
+            for attempt in 0..2 {
+                let prealloc = if self.provides_samples {
+                    None
+                } else {
+                    let sample = MFCreateSample().map_err(|_| EncodeError::Failed)?;
+                    let buffer = MFCreateMemoryBuffer(self.min_output_bytes)
+                        .map_err(|_| EncodeError::Failed)?;
+                    sample
+                        .AddBuffer(&buffer)
+                        .map_err(|_| EncodeError::Failed)?;
+                    Some(sample)
+                };
+                let mut output_buffers = [MFT_OUTPUT_DATA_BUFFER {
+                    dwStreamID: 0,
+                    pSample: ManuallyDrop::new(prealloc),
+                    dwStatus: 0,
+                    pEvents: ManuallyDrop::new(None),
+                }];
+                let mut status = 0u32;
+                let result = self
+                    .transform
+                    .ProcessOutput(0, &mut output_buffers, &mut status);
+                // Take ownership directly without cloning so COM refcounts never leak.
+                let [buf] = output_buffers;
+                let sample = ManuallyDrop::into_inner(buf.pSample);
+                let _events = ManuallyDrop::into_inner(buf.pEvents);
 
-            match result {
-                Ok(()) => {
-                    let Some(sample) = sample else {
-                        return Ok(None);
-                    };
-                    let contiguous = sample
-                        .ConvertToContiguousBuffer()
-                        .map_err(|_| EncodeError::Failed)?;
-                    let mut ptr: *mut u8 = std::ptr::null_mut();
-                    let mut current_len = 0u32;
-                    contiguous
-                        .Lock(&mut ptr, None, Some(&mut current_len))
-                        .map_err(|_| EncodeError::Failed)?;
-                    if current_len == 0 || current_len as usize > MAX_ACCESS_UNIT || ptr.is_null() {
-                        let _ = contiguous.Unlock();
+                match result {
+                    Ok(()) => {
+                        let Some(sample) = sample else {
+                            return Ok(None);
+                        };
+                        let contiguous = sample
+                            .ConvertToContiguousBuffer()
+                            .map_err(|_| EncodeError::Failed)?;
+                        let mut ptr: *mut u8 = std::ptr::null_mut();
+                        let mut current_len = 0u32;
+                        contiguous
+                            .Lock(&mut ptr, None, Some(&mut current_len))
+                            .map_err(|_| EncodeError::Failed)?;
+                        if current_len == 0
+                            || current_len as usize > MAX_ACCESS_UNIT
+                            || ptr.is_null()
+                        {
+                            let _ = contiguous.Unlock();
+                            return Ok(None);
+                        }
+                        let slice = std::slice::from_raw_parts(ptr, current_len as usize);
+                        let bytes = Zeroizing::new(slice.to_vec());
+                        contiguous.Unlock().map_err(|_| EncodeError::Failed)?;
+                        return Ok(Some(bytes));
+                    }
+                    Err(error) if error.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => {
                         return Ok(None);
                     }
-                    let slice = std::slice::from_raw_parts(ptr, current_len as usize);
-                    let bytes = Zeroizing::new(slice.to_vec());
-                    contiguous.Unlock().map_err(|_| EncodeError::Failed)?;
-                    Ok(Some(bytes))
-                }
-                Err(error) if error.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => Ok(None),
-                Err(error) if error.code() == MF_E_TRANSFORM_STREAM_CHANGE => {
-                    // Refresh output media type after format negotiation.
-                    if let Ok(available) = self.transform.GetOutputAvailableType(0, 0) {
-                        let _ = self.transform.SetOutputType(0, &available, 0);
+                    Err(error) if error.code() == MF_E_TRANSFORM_STREAM_CHANGE && attempt == 0 => {
+                        // Refresh output media type and stream info after format negotiation, then retry.
+                        if let Ok(available) = self.transform.GetOutputAvailableType(0, 0) {
+                            let _ = self.transform.SetOutputType(0, &available, 0);
+                        }
+                        if let Ok(out_info) = self.transform.GetOutputStreamInfo(0) {
+                            self.provides_samples = (out_info.dwFlags
+                                & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 as u32
+                                    | MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES.0 as u32))
+                                != 0;
+                            self.min_output_bytes =
+                                out_info.cbSize.max((self.width * self.height) as u32);
+                        }
+                        continue;
                     }
-                    Ok(None)
+                    Err(_) => return Err(EncodeError::Failed),
                 }
-                Err(_) => Err(EncodeError::Failed),
             }
+            Ok(None)
         }
     }
 
@@ -393,7 +440,7 @@ impl MfHardwareEncoder {
         force: bool,
     ) -> Result<Option<EncodedH264>, EncodeError> {
         let force = force || self.needs_keyframe;
-        if !self.damage.has_changed(&frame.frame()) && !force {
+        if !self.damage.has_changed(&frame.frame()) && !force && !self.priming {
             return Ok(None);
         }
         bgra_to_nv12(frame, self.width, self.height, &mut self.nv12);
@@ -409,6 +456,8 @@ impl MfHardwareEncoder {
 
         let annex_b = if let Some(events) = self.events.clone() {
             // Asynchronous hardware MFT (Intel QSV / NVENC / AMD AMF).
+            // NEVER call blocking GetEvent(0): if the MFT requests another input frame before
+            // emitting output (pipeline priming), blocking GetEvent(0) deadlocks permanently.
             let mut fed = false;
             if self.pending_inputs > 0 {
                 self.pending_inputs -= 1;
@@ -420,37 +469,58 @@ impl MfHardwareEncoder {
                 fed = true;
             }
             let mut produced: Option<Zeroizing<Vec<u8>>> = None;
-            for _ in 0..32 {
-                let event = unsafe {
-                    events
-                        .GetEvent(MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(0))
-                        .map_err(|_| EncodeError::Failed)?
-                };
-                let kind = unsafe { event.GetType().map_err(|_| EncodeError::Failed)? };
-                if kind == METransformNeedInput.0 as u32 {
-                    if !fed {
-                        unsafe {
-                            self.transform
-                                .ProcessInput(0, &sample, 0)
-                                .map_err(|_| EncodeError::Failed)?;
-                        }
-                        fed = true;
-                    } else {
-                        self.pending_inputs += 1;
-                        if produced.is_some() {
-                            break;
+            let mut mft_requested_more_input = false;
+            let deadline = Instant::now() + MF_EVENT_WAIT_LIMIT;
+            loop {
+                match unsafe { events.GetEvent(MF_EVENT_FLAG_NO_WAIT) } {
+                    Ok(event) => {
+                        let kind = unsafe { event.GetType().map_err(|_| EncodeError::Failed)? };
+                        if kind == METransformNeedInput.0 as u32 {
+                            if !fed {
+                                unsafe {
+                                    self.transform
+                                        .ProcessInput(0, &sample, 0)
+                                        .map_err(|_| EncodeError::Failed)?;
+                                }
+                                fed = true;
+                            } else {
+                                self.pending_inputs += 1;
+                                mft_requested_more_input = true;
+                                if produced.is_some() {
+                                    break;
+                                }
+                            }
+                        } else if kind == METransformHaveOutput.0 as u32 {
+                            if let Some(bytes) = self.pull_output()? {
+                                produced = Some(bytes);
+                                if fed {
+                                    break;
+                                }
+                            }
+                        } else if kind == MEError.0 as u32 {
+                            return Err(EncodeError::Failed);
                         }
                     }
-                } else if kind == METransformHaveOutput.0 as u32 {
-                    if let Some(bytes) = self.pull_output()? {
-                        produced = Some(bytes);
-                        if fed {
+                    Err(error) if error.code() == MF_E_NO_EVENTS_AVAILABLE => {
+                        if produced.is_some() && fed {
                             break;
                         }
+                        // MFT already accepted our frame AND asked for another input frame,
+                        // and no output event is queued yet: return Ok(None) immediately so
+                        // the caller feeds the next frame instead of stalling.
+                        if fed && mft_requested_more_input {
+                            break;
+                        }
+                        if Instant::now() >= deadline {
+                            return Err(EncodeError::Failed);
+                        }
+                        std::thread::sleep(Duration::from_millis(1));
                     }
-                } else if kind == MEError.0 as u32 {
-                    return Err(EncodeError::Failed);
+                    Err(_) => return Err(EncodeError::Failed),
                 }
+            }
+            if !fed {
+                return Err(EncodeError::Failed);
             }
             produced
         } else {
@@ -464,8 +534,15 @@ impl MfHardwareEncoder {
         };
 
         let Some(annex_b) = annex_b else {
+            self.priming = true;
+            self.consecutive_empty += 1;
+            if self.consecutive_empty >= MAX_EMPTY_ASYNC_FRAMES {
+                return Err(EncodeError::Failed);
+            }
             return Ok(None);
         };
+        self.priming = false;
+        self.consecutive_empty = 0;
         let parsed = annex_b_to_avcc(&annex_b)?;
         self.needs_keyframe =
             force && !(parsed.keyframe && parsed.sps.is_some() && parsed.pps.is_some());
@@ -525,7 +602,7 @@ impl WindowsScreenH264Encoder {
 
     pub fn left_out(&self) -> bool {
         match &self.backend {
-            Backend::Hardware(_) => false,
+            Backend::Hardware(hw) => hw.priming,
             Backend::Software(sw) => sw.left_out(),
         }
     }
