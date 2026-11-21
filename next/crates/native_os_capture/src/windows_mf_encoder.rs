@@ -607,6 +607,28 @@ impl WindowsScreenH264Encoder {
         }
     }
 
+    /// Updates the target bitrate in-place via Media Foundation `ICodecAPI` without tearing down
+    /// the hardware MFT or forcing a large IDR keyframe. Returns `true` if applied in-place.
+    pub fn set_bitrate(&mut self, bitrate: u32) -> bool {
+        if !(100_000..=12_000_000).contains(&bitrate) {
+            return false;
+        }
+        self.bitrate = bitrate;
+        match &mut self.backend {
+            Backend::Hardware(hw) => {
+                if let Some(api) = &hw.codec_api {
+                    unsafe {
+                        api.SetValue(&CODECAPI_AVEncCommonMeanBitRate, &VARIANT::from(bitrate))
+                            .is_ok()
+                    }
+                } else {
+                    false
+                }
+            }
+            Backend::Software(_) => false,
+        }
+    }
+
     pub fn encode(
         &mut self,
         frame: &CapturedFrame,

@@ -48,7 +48,7 @@ pub const QUEUE_ALLOWED: Duration = Duration::from_millis(300);
 const HOLD_FACTOR: f64 = 1.5;
 /// ...and is allowed a quarter more after this long without a queue.
 pub const PROBE_EVERY: Duration = Duration::from_secs(8);
-pub const MIN_LIMIT: f64 = 125_000.0;
+pub const MIN_LIMIT: f64 = 35_000.0;
 pub const START_LIMIT: f64 = 500_000.0;
 pub const MAX_LIMIT: f64 = 12_000_000.0;
 const HISTORY: usize = 8192;
@@ -236,12 +236,13 @@ impl RateControl {
         }
         let mut window = self.limit * 0.6 * (self.base + QUEUE_ALLOWED).as_secs_f64() + 20_000.0;
         if self.queue <= QUEUE_LOW {
-            // A clean link (no queue): a single 1080p keyframe or burst between reports must not
-            // stall the capture loop (250 kB on LAN, 150 kB on WAN).
+            // A clean link (no queue): a single keyframe or burst between reports must not
+            // stall the capture loop (250 kB on LAN; scaled 45–150 kB on WAN so sub-Mbps
+            // intercontinental links never build multi-second bufferbloat).
             window = window.max(if self.base <= Duration::from_millis(30) {
                 250_000.0
             } else {
-                150_000.0
+                (self.limit * 0.6).clamp(45_000.0, 150_000.0)
             });
         }
         self.in_flight() as f64 > window

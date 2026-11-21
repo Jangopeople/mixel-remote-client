@@ -34,8 +34,9 @@ use std::time::{Duration, Instant};
 pub const START_RATE: f64 = 500_000.0;
 /// The fastest pace (96 Mbit/s): a megabyte takes 83 ms, 150 kB go out at once.
 pub const MAX_RATE: f64 = 12_000_000.0;
-/// The slowest pace (1 Mbit/s). A connection slower than this cannot carry the picture stream.
-pub const MIN_RATE: f64 = 125_000.0;
+/// The slowest pace (280 kbit/s) so sub-Mbps intercontinental/mobile links can converge cleanly
+/// without overdriving ISP queues.
+pub const MIN_RATE: f64 = 35_000.0;
 /// What may leave in one go: this much time's worth of the rate (and never less than two packets).
 pub const BURST: Duration = Duration::from_millis(20);
 const MIN_BURST: f64 = 2_500.0;
@@ -263,14 +264,18 @@ mod tests {
     #[test]
     fn an_ordinary_picture_leaves_at_once() {
         // Between two complete pictures come small ones (a few kilobytes): never held back,
-        // at the starting pace, at the fastest and at the slowest.
+        // at the starting pace, at the fastest and at the slowest (with frame pacing matching rate).
         let mut now = Instant::now();
         let mut pacer = Pacer::new(now);
-        for rate in [START_RATE, MAX_RATE, MIN_RATE] {
+        for (rate, step_ms, bytes) in [
+            (START_RATE, 33, 2_400),
+            (MAX_RATE, 33, 2_400),
+            (MIN_RATE, 66, 2_000),
+        ] {
             pacer.rate = rate;
             for _ in 0..90 {
-                now += Duration::from_millis(33);
-                let left = send(&mut pacer, &mut now, 2_400, false);
+                now += Duration::from_millis(step_ms);
+                let left = send(&mut pacer, &mut now, bytes, false);
                 assert!(left.iter().all(|at| *at == 0.0), "{left:?} at {rate}");
             }
         }
@@ -327,11 +332,11 @@ mod tests {
             pacer.complete_picture_requested(now);
             rates.push(pacer.rate() as u64);
         }
-        assert_eq!(rates, [166_666, 125_000, 125_000, 125_000, 125_000]);
-        // At the floor the same picture takes about a second and never floods: 2.5 kB in 20 ms.
+        assert_eq!(rates, [166_666, 55_555, 35_000, 35_000, 35_000]);
+        // At the floor the same picture is bounded by PICTURE_LIMIT (~1.2 s) and never floods.
         let left = send(&mut pacer, &mut now, 120_000, true);
         let took = *left.last().unwrap();
-        assert!((0.9..1.0).contains(&took), "took {took}");
+        assert!((1.0..=1.25).contains(&took), "took {took}");
         assert!(most_within(&left, 0.02) <= 3 * PACKET + PACKET, "{} bytes within 20 ms", most_within(&left, 0.02));
     }
 

@@ -970,9 +970,10 @@ async fn negotiate(
     let mut early_track: Option<RemoteTrack> = None;
     let mut opened = false;
     // Host: the first picture is captured and encoded while DTLS is still opening (nothing is sent before the peer is verified).
+    // Cap the initial early picture to 1280x720 so the very first keyframe is ~2.3x smaller and
+    // appears twice as fast on slow/intercontinental WAN links; fast links immediately step up to 1080p in host_media.
     let early_size = if early && config.host {
-        let full_hd = peer_features.iter().any(|name| name == crate::remote_control::FULL_HD);
-        Some(if full_hd { source_size_within(config, (1920.0, 1080.0))? } else { size })
+        Some(source_size_within(config, (1280.0, 720.0))?)
     } else {
         None
     };
@@ -1206,7 +1207,7 @@ impl EarlyPicture {
                         };
                         let (reply, output) = tokio::sync::oneshot::channel();
                         if encoder
-                            .try_send(EncodeRequest { frame, timestamp: started.elapsed().as_micros() as u64, keyframe: true, reply })
+                            .try_send(EncodeRequest { frame, timestamp: started.elapsed().as_micros() as u64, keyframe: true, bitrate: None, reply })
                             .is_ok()
                         {
                             *encoding = Some(output);
@@ -1453,6 +1454,8 @@ struct EncodeRequest {
     frame: Arc<native_os_capture::stream::CapturedFrame>,
     timestamp: u64,
     keyframe: bool,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    bitrate: Option<u32>,
     reply: tokio::sync::oneshot::Sender<Result<EncodeReply, String>>,
 }
 
@@ -1479,8 +1482,11 @@ pub(crate) fn encoder_bitrate(size: (usize, usize), pace_bytes_per_second: f64) 
     let rung = ENCODER_LADDER.iter().copied().filter(|rung| *rung <= carried).max().unwrap_or(ENCODER_MIN_BITRATE);
     if carried >= ceiling { ceiling } else { rung.clamp(ENCODER_MIN_BITRATE.min(ceiling), ceiling) }
 }
-/// The bit rates the encoder is set to (bit/s), 1.5x apart.
-const ENCODER_LADDER: [u32; 8] = [400_000, 600_000, 900_000, 1_350_000, 2_000_000, 3_000_000, 4_500_000, 6_750_000];
+/// The bit rates the encoder is set to (bit/s), ~1.5x apart down to 180 kbps for sub-Mbps WAN links.
+const ENCODER_LADDER: [u32; 10] = [
+    180_000, 260_000, 380_000, 550_000, 800_000, 1_200_000, 1_800_000, 2_700_000, 4_000_000,
+    6_000_000,
+];
 /// The encoder's next bit rate: down at once when the pace fell to less than two thirds of it, up
 /// by half at most when the pace allows 40 % more (the pace rises fast after a few complete
 /// pictures arrived, faster than a slow line can follow), otherwise unchanged.
@@ -1493,15 +1499,25 @@ pub(crate) fn next_bitrate(current: u32, wanted: u32) -> u32 {
         current
     }
 }
-/// The lowest bit rate the encoder is set to.
-const ENCODER_MIN_BITRATE: u32 = 400_000;
-/// The encoder is set up again for a new bit rate at most this often, and only when the rate it
-/// would get differs by more than half.
-const BITRATE_SETTLE: Duration = Duration::from_millis(2500);
+/// The lowest bit rate the encoder is set to (180 kbps for constrained intercontinental/mobile links).
+const ENCODER_MIN_BITRATE: u32 = 180_000;
+/// Minimum settle time between encoder resolution/bitrate reconfigurations.
+const BITRATE_SETTLE: Duration = Duration::from_millis(4000);
 
-/// Adapts the stream resolution to the link's measured pace and latency (with hysteresis so it
-/// never flaps). On slow or high-RTT intercontinental WAN links (< 2.8–3.6 Mbps), downscaling
-/// 1080p to 720p cuts pixels, encode CPU, and wire frame size by ~2.3x, lifting FPS 2–3x.
+fn scale_to_box(full: (usize, usize), max_long: f64, max_short: f64) -> (usize, usize) {
+    let (long_side, short_side) = (full.0.max(full.1), full.0.min(full.1));
+    if long_side as f64 <= max_long && short_side as f64 <= max_short {
+        return full;
+    }
+    let scale = (max_long / long_side as f64).min(max_short / short_side as f64);
+    let w = (((full.0 as f64 * scale).round() as usize) & !1).max(16);
+    let h = (((full.1 as f64 * scale).round() as usize) & !1).max(16);
+    (w, h)
+}
+
+/// Adapts the stream resolution in two tiers (1080p -> 720p -> 540p) to the link's measured pace
+/// and latency with hysteresis so it never flaps. On sub-Mbps intercontinental WAN links (< 880 kbps),
+/// 540p cuts frame size ~4x vs 1080p so interactive motion stays smooth instead of freezing.
 pub(crate) fn adaptive_size(
     full: (usize, usize),
     current: (usize, usize),
@@ -1509,21 +1525,42 @@ pub(crate) fn adaptive_size(
     base_rtt: Duration,
 ) -> (usize, usize) {
     let long_wan = base_rtt >= Duration::from_millis(120);
-    let down_threshold = if long_wan { 450_000.0 } else { 350_000.0 };
-    let up_threshold = if long_wan { 700_000.0 } else { 550_000.0 };
-    let (long_side, short_side) = (full.0.max(full.1), full.0.min(full.1));
-    if long_side <= 1280 && short_side <= 720 {
-        return full;
-    }
-    if current == full && pace_bytes_per_second < down_threshold {
-        let scale = (1280.0 / long_side as f64).min(720.0 / short_side as f64);
-        let w = (((full.0 as f64 * scale).round() as usize) & !1).max(16);
-        let h = (((full.1 as f64 * scale).round() as usize) & !1).max(16);
-        (w, h)
-    } else if current != full && pace_bytes_per_second >= up_threshold {
+    let hd720 = scale_to_box(full, 1280.0, 720.0);
+    let sd540 = scale_to_box(full, 960.0, 540.0);
+    let down_720 = if long_wan { 450_000.0 } else { 350_000.0 };
+    let up_1080 = if long_wan { 700_000.0 } else { 550_000.0 };
+    let down_540 = 110_000.0; // < 880 kbps
+    let up_720 = 180_000.0; // >= 1.44 Mbps
+
+    if pace_bytes_per_second < down_540 {
+        sd540
+    } else if current == sd540 {
+        if pace_bytes_per_second >= up_720 {
+            hd720
+        } else {
+            sd540
+        }
+    } else if current == full && pace_bytes_per_second < down_720 {
+        hd720
+    } else if current != full && pace_bytes_per_second >= up_1080 {
         full
     } else {
         current
+    }
+}
+
+/// Minimum interval between encoded frames based on link pace. Keeps LAN at full 60 FPS while
+/// pacing slow intercontinental links to 15–20 FPS so H.264 frames have enough bit budget and
+/// never starve or build multi-second bufferbloat.
+pub(crate) fn adaptive_frame_interval(pace_bytes_per_second: f64) -> Duration {
+    if pace_bytes_per_second >= 700_000.0 {
+        Duration::ZERO
+    } else if pace_bytes_per_second >= 220_000.0 {
+        Duration::from_millis(33)
+    } else if pace_bytes_per_second >= 100_000.0 {
+        Duration::from_millis(50)
+    } else {
+        Duration::from_millis(66)
     }
 }
 
@@ -1538,19 +1575,34 @@ mod bitrate_tests {
         // Slow WAN drops to 720p.
         let down = adaptive_size(full, full, 250_000.0, Duration::from_millis(220));
         assert_eq!(down, (1280, 720));
+        // Very slow sub-Mbps WAN drops to 540p.
+        let sd = adaptive_size(full, down, 90_000.0, Duration::from_millis(220));
+        assert_eq!(sd, (960, 540));
+        // Hysteresis: stays at 540p until >= 180 kB/s.
+        assert_eq!(adaptive_size(full, sd, 150_000.0, Duration::from_millis(220)), (960, 540));
+        // Recovers to 720p above 180 kB/s.
+        assert_eq!(adaptive_size(full, sd, 200_000.0, Duration::from_millis(220)), (1280, 720));
         // Hysteresis: stays at 720p in the middle band.
         assert_eq!(adaptive_size(full, down, 500_000.0, Duration::from_millis(220)), (1280, 720));
         // Recovers to 1080p when bandwidth rises above the upper threshold.
         assert_eq!(adaptive_size(full, down, 800_000.0, Duration::from_millis(220)), full);
     }
     #[test]
+    fn adaptive_frame_interval_preserves_lan_60fps_and_paces_slow_wan() {
+        assert_eq!(adaptive_frame_interval(1_000_000.0), Duration::ZERO);
+        assert_eq!(adaptive_frame_interval(300_000.0), Duration::from_millis(33));
+        assert_eq!(adaptive_frame_interval(150_000.0), Duration::from_millis(50));
+        assert_eq!(adaptive_frame_interval(80_000.0), Duration::from_millis(66));
+    }
+    #[test]
     fn the_bit_rate_follows_the_pace_within_bounds() {
         let full_hd = (1920, 1080);
         assert_eq!(encoder_bitrate(full_hd, 12_000_000.0), 10_000_000, "a fast line: full rate");
         assert_eq!(encoder_bitrate((1280, 720), 12_000_000.0), 4_500_000);
-        assert_eq!(encoder_bitrate(full_hd, 500_000.0), 2_000_000, "the start pace (4 Mbit/s): the rung below 2.4 Mbit/s");
-        assert_eq!(encoder_bitrate(full_hd, 400_000.0), 1_350_000, "steps of 1.5x, so a small move in the pace does not restart the encoder");
-        assert_eq!(encoder_bitrate(full_hd, 125_000.0), 600_000, "the slowest pace (1 Mbit/s)");
+        assert_eq!(encoder_bitrate(full_hd, 500_000.0), 1_800_000, "the start pace (4 Mbit/s): the rung below 2.4 Mbit/s");
+        assert_eq!(encoder_bitrate(full_hd, 300_000.0), 1_200_000, "steps of 1.5x, so a small move in the pace does not restart the encoder");
+        assert_eq!(encoder_bitrate(full_hd, 125_000.0), 550_000, "1 Mbit/s pace");
+        assert_eq!(encoder_bitrate(full_hd, 60_000.0), 260_000, "sub-Mbps WAN pace");
         assert_eq!(encoder_bitrate(full_hd, 10_000.0), ENCODER_MIN_BITRATE);
     }
     #[test]
@@ -1582,9 +1634,15 @@ fn start_encoder(size: (usize, usize), bitrate: u32) -> Result<mpsc::Sender<Enco
             let mut encoder = ScreenH264Encoder::new(size.0, size.1, TARGET_FPS, bitrate);
             while let Some(request) = worker.blocking_recv() {
                 let result = match &mut encoder {
-                    Ok(encoder) => encoder
-                        .encode(&request.frame, request.timestamp, request.keyframe)
-                        .map(|picture| EncodeReply { picture, retry: encoder.needs_retry(), left_out: encoder.left_out() }),
+                    Ok(encoder) => {
+                        #[cfg(target_os = "windows")]
+                        if let Some(target_bps) = request.bitrate {
+                            let _ = encoder.set_bitrate(target_bps);
+                        }
+                        encoder
+                            .encode(&request.frame, request.timestamp, request.keyframe)
+                            .map(|picture| EncodeReply { picture, retry: encoder.needs_retry(), left_out: encoder.left_out() })
+                    }
                     Err(error) => {
                         let _ = request.reply.send(Err(error.to_string()));
                         break;
@@ -1702,6 +1760,7 @@ async fn host_media(
             None => (start_encoder(size, bitrate)?, 0, Instant::now()),
         };
         let mut bitrate_set = Instant::now();
+        let mut pending_bitrate: Option<u32> = None;
         crate::qa_timeline::mark("encoder started");
         let mut retry_encode = false;
         // The encoder left the last picture out: it is given again although the screen is unchanged.
@@ -1844,6 +1903,15 @@ async fn host_media(
                 pacer.complete_picture_requested(Instant::now());
             }
             let force_keyframe = requested || mirror.take_keyframe_request() || retry_encode;
+            // Pace capture/encode FPS on slow WAN links so H.264 has enough bit budget per frame
+            // (LAN >= 5.6 Mbps stays at full 60 FPS with Duration::ZERO).
+            let min_interval = adaptive_frame_interval(pacer.rate());
+            if sent > 0 && !force_keyframe && !encode_again && last.elapsed() < min_interval {
+                pump_ice(config, transport).await?;
+                control.poll(config, channel).await?;
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                continue;
+            }
             #[cfg(feature = "qa-session")]
             let lap = Instant::now();
             let frame = match session_platform::frames(&capture).next(
@@ -1902,6 +1970,7 @@ async fn host_media(
                     // Lost packets trigger an immediate explicit keyframe request via `force_keyframe`,
                     // and pictures left out by the encoder are retried via `encode_again`.
                     keyframe: force_keyframe || sent.is_multiple_of(u64::from(TARGET_FPS) * 10),
+                    bitrate: pending_bitrate.take(),
                     reply,
                 })
                 .map_err(|_| "Screen video encoder stopped")?;
@@ -1958,13 +2027,19 @@ async fn host_media(
                 if next_size != size || wanted != bitrate {
                     #[cfg(feature = "qa-session")]
                     eprintln!("QA encoder {}x{} -> {}x{}, bit rate {} -> {} kbit/s (pace {:.0} kB/s, base {} ms)", size.0, size.1, next_size.0, next_size.1, bitrate / 1000, wanted / 1000, pacer.rate() / 1000.0, rate.base_delay().as_millis());
-                    encoder = start_encoder(next_size, wanted)?;
-                    if next_size != size {
-                        size = next_size;
-                        recent = None;
+                    if next_size == size && cfg!(target_os = "windows") {
+                        // Update Media Foundation hardware bitrate in-place without restarting the MFT
+                        // or injecting a large IDR keyframe onto a constrained WAN link.
+                        pending_bitrate = Some(wanted);
+                    } else {
+                        encoder = start_encoder(next_size, wanted)?;
+                        if next_size != size {
+                            size = next_size;
+                            recent = None;
+                        }
+                        retry_encode = true;
                     }
                     bitrate = wanted;
-                    retry_encode = true;
                 }
                 bitrate_set = Instant::now();
             }
