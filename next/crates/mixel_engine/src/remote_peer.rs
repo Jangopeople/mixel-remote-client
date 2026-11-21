@@ -970,10 +970,10 @@ async fn negotiate(
     let mut early_track: Option<RemoteTrack> = None;
     let mut opened = false;
     // Host: the first picture is captured and encoded while DTLS is still opening (nothing is sent before the peer is verified).
-    // Cap the initial early picture to 1280x720 so the very first keyframe is ~2.3x smaller and
-    // appears twice as fast on slow/intercontinental WAN links; fast links immediately step up to 1080p in host_media.
+    // Must match host_media's initial `size` so EarlyPicture hands over capture & encoder seamlessly without re-opening either.
     let early_size = if early && config.host {
-        Some(source_size_within(config, (1280.0, 720.0))?)
+        let full_hd = peer_features.iter().any(|name| name == crate::remote_control::FULL_HD);
+        Some(if full_hd { source_size_within(config, (1920.0, 1080.0))? } else { size })
     } else {
         None
     };
@@ -1468,6 +1468,44 @@ struct EncodeReply {
     /// The encoder left this picture out of the stream: it is given again although the screen has
     /// not changed (see `ScreenH264Encoder::left_out`).
     left_out: bool,
+    /// Active encoder backend name (`VT`, `MF-HW`, `OpenH264`) for perf telemetry.
+    backend: &'static str,
+}
+
+fn perf_log_path() -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Library/Logs/Mixel-Remote-perf.log"))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var_os("LOCALAPPDATA").map(|d| std::path::PathBuf::from(d).join("Mixel Remote").join("perf.log"))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/state/mixel-remote/perf.log"))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        None
+    }
+}
+
+fn perf_log(line: &str) {
+    let Some(path) = perf_log_path() else { return };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > 64 * 1024) {
+        let _ = std::fs::write(&path, b"");
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        use std::io::Write;
+        let unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let _ = writeln!(file, "{unix} {line}");
+    }
 }
 
 /// The encoder's bit rate: what the connection carries at the moment (the pacer's rate, with room
@@ -1475,7 +1513,7 @@ struct EncodeReply {
 /// lossy line the encoder used to aim at 3 to 6 Mbit/s whatever the line carried, so the pace held
 /// big pictures back and the technician saw a few a second; smaller pictures come more often.
 pub(crate) fn encoder_bitrate(size: (usize, usize), pace_bytes_per_second: f64) -> u32 {
-    let ceiling: u32 = if size.0 > 1280 || size.1 > 720 { 10_000_000 } else { 4_500_000 };
+    let ceiling: u32 = if size.0 > 1280 || size.1 > 720 { 6_000_000 } else { 3_000_000 };
     let carried = (pace_bytes_per_second * 8.0 * 0.6).clamp(0.0, f64::from(ceiling)) as u32;
     // Steps of 1.5x instead of every value: the encoder cannot change its bit rate while it runs
     // (a new encoder, a complete picture each time), so small moves in the pace must not restart it.
@@ -1549,21 +1587,6 @@ pub(crate) fn adaptive_size(
     }
 }
 
-/// Minimum interval between encoded frames based on link pace. Keeps LAN at full 60 FPS while
-/// pacing slow intercontinental links to 15–20 FPS so H.264 frames have enough bit budget and
-/// never starve or build multi-second bufferbloat.
-pub(crate) fn adaptive_frame_interval(pace_bytes_per_second: f64) -> Duration {
-    if pace_bytes_per_second >= 700_000.0 {
-        Duration::ZERO
-    } else if pace_bytes_per_second >= 220_000.0 {
-        Duration::from_millis(33)
-    } else if pace_bytes_per_second >= 100_000.0 {
-        Duration::from_millis(50)
-    } else {
-        Duration::from_millis(66)
-    }
-}
-
 #[cfg(test)]
 mod bitrate_tests {
     use super::*;
@@ -1588,17 +1611,10 @@ mod bitrate_tests {
         assert_eq!(adaptive_size(full, down, 800_000.0, Duration::from_millis(220)), full);
     }
     #[test]
-    fn adaptive_frame_interval_preserves_lan_60fps_and_paces_slow_wan() {
-        assert_eq!(adaptive_frame_interval(1_000_000.0), Duration::ZERO);
-        assert_eq!(adaptive_frame_interval(300_000.0), Duration::from_millis(33));
-        assert_eq!(adaptive_frame_interval(150_000.0), Duration::from_millis(50));
-        assert_eq!(adaptive_frame_interval(80_000.0), Duration::from_millis(66));
-    }
-    #[test]
     fn the_bit_rate_follows_the_pace_within_bounds() {
         let full_hd = (1920, 1080);
-        assert_eq!(encoder_bitrate(full_hd, 12_000_000.0), 10_000_000, "a fast line: full rate");
-        assert_eq!(encoder_bitrate((1280, 720), 12_000_000.0), 4_500_000);
+        assert_eq!(encoder_bitrate(full_hd, 12_000_000.0), 6_000_000, "a fast line: full rate");
+        assert_eq!(encoder_bitrate((1280, 720), 12_000_000.0), 3_000_000);
         assert_eq!(encoder_bitrate(full_hd, 500_000.0), 1_800_000, "the start pace (4 Mbit/s): the rung below 2.4 Mbit/s");
         assert_eq!(encoder_bitrate(full_hd, 300_000.0), 1_200_000, "steps of 1.5x, so a small move in the pace does not restart the encoder");
         assert_eq!(encoder_bitrate(full_hd, 125_000.0), 550_000, "1 Mbit/s pace");
@@ -1639,9 +1655,15 @@ fn start_encoder(size: (usize, usize), bitrate: u32) -> Result<mpsc::Sender<Enco
                         if let Some(target_bps) = request.bitrate {
                             let _ = encoder.set_bitrate(target_bps);
                         }
+                        #[cfg(target_os = "windows")]
+                        let backend = encoder.backend_name();
+                        #[cfg(target_os = "macos")]
+                        let backend = "VT";
+                        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+                        let backend = "OpenH264";
                         encoder
                             .encode(&request.frame, request.timestamp, request.keyframe)
-                            .map(|picture| EncodeReply { picture, retry: encoder.needs_retry(), left_out: encoder.left_out() })
+                            .map(|picture| EncodeReply { picture, retry: encoder.needs_retry(), left_out: encoder.left_out(), backend })
                     }
                     Err(error) => {
                         let _ = request.reply.send(Err(error.to_string()));
@@ -1785,6 +1807,8 @@ async fn host_media(
         let mut sound_failed = false;
         let mut pacer = crate::video_pacing::Pacer::new(Instant::now());
         let mut rate = crate::video_rate::RateControl::new(Instant::now());
+        let mut perf_logged = Instant::now();
+        let (mut perf_frames, mut perf_bytes) = (0u32, 0usize);
         #[cfg(feature = "qa-session")]
         let mut qa_rate_logged = Instant::now();
         #[cfg(feature = "qa-session")]
@@ -1903,15 +1927,6 @@ async fn host_media(
                 pacer.complete_picture_requested(Instant::now());
             }
             let force_keyframe = requested || mirror.take_keyframe_request() || retry_encode;
-            // Pace capture/encode FPS on slow WAN links so H.264 has enough bit budget per frame
-            // (LAN >= 5.6 Mbps stays at full 60 FPS with Duration::ZERO).
-            let min_interval = adaptive_frame_interval(pacer.rate());
-            if sent > 0 && !force_keyframe && !encode_again && last.elapsed() < min_interval {
-                pump_ice(config, transport).await?;
-                control.poll(config, channel).await?;
-                tokio::time::sleep(Duration::from_millis(5)).await;
-                continue;
-            }
             #[cfg(feature = "qa-session")]
             let lap = Instant::now();
             let frame = match session_platform::frames(&capture).next(
@@ -1975,7 +1990,7 @@ async fn host_media(
                 })
                 .map_err(|_| "Screen video encoder stopped")?;
             let deadline = Instant::now() + Duration::from_secs(5);
-            let EncodeReply { picture: encoded, retry, left_out } = loop {
+            let EncodeReply { picture: encoded, retry, left_out, backend } = loop {
                 match tokio::time::timeout(Duration::from_millis(5), &mut output).await {
                     Ok(result) => break result.map_err(|_| "Screen video encoder stopped")??,
                     Err(_) if config.stopped() => return Ok(()),
@@ -2019,6 +2034,28 @@ async fn host_media(
             }
             mirror.send(&encoded.annex_b, duration);
             sent += 1;
+            perf_frames += 1;
+            perf_bytes += encoded.annex_b.len();
+            if perf_logged.elapsed() >= Duration::from_secs(5) {
+                let secs = perf_logged.elapsed().as_secs_f64().max(0.1);
+                perf_log(&format!(
+                    "host fps={:.1} kbps={:.0} size={}x{} target_kbps={} pace_kBs={:.0} deliv_kBs={:.0} rtt_ms={} queue_ms={} inflight_kB={} enc={}",
+                    f64::from(perf_frames) / secs,
+                    perf_bytes as f64 * 8.0 / secs / 1000.0,
+                    size.0,
+                    size.1,
+                    bitrate / 1000,
+                    pacer.rate() / 1000.0,
+                    rate.delivered() / 1000.0,
+                    rate.base_delay().as_millis(),
+                    rate.queue_delay().as_millis(),
+                    rate.in_flight() / 1000,
+                    backend,
+                ));
+                perf_frames = 0;
+                perf_bytes = 0;
+                perf_logged = Instant::now();
+            }
             // The encoder follows the pace (see `encoder_bitrate` and `adaptive_size`); a new
             // encoder starts with a complete picture.
             if bitrate_set.elapsed() >= BITRATE_SETTLE {
@@ -2364,6 +2401,8 @@ async fn viewer_media(
     let mut timestamp_ticks = 0u64;
     let mut received = 0u64;
     let mut last = Instant::now();
+    let mut perf_v_at = Instant::now();
+    let (mut perf_v_frames, mut perf_v_bytes) = (0u32, 0usize);
     #[cfg(feature = "qa-session")]
     let mut qa_video = (0u32, Duration::ZERO, Duration::ZERO, Instant::now());
     // Lab builds only: what arrived, for a session that ends without pictures.
@@ -2545,6 +2584,20 @@ async fn viewer_media(
                         // switches to the native decoder only while recording is actually running.
                         let compressed = config.video.wants_compressed()
                             && !recording.as_ref().is_some_and(|scope| scope.is_recording());
+                        perf_v_frames += 1;
+                        perf_v_bytes += frame.len();
+                        if perf_v_at.elapsed() >= Duration::from_secs(5) {
+                            let secs = perf_v_at.elapsed().as_secs_f64().max(0.1);
+                            perf_log(&format!(
+                                "viewer fps={:.1} kbps={:.0} mode={}",
+                                f64::from(perf_v_frames) / secs,
+                                perf_v_bytes as f64 * 8.0 / secs / 1000.0,
+                                if compressed { "hw" } else { "sw" },
+                            ));
+                            perf_v_frames = 0;
+                            perf_v_bytes = 0;
+                            perf_v_at = Instant::now();
+                        }
                         if compressed != window_decodes {
                             window_decodes = compressed;
                             waiting_for_key = true;

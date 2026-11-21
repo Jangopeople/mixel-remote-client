@@ -46,6 +46,7 @@ struct Route {
     endpoint: String,
     name: String,
     tls: Option<Arc<ClientConfig>>,
+    defer: Duration,
 }
 struct Outbox {
     packets: VecDeque<Vec<u8>>,
@@ -241,6 +242,17 @@ impl StreamRuntime {
     ) -> io::Result<Option<(Arc<Self>, Vec<RTCIceServer>)>> {
         let mut routes = Vec::new();
         let mut tls = tls_override;
+        let has_udp_turn = servers.iter().any(|server| {
+            server.urls().is_ok_and(|urls| {
+                urls.iter()
+                    .any(|u| u.scheme.to_string() == "turn" && u.proto.to_string() == "udp")
+            })
+        });
+        let defer = if has_udp_turn {
+            Duration::from_millis(350)
+        } else {
+            Duration::ZERO
+        };
         for server in &mut servers {
             let parsed = server.urls().map_err(io::Error::other)?;
             let mut rewritten = Vec::new();
@@ -295,6 +307,7 @@ impl StreamRuntime {
                     endpoint,
                     name: url.host,
                     tls: config,
+                    defer,
                 });
             }
             server.urls = rewritten;
@@ -458,6 +471,18 @@ async fn run_pipe(
     mut stopped: watch::Receiver<bool>,
     incoming: mpsc::Sender<Received>,
 ) -> io::Result<()> {
+    // When UDP TURN is also configured, give UDP TURN a head start so interactive video never
+    // accidentally nominates TCP/TLS TURN (which suffers TCP head-of-line blocking on WAN),
+    // while UDP-blocked corporate firewalls still fall back seamlessly after `defer`.
+    if !pipe.route.defer.is_zero() {
+        tokio::select! {
+            _ = tokio::time::sleep(pipe.route.defer) => {}
+            _ = stopped.changed() => return Ok(()),
+        }
+        if *stopped.borrow() {
+            return Ok(());
+        }
+    }
     let stream =
         tokio::select! {result=connect(&pipe.route)=>result?,_=stopped.changed()=>return Ok(())};
     let (reader, mut writer) = tokio::io::split(stream);

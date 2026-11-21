@@ -304,10 +304,10 @@ impl NativeTransport {
                 webrtc::peer_connection::SettingEngineBuilder::new()
                     .with_multicast_dns_mode(rtc::ice::mdns::MulticastDnsMode::Disabled)
                     .with_ice_connection_attempts(Some(RELAY_ONLY_CHECK_INTERVAL), None)
-                    // Give direct LAN/STUN UDP hole-punching a brief window before nominating a
-                    // TURN relay pair without adding noticeable connect delay behind strict NAT.
+                    // Give direct LAN/STUN UDP hole-punching enough time on intercontinental WAN
+                    // (~220 ms RTT) to beat TURN relay while LAN `host` pairs nominate immediately.
                     .with_prflx_acceptance_min_wait(Some(Duration::from_millis(100)))
-                    .with_relay_acceptance_min_wait(Some(Duration::from_millis(250)))
+                    .with_relay_acceptance_min_wait(Some(Duration::from_millis(450)))
                     .build(),
             )
         };

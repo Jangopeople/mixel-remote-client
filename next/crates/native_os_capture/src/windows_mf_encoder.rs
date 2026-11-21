@@ -13,7 +13,7 @@ use std::{
 use windows::{
     Win32::{
         Foundation::RPC_E_CHANGED_MODE,
-        Media::MediaFoundation::*,
+        Media::{MediaFoundation::*, TIMERR_NOERROR, timeBeginPeriod, timeEndPeriod},
         System::{
             Com::{COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree, CoUninitialize},
             Variant::VARIANT,
@@ -21,6 +21,26 @@ use windows::{
     },
     core::Interface,
 };
+
+/// Scoped RAII guard raising Windows scheduler timer resolution from 15.625 ms to 1 ms
+/// for the lifetime of an active screen-sharing encoder, preventing 15.6 ms sleep quantization
+/// stalls in async Media Foundation polling and RTP packet pacing.
+struct HighResTimerGuard(bool);
+impl HighResTimerGuard {
+    fn acquire() -> Self {
+        let active = unsafe { timeBeginPeriod(1) == TIMERR_NOERROR };
+        Self(active)
+    }
+}
+impl Drop for HighResTimerGuard {
+    fn drop(&mut self) {
+        if self.0 {
+            unsafe {
+                let _ = timeEndPeriod(1);
+            }
+        }
+    }
+}
 use zeroize::Zeroizing;
 
 /// Maximum wall-clock wait for an async hardware MFT to accept input or emit an encoded frame
@@ -470,7 +490,9 @@ impl MfHardwareEncoder {
             }
             let mut produced: Option<Zeroizing<Vec<u8>>> = None;
             let mut mft_requested_more_input = false;
-            let deadline = Instant::now() + MF_EVENT_WAIT_LIMIT;
+            let started_wait = Instant::now();
+            let deadline = started_wait + MF_EVENT_WAIT_LIMIT;
+            let spin_until = started_wait + Duration::from_millis(2);
             loop {
                 match unsafe { events.GetEvent(MF_EVENT_FLAG_NO_WAIT) } {
                     Ok(event) => {
@@ -511,10 +533,17 @@ impl MfHardwareEncoder {
                         if fed && mft_requested_more_input {
                             break;
                         }
-                        if Instant::now() >= deadline {
+                        let now = Instant::now();
+                        if now >= deadline {
                             return Err(EncodeError::Failed);
                         }
-                        std::thread::sleep(Duration::from_millis(1));
+                        // Hardware GPU encoders typically finish in 0.5–1.5 ms: yield briefly
+                        // first for sub-millisecond wakeup, then sleep 1 ms (with timeBeginPeriod(1)).
+                        if now < spin_until {
+                            std::thread::yield_now();
+                        } else {
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
                     }
                     Err(_) => return Err(EncodeError::Failed),
                 }
@@ -556,6 +585,7 @@ impl MfHardwareEncoder {
 /// Windows screen encoder: tries Media Foundation hardware H.264 first (Intel QuickSync,
 /// NVIDIA NVENC, AMD AMF) and seamlessly falls back to OpenH264 on VMs or if a driver fails.
 pub struct WindowsScreenH264Encoder {
+    _timer: HighResTimerGuard,
     backend: Backend,
     width: usize,
     height: usize,
@@ -570,6 +600,7 @@ enum Backend {
 
 impl WindowsScreenH264Encoder {
     pub fn new(width: usize, height: usize, fps: u32, bitrate: u32) -> Result<Self, EncodeError> {
+        let timer = HighResTimerGuard::acquire();
         let disable_hw = std::env::var("MIXEL_NO_HW_ENC").is_ok_and(|v| v == "1");
         let backend = if !disable_hw
             && let Ok(hw) = MfHardwareEncoder::try_new(width, height, fps, bitrate)
@@ -585,12 +616,20 @@ impl WindowsScreenH264Encoder {
             )?))
         };
         Ok(Self {
+            _timer: timer,
             backend,
             width,
             height,
             fps,
             bitrate,
         })
+    }
+
+    pub fn backend_name(&self) -> &'static str {
+        match &self.backend {
+            Backend::Hardware(_) => "MF-HW",
+            Backend::Software(_) => "OpenH264",
+        }
     }
 
     pub fn needs_retry(&self) -> bool {
