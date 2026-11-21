@@ -48,7 +48,7 @@ pub const QUEUE_ALLOWED: Duration = Duration::from_millis(300);
 const HOLD_FACTOR: f64 = 1.5;
 /// ...and is allowed a quarter more after this long without a queue.
 pub const PROBE_EVERY: Duration = Duration::from_secs(8);
-pub const MIN_LIMIT: f64 = 35_000.0;
+pub const MIN_LIMIT: f64 = 75_000.0;
 pub const START_LIMIT: f64 = 500_000.0;
 pub const MAX_LIMIT: f64 = 12_000_000.0;
 const HISTORY: usize = 8192;

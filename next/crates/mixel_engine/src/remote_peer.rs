@@ -1537,8 +1537,8 @@ pub(crate) fn next_bitrate(current: u32, wanted: u32) -> u32 {
         current
     }
 }
-/// The lowest bit rate the encoder is set to (180 kbps for constrained intercontinental/mobile links).
-const ENCODER_MIN_BITRATE: u32 = 180_000;
+/// The lowest bit rate the encoder is set to (300 kbps).
+const ENCODER_MIN_BITRATE: u32 = 300_000;
 /// Minimum settle time between encoder resolution/bitrate reconfigurations.
 const BITRATE_SETTLE: Duration = Duration::from_millis(4000);
 
@@ -1567,8 +1567,8 @@ pub(crate) fn adaptive_size(
     let sd540 = scale_to_box(full, 960.0, 540.0);
     let down_720 = if long_wan { 450_000.0 } else { 350_000.0 };
     let up_1080 = if long_wan { 700_000.0 } else { 550_000.0 };
-    let down_540 = 110_000.0; // < 880 kbps
-    let up_720 = 180_000.0; // >= 1.44 Mbps
+    let down_540 = 65_000.0; // < 520 kbps
+    let up_720 = 110_000.0; // >= 880 kbps
 
     if pace_bytes_per_second < down_540 {
         sd540
@@ -1599,12 +1599,12 @@ mod bitrate_tests {
         let down = adaptive_size(full, full, 250_000.0, Duration::from_millis(220));
         assert_eq!(down, (1280, 720));
         // Very slow sub-Mbps WAN drops to 540p.
-        let sd = adaptive_size(full, down, 90_000.0, Duration::from_millis(220));
+        let sd = adaptive_size(full, down, 55_000.0, Duration::from_millis(220));
         assert_eq!(sd, (960, 540));
-        // Hysteresis: stays at 540p until >= 180 kB/s.
-        assert_eq!(adaptive_size(full, sd, 150_000.0, Duration::from_millis(220)), (960, 540));
-        // Recovers to 720p above 180 kB/s.
-        assert_eq!(adaptive_size(full, sd, 200_000.0, Duration::from_millis(220)), (1280, 720));
+        // Hysteresis: stays at 540p until >= 110 kB/s.
+        assert_eq!(adaptive_size(full, sd, 90_000.0, Duration::from_millis(220)), (960, 540));
+        // Recovers to 720p above 110 kB/s.
+        assert_eq!(adaptive_size(full, sd, 120_000.0, Duration::from_millis(220)), (1280, 720));
         // Hysteresis: stays at 720p in the middle band.
         assert_eq!(adaptive_size(full, down, 500_000.0, Duration::from_millis(220)), (1280, 720));
         // Recovers to 1080p when bandwidth rises above the upper threshold.
@@ -1618,7 +1618,7 @@ mod bitrate_tests {
         assert_eq!(encoder_bitrate(full_hd, 500_000.0), 1_800_000, "the start pace (4 Mbit/s): the rung below 2.4 Mbit/s");
         assert_eq!(encoder_bitrate(full_hd, 300_000.0), 1_200_000, "steps of 1.5x, so a small move in the pace does not restart the encoder");
         assert_eq!(encoder_bitrate(full_hd, 125_000.0), 550_000, "1 Mbit/s pace");
-        assert_eq!(encoder_bitrate(full_hd, 60_000.0), 260_000, "sub-Mbps WAN pace");
+        assert_eq!(encoder_bitrate(full_hd, 80_000.0), 380_000, "sub-Mbps WAN pace");
         assert_eq!(encoder_bitrate(full_hd, 10_000.0), ENCODER_MIN_BITRATE);
     }
     #[test]

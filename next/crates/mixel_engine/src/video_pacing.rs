@@ -34,9 +34,9 @@ use std::time::{Duration, Instant};
 pub const START_RATE: f64 = 500_000.0;
 /// The fastest pace (96 Mbit/s): a megabyte takes 83 ms, 150 kB go out at once.
 pub const MAX_RATE: f64 = 12_000_000.0;
-/// The slowest pace (280 kbit/s) so sub-Mbps intercontinental/mobile links can converge cleanly
-/// without overdriving ISP queues.
-pub const MIN_RATE: f64 = 35_000.0;
+/// The slowest pace (600 kbit/s) so sub-Mbps intercontinental links converge cleanly without
+/// cratering to 180 kbps on transient packet loss.
+pub const MIN_RATE: f64 = 75_000.0;
 /// What may leave in one go: this much time's worth of the rate (and never less than two packets).
 pub const BURST: Duration = Duration::from_millis(20);
 const MIN_BURST: f64 = 2_500.0;
@@ -50,8 +50,8 @@ pub const GRACE: Duration = Duration::from_millis(800);
 /// A complete picture arrived when no request followed it for this long: the technician's side
 /// asks once a second while it has no picture, and at once when a picture it had is damaged.
 pub const CONFIRM: Duration = Duration::from_millis(1500);
-/// How long after a loss the pace stays below the rate that lost a picture.
-pub const PROBE_AFTER: Duration = Duration::from_secs(20);
+/// How long after a loss the pace stays below the rate that lost a picture (5 s for fast recovery).
+pub const PROBE_AFTER: Duration = Duration::from_secs(5);
 
 pub struct Pacer {
     rate: f64,
@@ -332,7 +332,7 @@ mod tests {
             pacer.complete_picture_requested(now);
             rates.push(pacer.rate() as u64);
         }
-        assert_eq!(rates, [166_666, 55_555, 35_000, 35_000, 35_000]);
+        assert_eq!(rates, [166_666, 75_000, 75_000, 75_000, 75_000]);
         // At the floor the same picture is bounded by PICTURE_LIMIT (~1.2 s) and never floods.
         let left = send(&mut pacer, &mut now, 120_000, true);
         let took = *left.last().unwrap();
@@ -369,19 +369,19 @@ mod tests {
         pacer.complete_picture_requested(now); // lost at 500 kB/s: now 167 kB/s, ceiling 375 kB/s
         let lost_at = now;
         let mut rates = Vec::new();
-        for _ in 0..4 {
+        for _ in 0..2 {
             send(&mut pacer, &mut now, 120_000, true);
-            now += Duration::from_secs(3);
+            now += Duration::from_millis(1600);
             pacer.begin(now, 1_000);
             rates.push(pacer.rate() as u64);
         }
         // After a loss the pace doubles (no longer fourfold) up to the ceiling.
-        assert_eq!(rates, [333_333, 375_000, 375_000, 375_000]);
+        assert_eq!(rates, [333_333, 375_000]);
         assert!(now.duration_since(lost_at) < PROBE_AFTER);
-        // Twenty seconds after the loss the pace tries a quarter more.
+        // After PROBE_AFTER the pace tries a quarter more.
         now = lost_at + PROBE_AFTER;
         send(&mut pacer, &mut now, 120_000, true);
-        now += Duration::from_secs(3);
+        now += Duration::from_secs(2);
         pacer.begin(now, 1_000);
         assert_eq!(pacer.rate() as u64, 468_750);
     }

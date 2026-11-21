@@ -823,25 +823,52 @@ impl AccountAuth {
         };
         let this = self.clone();
         let task = tokio::spawn(async move {
-            let result: Result<(), String> = async {
-                let tokens: Tokens = client
-                    .request(
-                        "/auth/v1/token?grant_type=refresh_token",
-                        Some(serde_json::json!({"refresh_token": saved.as_str()})),
-                        None,
-                    )
-                    .await?;
-                this.apply(generation, client, tokens, None).await
+            // Retry transient network errors on launch/wake (e.g. Wi-Fi reconnecting after sleep)
+            // instead of wiping the saved refresh token on the first failed attempt.
+            let mut result: Result<(), String> = Err("Identity service unavailable".into());
+            for delay_secs in [0u64, 2, 4, 6, 8, 10] {
+                if delay_secs > 0 {
+                    tokio::time::sleep(Duration::from_secs(delay_secs)).await;
+                }
+                if this.inner.lock().await.generation != generation {
+                    return;
+                }
+                result = async {
+                    let tokens: Tokens = client
+                        .request(
+                            "/auth/v1/token?grant_type=refresh_token",
+                            Some(serde_json::json!({"refresh_token": saved.as_str()})),
+                            None,
+                        )
+                        .await?;
+                    this.apply(generation, client.clone(), tokens, None).await
+                }
+                .await;
+                if result.is_ok() {
+                    break;
+                }
+                if let Err(error) = &result
+                    && is_permanent_auth_denial(error)
+                {
+                    break;
+                }
             }
-            .await;
-            if result.is_err() {
-                let _ = tokio::task::spawn_blocking(crate::session_store::clear).await;
+            if let Err(error) = result {
+                if is_permanent_auth_denial(&error) {
+                    let _ = tokio::task::spawn_blocking(crate::session_store::clear).await;
+                }
                 let mut inner = this.inner.lock().await;
                 if inner.generation == generation {
                     revoke(&mut inner);
-                    inner.remember = false;
+                    if is_permanent_auth_denial(&error) {
+                        inner.remember = false;
+                    }
                     inner.status.phase = "signed_out".into();
-                    inner.status.message = "Your saved sign-in expired. Sign in again.".into();
+                    inner.status.message = if is_permanent_auth_denial(&error) {
+                        "Your saved sign-in expired. Sign in again.".into()
+                    } else {
+                        "Could not reach Mixel sign-in service. Check your connection and try again.".into()
+                    };
                 }
                 return;
             }
@@ -851,6 +878,7 @@ impl AccountAuth {
         self.inner.lock().await.task = Some(task);
     }
     async fn maintain(&self, generation: u64) {
+        let mut failed_since: Option<std::time::Instant> = None;
         loop {
             tokio::time::sleep(Duration::from_secs(1)).await;
             let due = {
@@ -863,27 +891,37 @@ impl AccountAuth {
                     self.fail(generation, "System clock is unavailable").await;
                     return;
                 };
-                if time >= inner.expires_at {
-                    drop(inner);
-                    self.fail(generation, "Account authorization expired; sign in again")
-                        .await;
-                    return;
-                }
-                inner.status.phase == "authenticated" && time >= inner.refresh_at
+                // After sleep/wake the access token may already be past `expires_at`, while the
+                // refresh token is still valid for days/weeks. Always try refreshing before
+                // giving up on the session.
+                inner.status.phase == "authenticated"
+                    && (time >= inner.refresh_at || time >= inner.expires_at)
             };
-            if due && let Err(error) = self.refresh(generation).await {
-                let keep_trying = {
-                    let inner = self.inner.lock().await;
-                    now().is_ok_and(|time| time.saturating_add(15) < inner.expires_at)
-                        && !error.contains("changed")
-                        && !error.contains("cancelled")
-                };
-                if keep_trying {
-                    tokio::time::sleep(Duration::from_secs(4)).await;
-                    continue;
+            if due {
+                match self.refresh(generation).await {
+                    Ok(()) => {
+                        failed_since = None;
+                    }
+                    Err(error) => {
+                        let permanent = is_permanent_auth_denial(&error)
+                            || error.contains("changed")
+                            || error.contains("cancelled");
+                        let started = *failed_since.get_or_insert_with(std::time::Instant::now);
+                        let keep_trying = !permanent
+                            && (started.elapsed() < Duration::from_secs(60)
+                                || now().is_ok_and(|time| {
+                                    // Keep trying while access token still has time left, or up to 60 s
+                                    // after wake while Wi-Fi reconnects.
+                                    time > 0 && started.elapsed() < Duration::from_secs(60)
+                                }));
+                        if keep_trying {
+                            tokio::time::sleep(Duration::from_secs(3)).await;
+                            continue;
+                        }
+                        self.fail(generation, &error).await;
+                        return;
+                    }
                 }
-                self.fail(generation, &error).await;
-                return;
             }
         }
     }
@@ -1296,30 +1334,88 @@ fn app_callback_parts(address: &str) -> Result<AppCallback, String> {
     let reason: String = reason.chars().filter(|c| !c.is_control()).take(300).collect();
     Ok((Zeroizing::new(states[0].clone()), code, reason))
 }
+fn is_permanent_auth_denial(error: &str) -> bool {
+    error.contains("HTTP 400") || error.contains("HTTP 401") || error.contains("HTTP 403")
+}
+
 async fn receive_code(listener: TcpListener, state: &str) -> Result<Zeroizing<String>, String> {
     let address = listener
         .local_addr()
         .map_err(|_| "Sign-in callback unavailable")?;
-    tokio::time::timeout(Duration::from_secs(180),async {
-        for _ in 0..256 {
-            let (mut stream,peer)=listener.accept().await.map_err(|_|"Sign-in callback failed")?;
-            if !peer.ip().is_loopback(){continue;}
-            let mut request=Zeroizing::new(Vec::new());
-            let read=tokio::time::timeout(Duration::from_secs(2),async {
-                let mut chunk=[0;1024];
-                while !request.windows(4).any(|bytes|bytes==b"\r\n\r\n") {
-                    let count=stream.read(&mut chunk).await.map_err(|_|())?;if count==0||request.len()+count>65536{return Err(());}
-                    request.extend_from_slice(&chunk[..count]);
-                }Ok::<_,()>(())
-            }).await;
-            let code=if matches!(read,Ok(Ok(()))){callback_code(&request,address,state)}else{None};
-            let (status,body)=if code.is_some(){("200 OK","Mixel Remote sign-in received. Return to the app to continue.")}else{("400 Bad Request","This is not an authorized Mixel Remote sign-in callback.")};
-            let response=format!("HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'none'; frame-ancestors 'none'\r\nConnection: close\r\n\r\n{body}",body.len());
-            let _=tokio::time::timeout(Duration::from_secs(2),stream.write_all(response.as_bytes())).await;
-            if let Some(code)=code{return Ok(code);}
+    let expected_state = state.to_owned();
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Zeroizing<String>>(1);
+    tokio::time::timeout(Duration::from_secs(600), async {
+        let mut accepted = 0usize;
+        loop {
+            tokio::select! {
+                Some(code) = rx.recv() => return Ok(code),
+                res = listener.accept() => {
+                    let (mut stream, peer) = match res {
+                        Ok(pair) => pair,
+                        Err(_) => continue,
+                    };
+                    if !peer.ip().is_loopback() {
+                        continue;
+                    }
+                    accepted += 1;
+                    if accepted > 256 {
+                        return Err("Sign-in callback request limit reached".to_owned());
+                    }
+                    let tx = tx.clone();
+                    let expected_state = expected_state.clone();
+                    // Handle each connection concurrently so browser speculative preconnects
+                    // (0-byte sockets) or /favicon.ico never block the real OAuth callback.
+                    tokio::spawn(async move {
+                        let mut request = Zeroizing::new(Vec::new());
+                        let read = tokio::time::timeout(Duration::from_secs(5), async {
+                            let mut chunk = [0; 1024];
+                            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                                let count = stream.read(&mut chunk).await.map_err(|_| ())?;
+                                if count == 0 || request.len() + count > 65536 {
+                                    return Err(());
+                                }
+                                request.extend_from_slice(&chunk[..count]);
+                            }
+                            Ok::<_, ()>(())
+                        })
+                        .await;
+                        let code = if matches!(read, Ok(Ok(()))) {
+                            callback_code(&request, address, &expected_state)
+                        } else {
+                            None
+                        };
+                        let (status, content_type, body) = if code.is_some() {
+                            (
+                                "200 OK",
+                                "text/html; charset=utf-8",
+                                "<!doctype html><html><body style=\"font-family:-apple-system,Segoe UI,sans-serif;text-align:center;padding:48px\"><h2>Signed in to Mixel Remote</h2><p>You can close this tab and return to the app.</p></body></html>",
+                            )
+                        } else {
+                            (
+                                "400 Bad Request",
+                                "text/plain; charset=utf-8",
+                                "This is not an authorized Mixel Remote sign-in callback.",
+                            )
+                        };
+                        let response = format!(
+                            "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        let _ = tokio::time::timeout(
+                            Duration::from_secs(2),
+                            stream.write_all(response.as_bytes()),
+                        )
+                        .await;
+                        if let Some(code) = code {
+                            let _ = tx.send(code).await;
+                        }
+                    });
+                }
+            }
         }
-        Err("Sign-in callback request limit reached".to_owned())
-    }).await.map_err(|_|"Browser sign-in expired; start a fresh sign-in".to_owned())?
+    })
+    .await
+    .map_err(|_| "Browser sign-in expired; start a fresh sign-in".to_owned())?
 }
 fn callback_code(
     request: &[u8],
@@ -1340,11 +1436,14 @@ fn callback_code(
         return None;
     }
     let expected = address.to_string();
+    let expected_localhost = format!("localhost:{}", address.port());
     let hosts: Vec<_> = lines
         .filter_map(|line| line.split_once(':'))
         .filter(|(name, _)| name.eq_ignore_ascii_case("host"))
         .collect();
-    if hosts.len() != 1 || hosts[0].1.trim() != expected {
+    if hosts.len() != 1
+        || (hosts[0].1.trim() != expected && !hosts[0].1.trim().eq_ignore_ascii_case(&expected_localhost))
+    {
         return None;
     }
     let url: Url = format!("http://{address}{target}").parse().ok()?;
@@ -1455,5 +1554,35 @@ mod tests {
         assert!(!keep_saved_sign_in(true, "mfa_required"));
         assert!(!keep_saved_sign_in(true, "profile_setup"));
         assert!(!keep_saved_sign_in(true, "signed_out"));
+    }
+
+    #[test]
+    fn transient_network_errors_are_not_permanent_auth_denials() {
+        assert!(is_permanent_auth_denial("Identity request was denied (HTTP 400)"));
+        assert!(is_permanent_auth_denial("Identity request was denied (HTTP 401)"));
+        assert!(is_permanent_auth_denial("Identity request was denied (HTTP 403)"));
+        assert!(!is_permanent_auth_denial("The Mixel identity service is unavailable"));
+        assert!(!is_permanent_auth_denial("Identity request was denied (HTTP 502)"));
+    }
+
+    #[tokio::test]
+    async fn speculative_preconnect_socket_does_not_block_oauth_callback() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { receive_code(listener, "state123").await });
+        // Hold an idle speculative preconnect socket open (like Chrome/Safari does).
+        let _idle = tokio::net::TcpStream::connect(addr).await.unwrap();
+        // Send the real callback on a second concurrent socket; it must complete immediately.
+        let mut real = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let req = format!(
+            "GET /auth/callback?state=state123&code=mycode999 HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+        );
+        real.write_all(req.as_bytes()).await.unwrap();
+        let code = tokio::time::timeout(Duration::from_secs(1), server)
+            .await
+            .expect("callback must not wait on idle preconnect")
+            .unwrap()
+            .unwrap();
+        assert_eq!(code.as_str(), "mycode999");
     }
 }
