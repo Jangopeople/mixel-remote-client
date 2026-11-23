@@ -35,12 +35,23 @@ pub struct HardwareH264Encoder {
     height: usize,
     fps: u32,
     bitrate: u32,
+    high_profile: bool,
     may_buffer: bool,
     last_timestamp: Option<u64>,
     failed: bool,
 }
 impl HardwareH264Encoder {
     pub fn new(width: usize, height: usize, fps: u32, bitrate: u32) -> Result<Self, EncodeError> {
+        Self::new_with_profile(width, height, fps, bitrate, false)
+    }
+
+    pub fn new_with_profile(
+        width: usize,
+        height: usize,
+        fps: u32,
+        bitrate: u32,
+        high_profile: bool,
+    ) -> Result<Self, EncodeError> {
         if !(2..=8192).contains(&width)
             || !(2..=8192).contains(&height)
             || !width.is_multiple_of(2)
@@ -81,6 +92,7 @@ impl HardwareH264Encoder {
                 height,
                 fps,
                 bitrate,
+                high_profile,
                 may_buffer: false,
                 last_timestamp: None,
                 failed: false,
@@ -106,9 +118,14 @@ impl HardwareH264Encoder {
                 }
                 Err(error) => return Err(error),
             };
+            let profile_level = if high_profile {
+                kVTProfileLevel_H264_High_AutoLevel
+            } else {
+                kVTProfileLevel_H264_ConstrainedBaseline_AutoLevel
+            };
             encoder.property(
                 kVTCompressionPropertyKey_ProfileLevel,
-                kVTProfileLevel_H264_ConstrainedBaseline_AutoLevel.as_ref(),
+                profile_level.as_ref(),
             )?;
             encoder.property(
                 kVTCompressionPropertyKey_AverageBitRate,
@@ -282,7 +299,7 @@ impl HardwareH264Encoder {
     }
 
     pub(crate) fn recreate(&self) -> Result<Self, EncodeError> {
-        Self::new(self.width, self.height, self.fps, self.bitrate)
+        Self::new_with_profile(self.width, self.height, self.fps, self.bitrate, self.high_profile)
     }
 
     fn finish_output(
@@ -501,5 +518,19 @@ mod recovery_tests {
         println!(
             "PASS: injected callback drop recovered on the same real VideoToolbox hardware session; duplicate timestamps and fatal timeout still refused"
         );
+    }
+
+    #[test]
+    fn high_profile_encodes_and_decodes_on_videotoolbox() {
+        let mut encoder = HardwareH264Encoder::new_with_profile(640, 360, 30, 2_000_000, true).unwrap();
+        let frame = CapturedFrame::bgra(640, 360, 640 * 4, vec![0x42; 640 * 360 * 4]).unwrap();
+        let encoded = encoder.encode(&frame, 0, true).unwrap();
+        assert!(encoded.keyframe);
+        // Verify SPS has profile_idc == 100 (High Profile) and decodes cleanly on VideoToolbox.
+        let sps_pos = encoded.annex_b.windows(5).position(|w| w[0..4] == [0, 0, 0, 1] && (w[4] & 0x1F) == 7).unwrap();
+        assert_eq!(encoded.annex_b[sps_pos + 5], 100, "expected H.264 High Profile (profile_idc=100)");
+        let mut decoder = crate::macos_decoder::H264Decoder::new(8192, 4320).unwrap();
+        let decoded = decoder.decode(&encoded.annex_b, 0).unwrap().unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (640, 360));
     }
 }

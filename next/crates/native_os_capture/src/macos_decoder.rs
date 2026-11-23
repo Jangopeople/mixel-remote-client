@@ -92,7 +92,7 @@ impl H264Decoder {
         self.format = None;
     }
     fn configure(&mut self) -> Result<(), DecodeError> {
-        if self.sps.len() < 4 || self.pps.is_empty() || self.sps[1] != 66 {
+        if self.sps.len() < 4 || self.pps.is_empty() || !matches!(self.sps[1], 66 | 77 | 100) {
             return Err(DecodeError::Bitstream);
         }
         // SAFETY: two nonempty parameter vectors remain live during creation;

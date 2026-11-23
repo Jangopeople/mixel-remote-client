@@ -182,7 +182,7 @@ fn apply_low_latency_codec_api(api: &ICodecAPI, fps: u32, bitrate: u32) {
 }
 
 impl MfHardwareEncoder {
-    fn try_new(width: usize, height: usize, fps: u32, bitrate: u32) -> Result<Self, EncodeError> {
+    fn try_new(width: usize, height: usize, fps: u32, bitrate: u32, high_profile: bool) -> Result<Self, EncodeError> {
         if !(16..=8192).contains(&width)
             || !(16..=4320).contains(&height)
             || width.saturating_mul(height) > 33_177_600
@@ -292,7 +292,12 @@ impl MfHardwareEncoder {
             out_type
                 .SetUINT64(&MF_MT_FRAME_RATE, pack_u64(fps, 1))
                 .map_err(|_| EncodeError::HardwareUnavailable)?;
-            let _ = out_type.SetUINT32(&MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Base.0 as u32);
+            let profile = if high_profile {
+                eAVEncH264VProfile_High.0 as u32
+            } else {
+                eAVEncH264VProfile_Base.0 as u32
+            };
+            let _ = out_type.SetUINT32(&MF_MT_MPEG2_PROFILE, profile);
             transform
                 .SetOutputType(0, &out_type, 0)
                 .map_err(|_| EncodeError::HardwareUnavailable)?;
@@ -614,10 +619,20 @@ enum Backend {
 
 impl WindowsScreenH264Encoder {
     pub fn new(width: usize, height: usize, fps: u32, bitrate: u32) -> Result<Self, EncodeError> {
+        Self::new_with_profile(width, height, fps, bitrate, false)
+    }
+
+    pub fn new_with_profile(
+        width: usize,
+        height: usize,
+        fps: u32,
+        bitrate: u32,
+        high_profile: bool,
+    ) -> Result<Self, EncodeError> {
         let timer = HighResTimerGuard::acquire();
         let disable_hw = std::env::var("MIXEL_NO_HW_ENC").is_ok_and(|v| v == "1");
         let backend = if !disable_hw
-            && let Ok(hw) = MfHardwareEncoder::try_new(width, height, fps, bitrate)
+            && let Ok(hw) = MfHardwareEncoder::try_new(width, height, fps, bitrate, high_profile)
         {
             Backend::Hardware(Box::new(hw))
         } else {

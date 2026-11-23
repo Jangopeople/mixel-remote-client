@@ -160,6 +160,12 @@ pub fn own_features_with(vrate2: bool) -> Vec<&'static str> {
     if vrate2 {
         features.push(crate::video_rate::FEATURE_CLOCK);
     }
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "ios"))]
+    features.push(H264_HIGH);
+    #[cfg(target_os = "linux")]
+    if crate::linux_gst_decoder::high_profile_available() {
+        features.push(H264_HIGH);
+    }
     // Hosts that show the technician's drawings (not Wayland or iOS).
     features.extend(crate::annotation::features());
     features
@@ -204,6 +210,8 @@ pub const FULL_HD: &str = "hd";
 pub const ULTRA_HD: &str = "uhd";
 /// Feature flag: this app synchronizes native host cursor shapes (`mixel-cursor-v1:`).
 pub const CURSOR_FEATURE: &str = "cursor";
+/// Feature flag: this app can decode H.264 High Profile (CABAC) streams.
+pub const H264_HIGH: &str = "h264hi";
 
 /// User-selected quality preference sent via `quality:auto|speed|quality`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -266,6 +274,7 @@ pub struct ControlPipe {
     quality_mode: QualityMode,
     cursor_peer: bool,
     cursor_shape: Option<String>,
+    h264_high: bool,
     /// Host: privacy screen, input block and lock-at-end are undone when the session ends.
     _guard: Option<crate::session_guard::Guard>,
     /// Controller: received sound frames not yet handed to the player.
@@ -454,6 +463,7 @@ impl ControlPipe {
             quality_mode: QualityMode::Auto,
             cursor_peer: features.iter().any(|name| name == CURSOR_FEATURE),
             cursor_shape: None,
+            h264_high: features.iter().any(|name| name == H264_HIGH),
             _guard: config.host.then(crate::session_guard::Guard::new),
             sound_in: std::collections::VecDeque::new(),
             print_out: None,
@@ -502,6 +512,7 @@ impl ControlPipe {
             quality_mode: QualityMode::Auto,
             cursor_peer: false,
             cursor_shape: None,
+            h264_high: false,
             _guard: None,
             sound_in: std::collections::VecDeque::new(),
             print_out: None,
@@ -643,6 +654,10 @@ impl ControlPipe {
 
     pub fn quality_mode(&self) -> QualityMode {
         self.quality_mode
+    }
+
+    pub fn h264_high(&self) -> bool {
+        self.h264_high
     }
 
     /// Host: notifies a cursor-capable controller when the host cursor shape changes.

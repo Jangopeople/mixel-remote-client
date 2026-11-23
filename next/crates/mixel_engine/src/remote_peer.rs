@@ -984,9 +984,10 @@ async fn negotiate(
     } else {
         None
     };
+    let early_high_profile = peer_features.iter().any(|name| name == crate::remote_control::H264_HIGH);
     // `MIXEL_NO_EARLYPIC` (lab): the capture and encoder start only after DTLS is up, as before 4752b70.
     let mut prepared: Option<EarlyPicture> = match early_size {
-        Some(early_size) if std::env::var_os("MIXEL_NO_EARLYPIC").is_none() => Some(EarlyPicture::start(config, early_size)),
+        Some(early_size) if std::env::var_os("MIXEL_NO_EARLYPIC").is_none() => Some(EarlyPicture::start(config, early_size, early_high_profile)),
         _ => None,
     };
     if early {
@@ -1017,7 +1018,7 @@ async fn negotiate(
             let early_sender = sender.as_ref().ok_or("Host video sender unavailable")?;
             let mut prep = match prepared.take() {
                 Some(prep) => prep,
-                None => EarlyPicture::start(config, early_size.ok_or("Early picture not prepared")?),
+                None => EarlyPicture::start(config, early_size.ok_or("Early picture not prepared")?, early_high_profile),
             };
             host_early_picture(config, transport, &consent, early_sender, &mut channel, &mut prep, deadline).await?;
             prepared = Some(prep);
@@ -1161,7 +1162,7 @@ struct EarlyPicture {
 }
 
 impl EarlyPicture {
-    fn start(config: &Config, size: (usize, usize)) -> Self {
+    fn start(config: &Config, size: (usize, usize), high_profile: bool) -> Self {
         let capture = session_platform::capture(
             &config.source,
             size,
@@ -1171,7 +1172,7 @@ impl EarlyPicture {
         .ok();
         crate::qa_timeline::mark("early: screen capture opened");
         let encoder = if capture.is_some() {
-            start_encoder(size, encoder_bitrate(size, crate::video_pacing::START_RATE)).ok()
+            start_encoder(size, encoder_bitrate(size, crate::video_pacing::START_RATE), high_profile).ok()
         } else {
             None
         };
@@ -1687,7 +1688,7 @@ mod bitrate_tests {
 /// hardware H.264; falls back internally to 30 FPS when software OpenH264 is used), 30 on Linux.
 const TARGET_FPS: u32 = if cfg!(any(target_os = "macos", target_os = "windows")) { 60 } else { 30 };
 
-fn start_encoder(size: (usize, usize), bitrate: u32) -> Result<mpsc::Sender<EncodeRequest>, String> {
+fn start_encoder(size: (usize, usize), bitrate: u32, high_profile: bool) -> Result<mpsc::Sender<EncodeRequest>, String> {
     // A rotation may briefly overlap the previous encoder's cleanup. Bound
     // owners even if a VideoToolbox driver call never returns.
     static OWNERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
@@ -1699,7 +1700,7 @@ fn start_encoder(size: (usize, usize), bitrate: u32) -> Result<mpsc::Sender<Enco
         .name("mixel-screen-encoder".into())
         .spawn(move || {
             let _permit = permit;
-            let mut encoder = ScreenH264Encoder::new(size.0, size.1, TARGET_FPS, bitrate);
+            let mut encoder = ScreenH264Encoder::new_with_profile(size.0, size.1, TARGET_FPS, bitrate, high_profile);
             while let Some(request) = worker.blocking_recv() {
                 let result = match &mut encoder {
                     Ok(encoder) => {
@@ -1827,11 +1828,12 @@ async fn host_media(
     // The technician's pointer is placed on the shared display.
     crate::session_guard::set_shared_source(&shown);
     let result = async {
+        let high_profile = control.h264_high();
         let mut full_size = size;
         let mut bitrate = encoder_bitrate(size, crate::video_pacing::START_RATE);
         let (mut encoder, mut sequence, started) = match handed_encoder {
             Some((encoder, seq, started_at)) => (encoder, seq, started_at),
-            None => (start_encoder(size, bitrate)?, 0, Instant::now()),
+            None => (start_encoder(size, bitrate, high_profile)?, 0, Instant::now()),
         };
         let mut bitrate_set = Instant::now();
         let mut pending_bitrate: Option<u32> = None;
@@ -1946,7 +1948,7 @@ async fn host_media(
                         full_size = next_size;
                         if next_size != size {
                             size = next_size;
-                            encoder = start_encoder(size, bitrate)?;
+                            encoder = start_encoder(size, bitrate, high_profile)?;
                         }
                         next
                     }
@@ -2145,7 +2147,7 @@ async fn host_media(
                         // without tearing down the encoder or injecting an IDR spike.
                         pending_bitrate = Some(wanted);
                     } else {
-                        encoder = start_encoder(next_size, wanted)?;
+                        encoder = start_encoder(next_size, wanted, high_profile)?;
                         if next_size != size {
                             size = next_size;
                             recent = None;

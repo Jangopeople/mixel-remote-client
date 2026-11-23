@@ -106,7 +106,8 @@ pub fn zero_reorder_baseline_sps(sps: &[u8]) -> Result<Vec<u8>, EncodeError> {
             .collect(),
         position: 0,
     };
-    if reader.read(8)? != 66 {
+    let profile_idc = reader.read(8)?;
+    if !matches!(profile_idc, 66 | 77 | 100) {
         return Err(EncodeError::Bitstream);
     }
     let constraints = reader.read(8)?;
@@ -115,6 +116,34 @@ pub fn zero_reorder_baseline_sps(sps: &[u8]) -> Result<Vec<u8>, EncodeError> {
     }
     reader.read(8)?;
     reader.ue(31)?;
+    if profile_idc == 100 {
+        let chroma_format_idc = reader.ue(3)?;
+        if chroma_format_idc == 3 {
+            reader.flag()?;
+        }
+        reader.ue(6)?; // bit_depth_luma_minus8
+        reader.ue(6)?; // bit_depth_chroma_minus8
+        reader.flag()?; // qpprime_y_zero_transform_bypass_flag
+        if reader.flag()? {
+            // seq_scaling_matrix_present_flag: skip 8 (or 12) scaling lists
+            let count = if chroma_format_idc != 3 { 8 } else { 12 };
+            for i in 0..count {
+                if reader.flag()? {
+                    let size = if i < 6 { 16 } else { 64 };
+                    let mut last_scale = 8i32;
+                    let mut next_scale = 8i32;
+                    for _ in 0..size {
+                        if next_scale != 0 {
+                            let code = reader.ue(512)? as i32;
+                            let delta = if code & 1 != 0 { (code + 1) / 2 } else { -(code / 2) };
+                            next_scale = (last_scale + delta + 256) % 256;
+                        }
+                        last_scale = if next_scale == 0 { last_scale } else { next_scale };
+                    }
+                }
+            }
+        }
+    }
     reader.ue(12)?;
     match reader.ue(2)? {
         0 => {

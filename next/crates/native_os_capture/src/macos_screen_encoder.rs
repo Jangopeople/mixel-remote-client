@@ -16,8 +16,18 @@ pub struct ScreenH264Encoder {
 }
 impl ScreenH264Encoder {
     pub fn new(width: usize, height: usize, fps: u32, bitrate: u32) -> Result<Self, EncodeError> {
+        Self::new_with_profile(width, height, fps, bitrate, false)
+    }
+
+    pub fn new_with_profile(
+        width: usize,
+        height: usize,
+        fps: u32,
+        bitrate: u32,
+        high_profile: bool,
+    ) -> Result<Self, EncodeError> {
         Ok(Self {
-            hardware: HardwareH264Encoder::new(width, height, fps, bitrate)?,
+            hardware: HardwareH264Encoder::new_with_profile(width, height, fps, bitrate, high_profile)?,
             progress: Progress::new(),
         })
     }

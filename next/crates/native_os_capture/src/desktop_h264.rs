@@ -32,6 +32,16 @@ pub struct ScreenH264Encoder {
 }
 
 impl ScreenH264Encoder {
+    pub fn new_with_profile(
+        width: usize,
+        height: usize,
+        fps: u32,
+        bitrate: u32,
+        _high_profile: bool,
+    ) -> Result<Self, EncodeError> {
+        Self::new(width, height, fps, bitrate)
+    }
+
     pub fn new(width: usize, height: usize, fps: u32, bitrate: u32) -> Result<Self, EncodeError> {
         if !(16..=8192).contains(&width)
             || !(16..=4320).contains(&height)

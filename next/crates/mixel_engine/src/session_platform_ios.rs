@@ -61,6 +61,9 @@ pub fn capture(_source: &str, _size: (usize, usize)) -> Result<Capture, String> 
 /// The phone never encodes its own screen in a session (switching sides is refused before).
 pub struct ScreenH264Encoder;
 impl ScreenH264Encoder {
+    pub fn new_with_profile(width: usize, height: usize, fps: u32, bitrate: u32, _high_profile: bool) -> Result<Self, String> {
+        Self::new(width, height, fps, bitrate)
+    }
     pub fn new(_width: usize, _height: usize, _fps: u32, _bitrate: u32) -> Result<Self, String> {
         Err(CONTROLLER_ONLY.into())
     }
