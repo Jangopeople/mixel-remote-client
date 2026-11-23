@@ -510,6 +510,44 @@ def check_backups() -> str:
     return ", ".join(report)
 
 
+def validate_turn_config_text(text: str) -> str:
+    """Guard against coturn ACL / quota regressions (incident 2026-11-23):
+    - `denied-peer-ip=::-ffff:...` matches IPv4-mapped IPv6 and blocks all public IPv4 peers with 403.
+    - `user-quota < 16` or `total-quota < 64` exhausts allocations on retries across 3 TURN URLs.
+    - Private IPv4 SSRF blocks (10/8, 127/8) must stay in place."""
+    lines = [line.strip() for line in text.splitlines() if line.strip() and not line.strip().startswith("#")]
+    problems: list[str] = []
+    if any(line.startswith("denied-peer-ip=::-ffff") for line in lines):
+        problems.append("denied-peer-ip=::-ffff wildcard blocks public IPv4 peers")
+    for required in ("denied-peer-ip=10.0.0.0-10.255.255.255", "denied-peer-ip=127.0.0.0-127.255.255.255"):
+        if required not in lines:
+            problems.append(f"missing SSRF block {required}")
+    quotas = {}
+    for line in lines:
+        if "=" in line:
+            k, v = line.split("=", 1)
+            if k in ("user-quota", "total-quota") and v.isdigit():
+                quotas[k] = int(v)
+    if quotas.get("user-quota", 0) < 16:
+        problems.append(f"user-quota={quotas.get('user-quota', 'unset')} (< 16)")
+    if quotas.get("total-quota", 0) < 64:
+        problems.append(f"total-quota={quotas.get('total-quota', 'unset')} (< 64)")
+    if problems:
+        raise CheckError("turnserver.conf invalid: " + "; ".join(problems))
+    return f"turnserver.conf safe (user-quota={quotas['user-quota']}, total-quota={quotas['total-quota']})"
+
+
+def check_turn_config() -> str:
+    path = cfg("MRH_TURN_CONF", "/etc/mixel-remote/turnserver.conf")
+    if not os.path.exists(path):
+        alt = "/opt/mixel-remote-next-qa/private/turnserver.conf"
+        path = alt if os.path.exists(alt) else path
+    if not os.path.exists(path):
+        raise CheckError(f"turnserver.conf not found at {path}")
+    with open(path, encoding="utf-8") as fh:
+        return validate_turn_config_text(fh.read())
+
+
 # name: (function, component, interval seconds, severity). Component "internal" is alerted on but
 # not shown on the public status page.
 CHECKS = {
@@ -521,6 +559,7 @@ CHECKS = {
     "presence_fresh": (check_presence_fresh, "connections", 0, "degraded"),
     "containers": (check_containers, "connections", 0, "outage"),
     "turn_ports": (check_turn_ports, "relay", 0, "outage"),
+    "turn_config": (check_turn_config, "relay", 600, "degraded"),
     "gotrue": (check_gotrue, "signin", 0, "outage"),
     "ism_api": (check_ism_api, "signin", 0, "outage"),
     "portal": (check_portal, "portal", 0, "outage"),
