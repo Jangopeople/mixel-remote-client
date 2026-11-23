@@ -659,7 +659,7 @@ async fn negotiate(
                             && name.len() <= 16
                             && name.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
                     })
-                    .take(16)
+                    .take(64)
                     .map(str::to_owned)
                     .collect()
             })
@@ -815,10 +815,14 @@ async fn negotiate(
                     && !config.mirror
                     && config.previous.is_none()
                     && sdp.lines().any(|line| line == FASTPIC_ATTRIBUTE);
-                if config.control && sdp.lines().any(|line| line == ACTIONS_ATTRIBUTE) {
-                    actions = tokio::task::spawn_blocking(crate::host_actions::available)
-                        .await
-                        .unwrap_or_default();
+                if sdp.lines().any(|line| line == ACTIONS_ATTRIBUTE) {
+                    if config.control {
+                        actions = tokio::task::spawn_blocking(crate::host_actions::available)
+                            .await
+                            .unwrap_or_default();
+                    } else {
+                        actions = vec![crate::host_actions::QUALITY.to_owned()];
+                    }
                 }
                 if config.control && sdp.lines().any(|line| line == DISPLAYS_ATTRIBUTE) {
                     let source = config.source.clone();
@@ -1105,7 +1109,11 @@ async fn negotiate(
             .set_host_actions(
                 config.generation,
                 config.session,
-                if control.allowed { actions } else { Vec::new() },
+                if control.allowed {
+                    actions
+                } else {
+                    actions.into_iter().filter(|a| a == crate::host_actions::QUALITY).collect()
+                },
                 signin_id,
                 host_macs,
             )
@@ -2142,7 +2150,7 @@ async fn host_media(
                 if next_size != size || wanted != bitrate {
                     #[cfg(feature = "qa-session")]
                     eprintln!("QA encoder {}x{} -> {}x{}, bit rate {} -> {} kbit/s (pace {:.0} kB/s, base {} ms)", size.0, size.1, next_size.0, next_size.1, bitrate / 1000, wanted / 1000, pacer.rate() / 1000.0, rate.base_delay().as_millis());
-                    if next_size == size && cfg!(any(target_os = "windows", target_os = "macos")) {
+                    if next_size == size && backend != "OpenH264" && cfg!(any(target_os = "windows", target_os = "macos")) {
                         // Update hardware encoder bitrate in-place (VideoToolbox / Media Foundation)
                         // without tearing down the encoder or injecting an IDR spike.
                         pending_bitrate = Some(wanted);
@@ -2654,8 +2662,9 @@ async fn viewer_media(
                         }
                         let rtp = packet.header.timestamp;
                         if let Some(previous) = previous_rtp {
+                            let delta = u64::from(rtp.wrapping_sub(previous)).max(1);
                             timestamp_ticks = timestamp_ticks
-                                .checked_add(u64::from(rtp.wrapping_sub(previous)))
+                                .checked_add(delta)
                                 .ok_or("Video timestamp exhausted")?;
                         }
                         previous_rtp = Some(rtp);

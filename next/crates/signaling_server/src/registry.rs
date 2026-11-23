@@ -1666,6 +1666,10 @@ impl Registry {
                     return Err(ErrorCode::Forbidden);
                 }
                 let (controller, host, group) = (s.controller, s.host, s.group);
+                // An `unattended_host_only` device (startup host / Quick Support phone) may never become controller.
+                if self.peers.get(&host).is_some_and(Peer::unattended_host_only) {
+                    return Err(ErrorCode::Forbidden);
+                }
                 if ![controller, host].iter().all(|id| self.peers.get(id).is_some_and(|peer| peer.supports(FEATURE_SWITCH) && peer.identity.is_some())) {
                     return Err(ErrorCode::Unavailable);
                 }

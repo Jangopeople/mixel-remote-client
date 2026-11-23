@@ -81,10 +81,17 @@ internal sealed class RemoteScreen : Grid
         };
         Drop += async (_, e) =>
         {
-            if (!session.Remote.Files || !e.DataView.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems)) return;
-            var items = await e.DataView.GetStorageItemsAsync();
-            var file = items.OfType<Windows.Storage.StorageFile>().FirstOrDefault();
-            if (file is not null && !string.IsNullOrEmpty(file.Path)) await session.SendFile(file.Path);
+            try
+            {
+                if (!session.Remote.Files || !e.DataView.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems)) return;
+                var items = await e.DataView.GetStorageItemsAsync();
+                var file = items.OfType<Windows.Storage.StorageFile>().FirstOrDefault();
+                if (file is not null && !string.IsNullOrEmpty(file.Path)) await session.SendFile(file.Path);
+            }
+            catch (Exception ex)
+            {
+                App.Log($"drop: {ex}");
+            }
         };
         Unloaded += (_, _) => ReleaseKeyboard();
     }
@@ -110,22 +117,27 @@ internal sealed class RemoteScreen : Grid
             }
             if (down)
             {
-                held.Add(usage);
                 var cmd = held.Contains(KeyMap.Windows) || held.Contains(231);
                 if ((ctrl || cmd) && !alt)
                 {
                     if (usage == 25)
                     {
-                        _ = session.PasteToRemote(usage, true);
+                        // Do not add V (25) to `held` so releasing V before the async clipboard push completes
+                        // never sends KeyUp before KeyDown; PasteToRemote releases held modifiers and presses cleanly.
+                        var mod = ctrl ? KeyMap.Control : KeyMap.Windows;
+                        if (held.Count > 0) { session.Send(new InputEvent.ReleaseAll()); held.Clear(); }
+                        _ = session.PasteToRemote(usage, [mod]);
                         return true;
                     }
                     if (usage is 6 or 27)
                     {
+                        held.Add(usage);
                         session.Send(new InputEvent.Key(usage, true));
                         session.PullClipboardSoon();
                         return true;
                     }
                 }
+                held.Add(usage);
             }
             else if (!held.Remove(usage))
             {
@@ -154,7 +166,7 @@ internal sealed class RemoteScreen : Grid
     private void OnDrawing(object? sender, EventArgs args) { if (last is not null) Draw(last); }
     private void OnSession(object? sender, System.ComponentModel.PropertyChangedEventArgs change)
     {
-        if (change.PropertyName == nameof(SessionModel.PointerMode)) UpdateCursor();
+        if (change.PropertyName is nameof(SessionModel.PointerMode) or nameof(SessionModel.CursorShape)) UpdateCursor();
     }
 
     private bool inside;
@@ -198,6 +210,13 @@ internal sealed class RemoteScreen : Grid
         session.DrawingChanged -= OnDrawing;
         session.PropertyChanged -= OnSession;
         ReleaseKeyboard();
+        hook?.Dispose();
+        hook = null;
+        panel.SwapChain = null;
+        bitmap?.Dispose();
+        bitmap = null;
+        chain?.Dispose();
+        chain = null;
         if (cursorHidden)
         {
             cursorHidden = false;
@@ -283,6 +302,7 @@ internal sealed class RemoteScreen : Grid
     private void DrawStrokes(Microsoft.Graphics.Canvas.CanvasDrawingSession drawing)
     {
         double[] pen = [3, 5, 8, 12], highlight = [14, 20, 28, 36];
+        using var style = new Microsoft.Graphics.Canvas.Geometry.CanvasStrokeStyle { StartCap = Microsoft.Graphics.Canvas.Geometry.CanvasCapStyle.Round, EndCap = Microsoft.Graphics.Canvas.Geometry.CanvasCapStyle.Round, LineJoin = Microsoft.Graphics.Canvas.Geometry.CanvasLineJoin.Round };
         foreach (var stroke in session.Strokes)
         {
             if (stroke.Points.Count == 0) continue;
@@ -291,7 +311,6 @@ internal sealed class RemoteScreen : Grid
             var step = Math.Clamp((int)stroke.Width, 1, 4) - 1;
             var width = (float)Math.Max(1, (stroke.Tool == "highlighter" ? highlight[step] : pen[step]) * picture.Height / 1080);
             System.Numerics.Vector2 At((ushort X, ushort Y) point) => new((float)(picture.X + point.X / 65535.0 * picture.Width), (float)(picture.Y + point.Y / 65535.0 * picture.Height));
-            var style = new Microsoft.Graphics.Canvas.Geometry.CanvasStrokeStyle { StartCap = Microsoft.Graphics.Canvas.Geometry.CanvasCapStyle.Round, EndCap = Microsoft.Graphics.Canvas.Geometry.CanvasCapStyle.Round, LineJoin = Microsoft.Graphics.Canvas.Geometry.CanvasLineJoin.Round };
             if (stroke.Tool == "arrow" && stroke.Points.Count > 1)
             {
                 var (from, to) = (At(stroke.Points[0]), At(stroke.Points[^1]));
@@ -310,8 +329,8 @@ internal sealed class RemoteScreen : Grid
         }
     }
 
-    /// <summary>The picture as JPEG base64 (at most 1280 wide) for the AI assistant.</summary>
-    public string? Snapshot()
+    /// <summary>The picture as JPEG base64 (at most 1280 wide) for the AI assistant (async so it never deadlocks the UI thread).</summary>
+    public async Task<string?> SnapshotAsync()
     {
         if (last is not { } frame) return null;
         var scale = Math.Min(1, 1280.0 / frame.Width);
@@ -320,10 +339,10 @@ internal sealed class RemoteScreen : Grid
         using var target = new CanvasRenderTarget(device, width, height, 96);
         using (var drawing = target.CreateDrawingSession()) drawing.DrawImage(source, new Rect(0, 0, width, height));
         using var stream = new Windows.Storage.Streams.InMemoryRandomAccessStream();
-        target.SaveAsync(stream, CanvasBitmapFileFormat.Jpeg, 0.72f).AsTask().GetAwaiter().GetResult();
+        await target.SaveAsync(stream, CanvasBitmapFileFormat.Jpeg, 0.72f);
         var bytes = new byte[stream.Size];
         using var reader = new Windows.Storage.Streams.DataReader(stream.GetInputStreamAt(0));
-        reader.LoadAsync((uint)stream.Size).AsTask().GetAwaiter().GetResult();
+        await reader.LoadAsync((uint)stream.Size);
         reader.ReadBytes(bytes);
         return Convert.ToBase64String(bytes);
     }

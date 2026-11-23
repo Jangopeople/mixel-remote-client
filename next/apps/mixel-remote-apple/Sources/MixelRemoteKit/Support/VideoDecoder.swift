@@ -98,12 +98,13 @@ public final class H264Decoder: @unchecked Sendable {
         let sets = packet.units.filter { nalType($0) == 7 || nalType($0) == 8 }
         let slices = packet.units.filter { [1, 5].contains(nalType($0)) }
         let configChanged = !sets.isEmpty && sets != parameterSets
-        guard packet.sequence > lastSequence || configChanged else { throw Problem.invalid }
+        let sequenceReset = packet.sequence <= lastSequence && (configChanged || packet.keyframe)
+        guard packet.sequence > lastSequence || sequenceReset else { throw Problem.invalid }
         if configChanged {
             guard sets.contains(where: { nalType($0) == 7 }), sets.contains(where: { nalType($0) == 8 }) else { throw Problem.invalid }
             try configure(sets)
-            if packet.sequence <= lastSequence { lastSequence = 0 }
         }
+        if sequenceReset { lastSequence = 0 }
         guard let format, let session else { throw Problem.waitingForKeyframe }
         if slices.isEmpty {
             // Parameter-set-only packet (common right before a keyframe on display switch): keep decoder ready.

@@ -174,7 +174,7 @@ impl AppState {
             turn: None,
             policy: None,
             policy_slots: Arc::new(Semaphore::new(64)),
-            recheck_slots: Arc::new(Semaphore::new(64)),
+            recheck_slots: Arc::new(Semaphore::new(256)),
             shutting_down: Arc::new(AtomicBool::new(false)),
             require_signed: false,
             early_ice: false,
@@ -304,7 +304,7 @@ async fn connection(mut socket: WebSocket, state: AppState) {
     if expires_at <= unix {
         return;
     }
-    let (tx, mut rx) = mpsc::channel(64);
+    let (tx, mut rx) = mpsc::channel(256);
     // For answers that arrive after a network call (device policy), in order with the registry's.
     let own_tx = tx.clone();
     let (stop, mut stopped) = watch::channel(false);

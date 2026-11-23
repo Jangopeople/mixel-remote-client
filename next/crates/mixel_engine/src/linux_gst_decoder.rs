@@ -44,13 +44,12 @@ struct GstH264Decoder {
 }
 
 impl GstH264Decoder {
-    fn new(max_width: usize, max_height: usize) -> Result<Self, String> {
-        let decoder = best_decoder_element().ok_or("No GStreamer H.264 decoder plugin installed")?;
+    fn new_with_element(max_width: usize, max_height: usize, decoder: &'static str) -> Result<Self, String> {
         let hardware = decoder != "avdec_h264";
         let desc = format!(
             "appsrc name=src is-live=true format=time caps=\"video/x-h264,stream-format=byte-stream,alignment=au\" \
              ! h264parse ! {decoder} ! videoconvert ! video/x-raw,format=BGRA \
-             ! appsink name=sink sync=false drop=false max-buffers=4"
+             ! appsink name=sink sync=false drop=true max-buffers=2"
         );
         let pipeline = gst::parse::launch(&desc)
             .map_err(|e| format!("gst::parse::launch({decoder}): {e}"))?
@@ -79,6 +78,21 @@ impl GstH264Decoder {
         })
     }
 
+    fn new(max_width: usize, max_height: usize) -> Result<Self, String> {
+        let decoder = best_decoder_element().ok_or("No GStreamer H.264 decoder plugin installed")?;
+        Self::new_with_element(max_width, max_height, decoder)
+    }
+
+    fn bus_failed(&self) -> bool {
+        let Some(bus) = self.pipeline.bus() else { return false };
+        while let Some(msg) = bus.pop() {
+            if matches!(msg.view(), gst::MessageView::Error(_) | gst::MessageView::Eos(_)) {
+                return true;
+            }
+        }
+        false
+    }
+
     fn decode(&mut self, annex_b: &[u8], timestamp_us: u64) -> Result<Option<CapturedFrame>, DecodeError> {
         if annex_b.is_empty() || annex_b.len() > MAX_ACCESS_UNIT {
             return Err(DecodeError::Bitstream);
@@ -99,9 +113,15 @@ impl GstH264Decoder {
         }
         self.src.push_buffer(buffer).map_err(|_| DecodeError::Codec)?;
 
-        let sample = self.sink.try_pull_sample(gst::ClockTime::from_mseconds(40));
-        let Some(sample) = sample else {
-            return Ok(None);
+        if self.bus_failed() {
+            return Err(DecodeError::Codec);
+        }
+        let mut latest_sample = self.sink.try_pull_sample(gst::ClockTime::from_mseconds(40));
+        while let Some(newer) = self.sink.try_pull_sample(gst::ClockTime::ZERO) {
+            latest_sample = Some(newer);
+        }
+        let Some(sample) = latest_sample else {
+            return if self.bus_failed() { Err(DecodeError::Codec) } else { Ok(None) };
         };
         let caps = sample.caps().ok_or(DecodeError::Codec)?;
         let info = VideoInfo::from_caps(caps).map_err(|_| DecodeError::Codec)?;
@@ -118,9 +138,16 @@ impl GstH264Decoder {
         let buf = sample.buffer().ok_or(DecodeError::Codec)?;
         let frame = VideoFrameRef::from_buffer_ref_readable(buf, &info)
             .map_err(|_| DecodeError::Codec)?;
-        let src_stride = frame.plane_stride()[0] as usize;
+        let src_stride = usize::try_from(frame.plane_stride()[0]).map_err(|_| DecodeError::Codec)?;
         let data = frame.plane_data(0).map_err(|_| DecodeError::Codec)?;
         let out_stride = width.checked_mul(4).ok_or(DecodeError::Dimensions)?;
+        let needed = (height - 1)
+            .checked_mul(src_stride)
+            .and_then(|n| n.checked_add(out_stride))
+            .ok_or(DecodeError::Dimensions)?;
+        if src_stride < out_stride || data.len() < needed {
+            return Err(DecodeError::Codec);
+        }
         let mut pixels = vec![0u8; out_stride.checked_mul(height).ok_or(DecodeError::Dimensions)?];
         for y in 0..height {
             let src_row = &data[y * src_stride..y * src_stride + out_stride];
@@ -178,7 +205,25 @@ impl H264Decoder {
         timestamp_us: u64,
     ) -> Result<Option<CapturedFrame>, DecodeError> {
         match &mut self.backend {
-            Backend::GStreamer(gst_dec) => gst_dec.decode(annex_b, timestamp_us),
+            Backend::GStreamer(gst_dec) => match gst_dec.decode(annex_b, timestamp_us) {
+                Err(DecodeError::Codec) if gst_dec.hardware => {
+                    let (mw, mh) = gst_dec.limits;
+                    if gst::ElementFactory::find("avdec_h264").is_some()
+                        && let Ok(mut sw_gst) = GstH264Decoder::new_with_element(mw, mh, "avdec_h264")
+                    {
+                        let res = sw_gst.decode(annex_b, timestamp_us);
+                        self.backend = Backend::GStreamer(sw_gst);
+                        return res;
+                    }
+                    if let Ok(mut sw) = SoftwareDecoder::new(mw, mh) {
+                        let res = sw.decode(annex_b, timestamp_us);
+                        self.backend = Backend::Software(sw);
+                        return res;
+                    }
+                    Err(DecodeError::Codec)
+                }
+                other => other,
+            },
             Backend::Software(sw) => sw.decode(annex_b, timestamp_us),
         }
     }

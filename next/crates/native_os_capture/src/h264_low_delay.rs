@@ -222,15 +222,17 @@ pub fn zero_reorder_baseline_sps(sps: &[u8]) -> Result<Vec<u8>, EncodeError> {
             let reordered = reader.ue(16)?;
             let buffered = reader.ue(16)?;
             reader.trailing()?;
-            if reordered != 0 || buffered < references {
-                return Err(EncodeError::Bitstream);
+            if reordered == 0 && buffered >= references {
+                return Ok(sps.to_vec());
             }
-            return Ok(sps.to_vec());
+            // Rewrite existing restriction block to enforce max_num_reorder_frames = 0.
+        } else {
+            reader.trailing()?;
         }
     } else {
         restriction_position = reader.position;
+        reader.trailing()?;
     }
-    reader.trailing()?;
     let mut output = if vui {
         reader.data[..restriction_position].to_vec()
     } else {

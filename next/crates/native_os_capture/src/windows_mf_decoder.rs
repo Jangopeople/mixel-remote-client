@@ -32,7 +32,7 @@ fn nv12_to_bgra(
     uv_offset: usize,
 ) -> Result<CapturedFrame, DecodeError> {
     let needed_y = stride.checked_mul(height).ok_or(DecodeError::Dimensions)?;
-    let uv_rows = height / 2;
+    let uv_rows = height.div_ceil(2);
     let needed_uv = stride.checked_mul(uv_rows).ok_or(DecodeError::Dimensions)?;
     if uv_offset < needed_y || uv_offset.saturating_add(needed_uv) > nv12.len() {
         return Err(DecodeError::Codec);
@@ -67,10 +67,28 @@ fn nv12_to_bgra(
         .map_err(|_| DecodeError::Dimensions)
 }
 
+/// RAII guard for COM + Media Foundation lifetime. Must be the LAST field of `MfH264Decoder`
+/// so `IMFTransform` and `IMFSample` release before `MFShutdown` / `CoUninitialize`.
+struct MfDecoderGuard {
+    mf_started: bool,
+    com_owned: bool,
+}
+
+impl Drop for MfDecoderGuard {
+    fn drop(&mut self) {
+        unsafe {
+            if self.mf_started {
+                let _ = MFShutdown();
+            }
+            if self.com_owned {
+                CoUninitialize();
+            }
+        }
+    }
+}
+
 struct MfH264Decoder {
     mft: IMFTransform,
-    com_owned: bool,
-    mf_started: bool,
     limits: (usize, usize),
     width: usize,
     height: usize,
@@ -78,6 +96,8 @@ struct MfH264Decoder {
     output_buf_size: u32,
     sample_buf: Option<IMFSample>,
     has_keyframe: bool,
+    // Must be LAST so COM objects drop before MFShutdown / CoUninitialize.
+    _guard: MfDecoderGuard,
 }
 
 impl MfH264Decoder {
@@ -91,22 +111,11 @@ impl MfH264Decoder {
             } else {
                 return Err(format!("CoInitializeEx failed: {hr:?}"));
             };
-            if let Err(e) = MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET) {
-                if com_owned {
-                    CoUninitialize();
-                }
-                return Err(format!("MFStartup failed: {e}"));
-            }
-            let mft: IMFTransform = match CoCreateInstance(&CLSID_MS_H264_DECODER_MFT, None, CLSCTX_INPROC_SERVER) {
-                Ok(m) => m,
-                Err(e) => {
-                    let _ = MFShutdown();
-                    if com_owned {
-                        CoUninitialize();
-                    }
-                    return Err(format!("CoCreateInstance(CMSH264DecoderMFT) failed: {e}"));
-                }
-            };
+            let mut guard = MfDecoderGuard { mf_started: false, com_owned };
+            MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET).map_err(|e| format!("MFStartup failed: {e}"))?;
+            guard.mf_started = true;
+            let mft: IMFTransform = CoCreateInstance(&CLSID_MS_H264_DECODER_MFT, None, CLSCTX_INPROC_SERVER)
+                .map_err(|e| format!("CoCreateInstance(CMSH264DecoderMFT) failed: {e}"))?;
             // Enable low-latency decoding so B-frame/reorder buffering never adds 1-4 frames of lag.
             if let Ok(attrs) = mft.GetAttributes() {
                 let _ = attrs.SetUINT32(&CODECAPI_AVLowLatencyMode, 1);
@@ -118,8 +127,6 @@ impl MfH264Decoder {
 
             let mut decoder = Self {
                 mft,
-                com_owned,
-                mf_started: true,
                 limits: (max_width, max_height),
                 width: 0,
                 height: 0,
@@ -127,6 +134,7 @@ impl MfH264Decoder {
                 output_buf_size: 0,
                 sample_buf: None,
                 has_keyframe: false,
+                _guard: guard,
             };
             decoder.select_nv12_output()?;
             let _ = decoder.mft.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
@@ -277,14 +285,17 @@ impl Drop for MfH264Decoder {
         unsafe {
             let _ = self.mft.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0);
             self.sample_buf = None;
-            if self.mf_started {
-                let _ = MFShutdown();
-            }
-            if self.com_owned {
-                CoUninitialize();
-            }
         }
+        // `self.mft` drops right after `Drop::drop`, and `self._guard` drops LAST
+        // to call `MFShutdown` / `CoUninitialize` only after every COM interface is released.
     }
+}
+
+/// Probes once whether Microsoft's Media Foundation H.264 decoder (High Profile capable)
+/// is available on this Windows installation (false on Windows N / Server Core without Media Feature Pack).
+pub fn high_profile_available() -> bool {
+    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *AVAILABLE.get_or_init(|| MfH264Decoder::new(1920, 1080).is_ok())
 }
 
 enum Backend {

@@ -42,7 +42,7 @@ public sealed partial class AssistantModel : Observable
     public string TicketStatus { get => ticketStatus; private set => Set(ref ticketStatus, value); }
     public bool Busy { get => busy; private set => Set(ref busy, value); }
     /// <summary>The picture the technician sees, as base64 JPEG (at most 1280 wide), from the session window.</summary>
-    public Func<string?> Screenshot { get; set; } = () => null;
+    public Func<Task<string?>> Screenshot { get; set; } = () => Task.FromResult<string?>(null);
 
     private static string LanguageName => Translator.Shared.Language switch
     {
@@ -104,7 +104,8 @@ public sealed partial class AssistantModel : Observable
         {
             var prompt = typed.Length > 0 ? typed : "Explain briefly what is shown on this screen, name any error or warning you can read, and suggest the next two or three steps for the technician.";
             var system = $"You are an IT support assistant helping a technician during a remote support session. The image is the remote computer's screen (a Mixel Remote window on it only means the session is running; ignore it). Be concrete and brief. No Markdown. Quote on-screen text exactly when you rely on it; say so if you cannot read something. Answer in {LanguageName}.";
-            var reply = Plain(await app.Engine.RunAsync<string>("ai_ask", ("address", Address), ("model", Model), ("system", system), ("prompt", prompt), ("image", Screenshot())));
+            var image = await Screenshot();
+            var reply = Plain(await app.Engine.RunAsync<string>("ai_ask", ("address", Address), ("model", Model), ("system", system), ("prompt", prompt), ("image", image)));
             log.Add($"Question: {(typed.Length > 0 ? typed : "(explain the screen)")}\nAssistant: {reply}");
             if (log.Count > 12) log.RemoveAt(0);
             Answer = reply;
@@ -126,7 +127,8 @@ public sealed partial class AssistantModel : Observable
             var minutes = Math.Max(1, (int)Math.Round((DateTimeOffset.UtcNow - started).TotalMinutes));
             var system = $"You write short, factual service-desk notes for an IT provider. Use only the facts given and what the final screenshot shows; never invent work. Format: one summary line, then three short sections for what was done, what is still open, and the time spent, with the section labels in the answer language. Write \"–\" for an empty section. No Markdown. Answer in {LanguageName}.";
             var prompt = $"Remote support session with computer ID {app.Remote.Peer?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}, about {minutes} minutes so far.\nTechnician's keywords: {(typed.Length > 0 ? typed : "(none)")}\nAssistant exchanges during the session:\n{(log.Count > 0 ? string.Join("\n---\n", log) : "(none)")}\nWrite the ticket note.";
-            Answer = Plain(await app.Engine.RunAsync<string>("ai_ask", ("address", Address), ("model", Model), ("system", system), ("prompt", prompt), ("image", Screenshot())));
+            var image = await Screenshot();
+            Answer = Plain(await app.Engine.RunAsync<string>("ai_ask", ("address", Address), ("model", Model), ("system", system), ("prompt", prompt), ("image", image)));
         }
         catch (EngineFailure failure) { Answer = failure.Translated; }
         finally { Busy = false; }

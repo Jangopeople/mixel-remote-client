@@ -212,7 +212,7 @@ pub struct H264Decoder {
 impl H264Decoder {
     pub fn new(width: usize, height: usize) -> Result<Self, DecodeError> {
         // Landscape up to 8K / 4K / multi-monitor ("All screens"), or upright phone screen.
-        if !(16..=8192).contains(&width) || !(16..=8192).contains(&height) || width.saturating_mul(height) > 33_177_600 {
+        if !(16..=8192).contains(&width) || !(16..=8192).contains(&height) || width.saturating_mul(height) > 35_389_440 {
             return Err(DecodeError::Dimensions);
         }
         Ok(Self {

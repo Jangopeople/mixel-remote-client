@@ -53,10 +53,19 @@ internal static class Dialogs
         return dialog;
     }
 
+    private static readonly SemaphoreSlim Gate = new(1, 1);
+
+    private static async Task<ContentDialogResult> ShowGated(ContentDialog dialog)
+    {
+        await Gate.WaitAsync();
+        try { return await dialog.ShowAsync(); }
+        finally { Gate.Release(); }
+    }
+
     public static async Task<bool> Confirm(XamlRoot root, string title, string text, string action, bool danger = true)
     {
         var dialog = Dialog(root, title, Ui.Text(text), action, danger);
-        return await dialog.ShowAsync() == ContentDialogResult.Primary;
+        return await ShowGated(dialog) == ContentDialogResult.Primary;
     }
 
     /// <summary>
@@ -77,18 +86,29 @@ internal static class Dialogs
         dialog.PrimaryButtonClick += async (sender, click) =>
         {
             var deferral = click.GetDeferral();
-            dialog.IsPrimaryButtonEnabled = false;
-            var problem = await submit([.. boxes.Select(box => box.Text)]);
-            dialog.IsPrimaryButtonEnabled = true;
-            if (problem is not null)
+            try
             {
-                click.Cancel = true;
-                error.Text = problem;
-                error.Visibility = Visibility.Visible;
+                dialog.IsPrimaryButtonEnabled = false;
+                var problem = await submit([.. boxes.Select(box => box.Text)]);
+                dialog.IsPrimaryButtonEnabled = true;
+                if (problem is not null)
+                {
+                    click.Cancel = true;
+                    error.Text = problem;
+                    error.Visibility = Visibility.Visible;
+                }
             }
-            deferral.Complete();
+            catch (Exception ex)
+            {
+                App.Log($"dialog form: {ex}");
+                click.Cancel = true;
+            }
+            finally
+            {
+                deferral.Complete();
+            }
         };
-        await dialog.ShowAsync();
+        await ShowGated(dialog);
     }
 
     /// <summary>A dialog with custom content and only a close button.</summary>
@@ -110,11 +130,12 @@ internal static class Dialogs
             dialog.PrimaryButtonClick += async (sender, click) =>
             {
                 var deferral = click.GetDeferral();
-                click.Cancel = !await onPrimary();
-                deferral.Complete();
+                try { click.Cancel = !await onPrimary(); }
+                catch (Exception ex) { App.Log($"dialog show: {ex}"); click.Cancel = true; }
+                finally { deferral.Complete(); }
             };
         }
         opened?.Invoke(dialog);
-        await dialog.ShowAsync();
+        await ShowGated(dialog);
     }
 }

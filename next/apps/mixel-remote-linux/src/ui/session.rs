@@ -337,9 +337,11 @@ impl SessionView {
         };
         let ready = Rc::new(ready);
         // Where the pointer is in the remote picture (0…1), aspect fit; clamped while a button is held.
+        // Hold weak references to `picture` and `ink` in event controllers to avoid a GTK4 GObject reference cycle.
         let point = {
-            let (picture, id) = (picture.clone(), id.clone());
+            let (picture, id) = (picture.downgrade(), id.clone());
             move |app: &App, x: f64, y: f64, clamp: bool| -> Option<(f64, f64)> {
+                let picture = picture.upgrade()?;
                 let (w, h) = with_state(app, &id, |_, session| session.size);
                 logic::picture_point((f64::from(picture.width()), f64::from(picture.height())), (w as f64, h as f64), (x, y), clamp)
             }
@@ -347,7 +349,7 @@ impl SessionView {
         let point = Rc::new(point);
 
         let motion = gtk::EventControllerMotion::new();
-        let (a, p, held, board, ink, own, ok) = (app.clone(), point.clone(), pressed.clone(), self.board.clone(), self.ink.clone(), id.clone(), ready.clone());
+        let (a, p, held, board, ink, own, ok) = (app.clone(), point.clone(), pressed.clone(), self.board.clone(), self.ink.downgrade(), id.clone(), ready.clone());
         motion.connect_motion(move |_, x, y| {
             if !mine(&a, &own) {
                 return;
@@ -365,7 +367,9 @@ impl SessionView {
                     if let Some(message) = message {
                         a.draw(message);
                     }
-                    ink.queue_draw();
+                    if let Some(ink) = ink.upgrade() {
+                        ink.queue_draw();
+                    }
                 }
                 return;
             }
@@ -382,9 +386,11 @@ impl SessionView {
 
         let click = gtk::GestureClick::new();
         click.set_button(0);
-        let (a, p, held, focus, board, own, ok) = (app.clone(), point.clone(), pressed.clone(), picture.clone(), self.board.clone(), id.clone(), ready.clone());
+        let (a, p, held, focus, board, own, ok) = (app.clone(), point.clone(), pressed.clone(), picture.downgrade(), self.board.clone(), id.clone(), ready.clone());
         click.connect_pressed(move |gesture, presses, x, y| {
-            focus.grab_focus();
+            if let Some(focus) = focus.upgrade() {
+                focus.grab_focus();
+            }
             // The click puts this session in front (the view's own press handler did already).
             a.focus_session(Some(own.borrow().clone()));
             let drawing = with_state(&a, &own, |_, session| session.drawing.then(|| (session.draw_tool, session.draw_color, session.draw_width.max(1))));
@@ -473,31 +479,36 @@ impl SessionView {
         // Keys travel by position (HID usage), so the remote computer's own layout applies.
         // Ctrl+Alt+Escape gives the keyboard back to this computer.
         let keys = gtk::EventControllerKey::new();
-        let (a, held, focus, own, ok) = (app.clone(), pressed.clone(), picture.clone(), id.clone(), ready.clone());
+        let (a, held, focus, own, ok) = (app.clone(), pressed.clone(), picture.downgrade(), id.clone(), ready.clone());
         keys.connect_key_pressed(move |_, key, code, modifiers| {
             if !ok(&a) {
                 return glib::Propagation::Proceed;
             }
             if key == gdk::Key::Escape && modifiers.contains(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK) {
                 release_all(&a, &own, &held);
-                if let Some(root) = focus.root() {
+                if let Some(root) = focus.upgrade().and_then(|f| f.root()) {
                     root.set_focus(None::<&gtk::Widget>);
                 }
                 return glib::Propagation::Stop;
             }
             let Some(usage) = keymap::usage(code) else { return glib::Propagation::Proceed };
-            held.borrow_mut().keys.insert(usage);
             let ctrl_or_super = modifiers.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::SUPER_MASK);
             if ctrl_or_super && !modifiers.contains(gdk::ModifierType::ALT_MASK) {
                 if usage == 25 {
-                    a.paste_to_remote(usage);
+                    // Do not insert V (25) into `held.keys`; release held modifiers and let `paste_to_remote`
+                    // press+release cleanly after the async clipboard sync so V never gets stuck down.
+                    let modifier = if modifiers.contains(gdk::ModifierType::CONTROL_MASK) { 224 } else { 227 };
+                    release_all(&a, &own, &held);
+                    a.paste_to_remote(usage, modifier);
                     return glib::Propagation::Stop;
                 } else if usage == 6 || usage == 27 {
+                    held.borrow_mut().keys.insert(usage);
                     a.send_input(input::key(usage, true));
                     a.pull_clipboard_soon();
                     return glib::Propagation::Stop;
                 }
             }
+            held.borrow_mut().keys.insert(usage);
             a.send_input(input::key(usage, true));
             glib::Propagation::Stop
         });
@@ -591,7 +602,7 @@ impl SessionView {
                 (remote.phase.as_str(), remote.switched, &remote.peer_features, session.privacy, session.block_input, session.lock_when_done),
                 (session.pointer_mode, session.sound, session.restart_armed, session.recording_pending, session.has_frame, state.busy),
                 (session.drawing, session.draw_tool, session.draw_color, session.draw_width, session.tool, session.stopping),
-                (in_window, &name, &os, session.fps, session.size, crate::i18n::choice()),
+                (in_window, &name, &os, crate::i18n::choice()),
             )
         );
         if *self.toolbar_key.borrow() == key {

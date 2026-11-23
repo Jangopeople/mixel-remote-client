@@ -1408,24 +1408,27 @@ impl RemoteSession {
         }
         let registry = self.1.clone();
         let result = tokio::task::spawn_blocking(move || {
-            let mut workers = registry
-                .lock()
-                .map_err(|_| "Media owner registry unavailable".to_owned())?;
             let deadline = std::time::Instant::now() + Duration::from_secs(25);
-            while workers.iter().any(|(_, _, worker)| !worker.is_finished()) {
+            loop {
+                let mut workers = registry
+                    .lock()
+                    .map_err(|_| "Media owner registry unavailable".to_owned())?;
+                if !workers.iter().any(|(_, _, worker)| !worker.is_finished()) {
+                    for (_, _, worker) in workers.drain(..) {
+                        worker
+                            .join()
+                            .map_err(|_| "A media owner failed during cleanup".to_owned())?;
+                    }
+                    return Ok(());
+                }
                 if std::time::Instant::now() >= deadline {
                     return Err(
                         "A media owner has not finished cleanup; quitting was postponed".into(),
                     );
                 }
+                drop(workers);
                 std::thread::sleep(Duration::from_millis(10));
             }
-            for (_, _, worker) in workers.drain(..) {
-                worker
-                    .join()
-                    .map_err(|_| "A media owner failed during cleanup".to_owned())?;
-            }
-            Ok(())
         })
         .await
         .map_err(|_| "Media cleanup worker failed".to_owned())
@@ -2057,11 +2060,12 @@ impl RemoteSession {
                     | InputEvent::ButtonClick { .. }
                     | InputEvent::Key { .. }
             );
+        let view_only_ok = matches!(&event, InputEvent::Action { name } if name.starts_with("quality:"));
         let (tx, rx) = tokio::sync::oneshot::channel();
         {
             let inner = self.0.lock().await;
             if let Some(slot) = inner.slots.find(session) {
-                if !slot.live() || !slot.view.control || inner.cancel.load(Ordering::Acquire) {
+                if !slot.live() || (!slot.view.control && !view_only_ok) || inner.cancel.load(Ordering::Acquire) {
                     return Ok(false);
                 }
                 match slot
@@ -2081,7 +2085,7 @@ impl RemoteSession {
             } else {
                 if inner.status.session != Some(session)
                     || inner.status.phase != "active"
-                    || !inner.status.control
+                    || (!inner.status.control && !view_only_ok)
                     || inner.status.sharing
                     || inner.cancel.load(Ordering::Acquire)
                     || inner

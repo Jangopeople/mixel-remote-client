@@ -168,7 +168,7 @@ internal sealed class ToolPanel : PageView
     private StackPanel Help()
     {
         // The AI help looks at the screen of the session this panel belongs to.
-        App.Assistant.Screenshot = () => screen.Snapshot();
+        App.Assistant.Screenshot = () => screen.SnapshotAsync();
         var assistant = App.Assistant;
         var items = Ui.Column(10);
         if (!assistant.Connected)

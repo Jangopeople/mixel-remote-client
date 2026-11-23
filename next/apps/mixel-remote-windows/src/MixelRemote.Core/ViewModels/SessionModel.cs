@@ -183,6 +183,7 @@ public sealed class SessionModel : Observable
         var recording = next.Recording?.Running == true;
         if (recording && RecordingSince is null) RecordingSince = DateTimeOffset.UtcNow;
         else if (!recording && RecordingSince is not null) RecordingSince = null;
+        CursorShape = next.CursorShape ?? "arrow";
         if (next.Phase is "active" or "incoming" or "outgoing") StartTools();
         else StopTools();
         if (!next.InSession) stoppedConsent = null;
@@ -609,6 +610,9 @@ public sealed class SessionModel : Observable
     private string qualityMode = "auto";
     public string QualityMode { get => qualityMode; private set => Set(ref qualityMode, value); }
 
+    private string cursorShape = "arrow";
+    public string CursorShape { get => cursorShape; private set => Set(ref cursorShape, value); }
+
     public void SetQualityMode(string mode)
     {
         if (mode is not ("auto" or "speed" or "quality")) return;
@@ -750,15 +754,15 @@ public sealed class SessionModel : Observable
         }
     }
 
-    public async Task PasteToRemote(ushort usage, bool down)
+    public async Task PasteToRemote(ushort usage, ushort[] modifiers)
     {
         if (SessionId is not { } session || !Controllable || !MayAct) return;
-        if (down && Remote is { Clipboard: true, Phase: "active", ControlPending: false })
+        if (Remote is { Clipboard: true, Phase: "active", ControlPending: false })
         {
             try { await app.Engine.PerformAsync("remote_clipboard", ("session", session), ("push", true)); }
             catch (EngineFailure) { }
         }
-        Send(new InputEvent.Key(usage, down));
+        Press(usage, modifiers);
     }
 
     public void PullClipboardSoon()

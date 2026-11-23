@@ -160,8 +160,12 @@ pub fn own_features_with(vrate2: bool) -> Vec<&'static str> {
     if vrate2 {
         features.push(crate::video_rate::FEATURE_CLOCK);
     }
-    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "ios"))]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     features.push(H264_HIGH);
+    #[cfg(target_os = "windows")]
+    if native_os_capture::windows_mf_decoder::high_profile_available() {
+        features.push(H264_HIGH);
+    }
     #[cfg(target_os = "linux")]
     if crate::linux_gst_decoder::high_profile_available() {
         features.push(H264_HIGH);
@@ -388,7 +392,7 @@ impl ControlPipe {
                 config.generation,
                 config.session,
                 allowed,
-                if config.host || !allowed {
+                if config.host {
                     None
                 } else {
                     Some(input_tx)

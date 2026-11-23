@@ -175,6 +175,20 @@ pub fn file_url(manifest: &Manifest) -> String {
 }
 
 fn work_dir(version: &str) -> PathBuf {
+    #[cfg(target_os = "linux")]
+    {
+        // Avoid world-writable /tmp on multi-user Linux hosts (prevents TOCTOU swap before pkexec).
+        if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR")
+            && !runtime.is_empty()
+        {
+            return PathBuf::from(runtime).join("mixel-remote-updates").join(version);
+        }
+        if let Some(home) = std::env::var_os("HOME")
+            && !home.is_empty()
+        {
+            return PathBuf::from(home).join(".cache").join("mixel-remote-updates").join(version);
+        }
+    }
     std::env::temp_dir().join("mixel-remote-updates").join(version)
 }
 

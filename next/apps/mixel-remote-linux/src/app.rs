@@ -2882,7 +2882,7 @@ impl App {
         });
     }
 
-    pub fn paste_to_remote(self: &Rc<Self>, usage: u16) {
+    pub fn paste_to_remote(self: &Rc<Self>, usage: u16, modifier: u16) {
         let Some(session) = self.state.borrow().focus.clone() else { return };
         let may_push = self
             .state
@@ -2894,7 +2894,10 @@ impl App {
             if may_push {
                 let _ = app.perform("remote_clipboard", json!({ "session": session, "push": true })).await;
             }
+            app.send_input_to(&session, input::key(modifier, true));
             app.send_input_to(&session, input::key(usage, true));
+            app.send_input_to(&session, input::key(usage, false));
+            app.send_input_to(&session, input::key(modifier, false));
         });
     }
 

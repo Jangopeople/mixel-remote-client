@@ -510,10 +510,9 @@ public struct SessionWindowView: View {
                 // A session window belongs to a running session: macOS does not bring it back after a restart.
                 found?.isRestorable = false
                 guard let found, closeGuard == nil else { return }
-                let guardian = WindowCloseGuard(window: found) {
+                let guardian = WindowCloseGuard(window: found) { [weak found] in
                     // Closed by the person: no session left means close; else ask, and close only after "End".
-                    // (The workspace does not hold the guard, so a strong reference makes no cycle.)
-                    guard workspace.tab(peer) != nil else { return true }
+                    guard workspace.tab(peer) != nil, let found else { return true }
                     askToEnd(in: found)
                     return false
                 }
@@ -523,7 +522,12 @@ public struct SessionWindowView: View {
             .tint(Theme.brand)
             .onChange(of: workspace.tab(peer) == nil) { ended in if ended { window?.close() } }
             .onChange(of: workspace.isInWindow(peer)) { inWindow in if !inWindow { window?.close() } }
-            .onDisappear { workspace.windowFocusChanged(peer, focused: false); workspace.windowClosed(peer) }
+            .onDisappear {
+                if let window { closeGuard?.detach(from: window) }
+                closeGuard = nil
+                workspace.windowFocusChanged(peer, focused: false)
+                workspace.windowClosed(peer)
+            }
             .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
                 if let window, (note.object as? NSWindow) === window { workspace.windowFocusChanged(peer, focused: true) }
             }
@@ -564,6 +568,7 @@ extension SessionWindowView {
             }
         }
         Task { @MainActor in
+            defer { workspace.confirmEnd = { _ in false } }
             if await workspace.windowCloseRequested(peer) { window.close() }
         }
     }
@@ -583,6 +588,11 @@ final class WindowCloseGuard: NSObject, NSWindowDelegate {
         objc_setAssociatedObject(window, &WindowCloseGuard.key, self, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
     private static var key = 0
+
+    func detach(from window: NSWindow) {
+        if window.delegate === self { window.delegate = original }
+        objc_setAssociatedObject(window, &WindowCloseGuard.key, nil, .OBJC_ASSOCIATION_ASSIGN)
+    }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool { shouldClose() }
     override func responds(to selector: Selector!) -> Bool { super.responds(to: selector) || original?.responds(to: selector) == true }

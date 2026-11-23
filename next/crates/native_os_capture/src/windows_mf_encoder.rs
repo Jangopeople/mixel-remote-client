@@ -150,7 +150,6 @@ impl Drop for MfGuard {
 }
 
 struct MfHardwareEncoder {
-    _guard: MfGuard,
     transform: IMFTransform,
     codec_api: Option<ICodecAPI>,
     events: Option<IMFMediaEventGenerator>,
@@ -165,6 +164,8 @@ struct MfHardwareEncoder {
     priming: bool,
     pending_inputs: u32,
     consecutive_empty: u32,
+    // Must be dropped LAST so COM/MF interfaces release BEFORE MFShutdown/CoUninitialize.
+    _guard: MfGuard,
 }
 
 fn apply_low_latency_codec_api(api: &ICodecAPI, fps: u32, bitrate: u32) {
@@ -678,7 +679,7 @@ impl WindowsScreenH264Encoder {
     /// Updates the target bitrate in-place via Media Foundation `ICodecAPI` without tearing down
     /// the hardware MFT or forcing a large IDR keyframe. Returns `true` if applied in-place.
     pub fn set_bitrate(&mut self, bitrate: u32) -> bool {
-        if !(100_000..=12_000_000).contains(&bitrate) {
+        if !(100_000..=24_000_000).contains(&bitrate) {
             return false;
         }
         self.bitrate = bitrate;

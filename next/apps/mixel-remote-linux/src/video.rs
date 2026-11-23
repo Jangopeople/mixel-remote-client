@@ -67,7 +67,8 @@ pub fn decode(mut data: Vec<u8>, after: u64) -> Result<Frame, Problem> {
         && width.max(height) <= 8192
         && width.min(height) <= 4320
         && width.saturating_mul(height) <= 33_177_600;
-    if !fits || stride < width * 4 || data.len() != 32 + stride * height || sequence <= after {
+    let expected_len = stride.checked_mul(height).and_then(|n| n.checked_add(32));
+    if !fits || stride < width * 4 || expected_len != Some(data.len()) || sequence <= after {
         return Err(Problem::Invalid);
     }
     // The padding byte is not alpha: make every pixel opaque in place without shifting the 32-byte header.

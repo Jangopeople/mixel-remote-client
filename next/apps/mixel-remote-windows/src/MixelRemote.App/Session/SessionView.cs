@@ -90,14 +90,7 @@ internal sealed class SessionView : Grid
         session.PropertyChanged += OnSession;
         // A closed window has no AppWindow any more: stop following the models (the screenshot and demo
         // windows close while their session stays; the app's own session window only hides).
-        window.Closed += (_, _) =>
-        {
-            closed = true;
-            app.PropertyChanged -= OnApp;
-            session.PropertyChanged -= OnSession;
-            session.PrintJobArrived -= OnPrintJob;
-            Translator.Shared.Changed -= OnLanguage;
-        };
+        window.Closed += OnWindowClosed;
         Loaded += (_, _) =>
         {
             Translator.Shared.Changed -= OnLanguage;
@@ -202,27 +195,48 @@ internal sealed class SessionView : Grid
         tools.Rebuild();
     }
 
+    private void OnWindowClosed(object sender, WindowEventArgs args)
+    {
+        closed = true;
+        window.Closed -= OnWindowClosed;
+        app.PropertyChanged -= OnApp;
+        session.PropertyChanged -= OnSession;
+        session.PrintJobArrived -= OnPrintJob;
+        Translator.Shared.Changed -= OnLanguage;
+        recTimer?.Stop();
+        tools.Detach();
+    }
+
     private void UpdateRecording()
     {
         var since = session.RecordingSince;
-        if (recTimer is null)
+        var recording = since is not null && session.Remote.Recording?.Running == true;
+        var needsTimer = recording || session.Remote.PasswordSession is not null || session.Remote.Reconnecting;
+        if (needsTimer)
         {
-            // One tick a second: the recording time and the support-password warnings (5 and 1 minute before the end).
-            recTimer = DispatcherQueue.CreateTimer();
-            recTimer.Interval = TimeSpan.FromSeconds(1);
-            recTimer.Tick += (_, _) =>
+            if (recTimer is null)
             {
-                ShowRecordingTime();
-                var warning = session.PasswordWarning() + session.ReconnectingNotice();
-                if (warning != lastWarning)
+                // One tick a second: the recording time and the support-password warnings (5 and 1 minute before the end).
+                recTimer = DispatcherQueue.CreateTimer();
+                recTimer.Interval = TimeSpan.FromSeconds(1);
+                recTimer.Tick += (_, _) =>
                 {
-                    lastWarning = warning;
-                    Rebuild();
-                }
-            };
-            recTimer.Start();
+                    ShowRecordingTime();
+                    var warning = session.PasswordWarning() + session.ReconnectingNotice();
+                    if (warning != lastWarning)
+                    {
+                        lastWarning = warning;
+                        Rebuild();
+                    }
+                };
+            }
+            if (!recTimer.IsRunning) recTimer.Start();
         }
-        if (since is null || session.Remote.Recording?.Running != true)
+        else
+        {
+            recTimer?.Stop();
+        }
+        if (!recording)
         {
             recBadge.Visibility = Visibility.Collapsed;
             return;
@@ -246,11 +260,14 @@ internal sealed class SessionView : Grid
     public void Detach()
     {
         closed = true;
+        window.Closed -= OnWindowClosed;
         app.PropertyChanged -= OnApp;
         session.PropertyChanged -= OnSession;
         session.PrintJobArrived -= OnPrintJob;
         Translator.Shared.Changed -= OnLanguage;
         recTimer?.Stop();
+        tools.Detach();
+        app.Assistant.Screenshot = () => Task.FromResult<string?>(null);
         Screen.Detach();
     }
 

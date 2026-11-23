@@ -78,6 +78,8 @@ public final class RemoteScreenView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
+        clipsToBounds = true
+        layer?.masksToBounds = true
         layer?.contentsGravity = .resizeAspect
         layer?.backgroundColor = NSColor.black.cgColor
         layer?.magnificationFilter = .linear
@@ -330,24 +332,28 @@ public final class RemoteScreenView: NSView {
 
     public override func keyDown(with event: NSEvent) {
         guard controllable, let usage = KeyMap.usage(macKeyCode: event.keyCode) else { return super.keyDown(with: event) }
-        syncModifiers(event.modifierFlags)
         // Layout-aware typing mode: send printable non-shortcut characters via `.text` so CH/DE/FR/US layouts match seamlessly.
+        // Release any held Alt/Shift modifiers before `.text` so Option-composed chars (`@`, `{`, `}`) don't trigger remote Alt shortcuts.
         if session?.matchLocalKeyboard == true,
            !event.modifierFlags.contains(.command),
            !event.modifierFlags.contains(.control),
            let chars = event.characters, !chars.isEmpty,
            chars.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value != 0x7F }) {
+            for mod in [KeyMap.alt, UInt16(230), KeyMap.shift, UInt16(229)] where heldKeys.remove(mod) != nil {
+                session?.send(.key(usage: mod, down: false))
+            }
             session?.send(.text(chars))
             return
         }
+        syncModifiers(event.modifierFlags)
         if event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control) {
             let mod = event.modifierFlags.contains(.control) ? KeyMap.control : remoteShortcutModifier
             let needsWrap = !heldKeys.contains(mod) && !heldKeys.contains(mod + 4)
             if usage == 25 { // V -> Paste
-                if session?.remote.clipboard == false {
-                    releaseAll()
-                }
-                session?.pasteToRemote(usage: 25, modifiers: needsWrap ? [mod] : [])
+                // Always release held modifiers and let `pasteToRemote` wrap `[mod]` cleanly AFTER the async clipboard sync,
+                // so releasing Cmd/Ctrl before the clipboard push completes never types a bare 'v'.
+                releaseAll()
+                session?.pasteToRemote(usage: 25, modifiers: [mod])
                 return
             } else if usage == 6 || usage == 27 { // C / X -> Copy / Cut
                 heldKeys.insert(usage)
@@ -397,10 +403,8 @@ public final class RemoteScreenView: NSView {
         let needsWrap = !heldKeys.contains(mod) && !heldKeys.contains(mod + 4)
         if event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control) {
             if usage == 25 { // V -> Paste (sync local clipboard to remote first)
-                if session?.remote.clipboard == false {
-                    releaseAll()
-                }
-                session?.pasteToRemote(usage: 25, modifiers: needsWrap ? [mod] : [])
+                releaseAll()
+                session?.pasteToRemote(usage: 25, modifiers: [mod])
                 return true
             } else if usage == 6 || usage == 27 { // C / X -> Copy / Cut (pull remote clipboard after)
                 session?.copyFromRemote(usage: usage, modifiers: needsWrap ? [mod] : [])

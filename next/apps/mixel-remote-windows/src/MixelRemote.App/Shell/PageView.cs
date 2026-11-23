@@ -38,10 +38,26 @@ internal abstract class PageView : Grid
 
     private void OnLanguage(object? sender, EventArgs change) => Rebuild();
 
+    private void OnWatchedChanged(object? sender, PropertyChangedEventArgs change)
+    {
+        if (sender is SessionModel && change.PropertyName is { } name && SessionModel.PerPictureProperties.Contains(name)) return;
+        Perf.Time($"changed {sender?.GetType().Name}.{change.PropertyName}", () => { });
+        Rebuild();
+    }
+
     protected void Watch(INotifyPropertyChanged model)
     {
         watched.Add(model);
-        model.PropertyChanged += (_, change) => { if (model is SessionModel && change.PropertyName is { } name && SessionModel.PerPictureProperties.Contains(name)) return; Perf.Time($"changed {model.GetType().Name}.{change.PropertyName}", () => { }); Rebuild(); };
+        model.PropertyChanged += OnWatchedChanged;
+    }
+
+    /// <summary>Stops watching all models so a closed tab or window is garbage-collected.</summary>
+    public void Detach()
+    {
+        active = false;
+        foreach (var model in watched) model.PropertyChanged -= OnWatchedChanged;
+        watched.Clear();
+        Translator.Shared.Changed -= OnLanguage;
     }
 
     /// <summary>Hidden pages do not rebuild (the window shows one page at a time).</summary>

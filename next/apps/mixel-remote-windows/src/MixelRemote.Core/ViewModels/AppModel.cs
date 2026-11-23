@@ -322,7 +322,11 @@ public sealed class AppModel : Observable
         Devices.Reset();
         Company.Reset();
         Enrollment.Reset();
-        if (!SignedIn) return;
+        if (!SignedIn)
+        {
+            ClearSessions();
+            return;
+        }
         QuickSupportMode = false;
         // Start registration and show devices before fetching administration-only lists.
         await RefreshRemote();

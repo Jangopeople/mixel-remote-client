@@ -35,59 +35,58 @@ static void on_main(dispatch_block_t block) {
 // ---------------------------------------------------------------- privacy screen
 static NSMutableArray<NSWindow *> *privacy_windows;
 
-static int32_t privacy_ids(uint32_t *ids, int32_t capacity) {
-    int32_t count = 0;
-    for (NSWindow *window in privacy_windows) {
-        if (count < capacity) ids[count] = (uint32_t)window.windowNumber;
-        count++;
-    }
-    return count;
-}
-
 // Opens the cover windows, still invisible; returns their window numbers (or -1).
 int32_t mixel_privacy_create(const char *text, uint32_t *ids, int32_t capacity) {
-    __block int32_t count = -1;
+    __block NSMutableArray<NSNumber *> *collected = nil;
     NSString *message = text ? [NSString stringWithUTF8String:text] : @"";
     on_main(^{
         [NSApplication sharedApplication];
-        if (privacy_windows) {
-            count = privacy_ids(ids, capacity);
-            return;
+        if (!privacy_windows) {
+            privacy_windows = [NSMutableArray array];
+            for (NSScreen *screen in [NSScreen screens]) {
+                NSWindow *window = [[NSWindow alloc] initWithContentRect:screen.frame
+                                                               styleMask:NSWindowStyleMaskBorderless
+                                                                 backing:NSBackingStoreBuffered
+                                                                   defer:NO];
+                window.releasedWhenClosed = NO;
+                window.level = NSScreenSaverWindowLevel;
+                window.backgroundColor = [NSColor colorWithCalibratedRed:0.078 green:0.078 blue:0.078 alpha:1.0];
+                window.opaque = YES;
+                window.hasShadow = NO;
+                window.ignoresMouseEvents = YES;
+                window.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces |
+                                            NSWindowCollectionBehaviorStationary |
+                                            NSWindowCollectionBehaviorFullScreenAuxiliary |
+                                            NSWindowCollectionBehaviorIgnoresCycle;
+                window.sharingType = NSWindowSharingNone;
+                window.alphaValue = 0.0;
+                NSTextField *label = [NSTextField labelWithString:message];
+                label.textColor = [NSColor colorWithCalibratedWhite:0.94 alpha:1.0];
+                label.font = [NSFont systemFontOfSize:28 weight:NSFontWeightSemibold];
+                label.alignment = NSTextAlignmentCenter;
+                label.translatesAutoresizingMaskIntoConstraints = NO;
+                [window.contentView addSubview:label];
+                [NSLayoutConstraint activateConstraints:@[
+                    [label.centerXAnchor constraintEqualToAnchor:window.contentView.centerXAnchor],
+                    [label.centerYAnchor constraintEqualToAnchor:window.contentView.centerYAnchor],
+                ]];
+                [window setFrame:screen.frame display:NO];
+                [window orderFrontRegardless];
+                [privacy_windows addObject:window];
+            }
         }
-        privacy_windows = [NSMutableArray array];
-        for (NSScreen *screen in [NSScreen screens]) {
-            NSWindow *window = [[NSWindow alloc] initWithContentRect:screen.frame
-                                                           styleMask:NSWindowStyleMaskBorderless
-                                                             backing:NSBackingStoreBuffered
-                                                               defer:NO];
-            window.releasedWhenClosed = NO;
-            window.level = NSScreenSaverWindowLevel;
-            window.backgroundColor = [NSColor colorWithCalibratedRed:0.078 green:0.078 blue:0.078 alpha:1.0];
-            window.opaque = YES;
-            window.hasShadow = NO;
-            window.ignoresMouseEvents = YES;
-            window.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces |
-                                        NSWindowCollectionBehaviorStationary |
-                                        NSWindowCollectionBehaviorFullScreenAuxiliary |
-                                        NSWindowCollectionBehaviorIgnoresCycle;
-            window.sharingType = NSWindowSharingNone;
-            window.alphaValue = 0.0;
-            NSTextField *label = [NSTextField labelWithString:message];
-            label.textColor = [NSColor colorWithCalibratedWhite:0.94 alpha:1.0];
-            label.font = [NSFont systemFontOfSize:28 weight:NSFontWeightSemibold];
-            label.alignment = NSTextAlignmentCenter;
-            label.translatesAutoresizingMaskIntoConstraints = NO;
-            [window.contentView addSubview:label];
-            [NSLayoutConstraint activateConstraints:@[
-                [label.centerXAnchor constraintEqualToAnchor:window.contentView.centerXAnchor],
-                [label.centerYAnchor constraintEqualToAnchor:window.contentView.centerYAnchor],
-            ]];
-            [window setFrame:screen.frame display:NO];
-            [window orderFrontRegardless];
-            [privacy_windows addObject:window];
+        NSMutableArray<NSNumber *> *nums = [NSMutableArray arrayWithCapacity:privacy_windows.count];
+        for (NSWindow *window in privacy_windows) {
+            if (window.windowNumber > 0) [nums addObject:@((uint32_t)window.windowNumber)];
         }
-        count = privacy_ids(ids, capacity);
+        collected = nums;
     });
+    if (!collected) return -1;
+    int32_t count = 0;
+    for (NSNumber *num in collected) {
+        if (ids && count < capacity) ids[count] = num.unsignedIntValue;
+        count++;
+    }
     return count;
 }
 
@@ -301,7 +300,7 @@ static CGEventRef tap_event(CGEventTapProxy proxy, CGEventType type, CGEventRef 
 }
 
 static void *tap_main(void *argument) {
-    dispatch_semaphore_t ready = (__bridge dispatch_semaphore_t)argument;
+    dispatch_semaphore_t ready = (__bridge_transfer dispatch_semaphore_t)argument;
     CFRunLoopSourceRef source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0);
     tap_loop = (CFRunLoopRef)CFRetain(CFRunLoopGetCurrent());
     CFRunLoopAddSource(tap_loop, source, kCFRunLoopCommonModes);
@@ -360,7 +359,9 @@ int32_t mixel_block_start(void) {
     }
     dispatch_semaphore_t ready = dispatch_semaphore_create(0);
     tap_running = 1;
-    if (pthread_create(&tap_thread, NULL, tap_main, (__bridge void *)ready) != 0) {
+    void *retained_ready = (__bridge_retained void *)ready;
+    if (pthread_create(&tap_thread, NULL, tap_main, retained_ready) != 0) {
+        (void)(__bridge_transfer dispatch_semaphore_t)retained_ready;
         tap_running = 0;
         CFMachPortInvalidate(tap);
         CFRelease(tap);
@@ -406,7 +407,9 @@ API_AVAILABLE(macos(13.0))
 @implementation MixelAudio
 - (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sample ofType:(SCStreamOutputType)type {
     (void)stream;
-    if (type != SCStreamOutputTypeAudio || !CMSampleBufferIsValid(sample) || !self.callback) return;
+    mixel_audio_callback cb = self.callback;
+    void *ctx = self.context;
+    if (type != SCStreamOutputTypeAudio || !CMSampleBufferIsValid(sample) || !cb) return;
     CMFormatDescriptionRef format = CMSampleBufferGetFormatDescription(sample);
     const AudioStreamBasicDescription *description = format ? CMAudioFormatDescriptionGetStreamBasicDescription(format) : NULL;
     if (!description || description->mFormatID != kAudioFormatLinearPCM || !(description->mFormatFlags & kAudioFormatFlagIsFloat) ||
@@ -443,7 +446,7 @@ API_AVAILABLE(macos(13.0))
                                                              : ((const float *)list->mBuffers[0].mData)[index * channels + from];
                     }
                 }
-                self.callback(self.context, stereo, frames);
+                cb(ctx, stereo, frames);
             }
             free(stereo);
         }
@@ -530,7 +533,10 @@ void mixel_audio_stop(void *handle) {
     if (!handle) return;
     if (@available(macOS 13.0, *)) {
         MixelAudio *audio = (__bridge_transfer MixelAudio *)handle;
-        audio.callback = NULL;
+        // Clear callback synchronously on audio.queue so no in-flight sample callback races with NULL.
+        dispatch_sync(audio.queue, ^{
+            audio.callback = NULL;
+        });
         dispatch_semaphore_t done = dispatch_semaphore_create(0);
         [audio.stream stopCaptureWithCompletionHandler:^(NSError *failure) {
             (void)failure;
