@@ -40,11 +40,13 @@ struct GstH264Decoder {
     sink: AppSink,
     limits: (usize, usize),
     has_keyframe: bool,
+    hardware: bool,
 }
 
 impl GstH264Decoder {
     fn new(max_width: usize, max_height: usize) -> Result<Self, String> {
         let decoder = best_decoder_element().ok_or("No GStreamer H.264 decoder plugin installed")?;
+        let hardware = decoder != "avdec_h264";
         let desc = format!(
             "appsrc name=src is-live=true format=time caps=\"video/x-h264,stream-format=byte-stream,alignment=au\" \
              ! h264parse ! {decoder} ! videoconvert ! video/x-raw,format=BGRA \
@@ -73,6 +75,7 @@ impl GstH264Decoder {
             sink,
             limits: (max_width, max_height),
             has_keyframe: false,
+            hardware,
         })
     }
 
@@ -159,6 +162,13 @@ impl H264Decoder {
                 eprintln!("GStreamer H.264 decoder unavailable ({err}); falling back to OpenH264");
                 Ok(Self { backend: Backend::Software(SoftwareDecoder::new(max_width, max_height)?) })
             }
+        }
+    }
+
+    pub fn hardware_active(&self) -> bool {
+        match &self.backend {
+            Backend::GStreamer(gst_dec) => gst_dec.hardware,
+            Backend::Software(_) => false,
         }
     }
 

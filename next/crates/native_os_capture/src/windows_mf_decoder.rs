@@ -317,6 +317,10 @@ impl H264Decoder {
         }
     }
 
+    pub fn hardware_active(&self) -> bool {
+        matches!(self.backend, Backend::MediaFoundation(_))
+    }
+
     pub fn decode(
         &mut self,
         annex_b: &[u8],
