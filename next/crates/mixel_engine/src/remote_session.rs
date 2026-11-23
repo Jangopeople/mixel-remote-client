@@ -998,7 +998,7 @@ impl RemoteSession {
         }
         let running = workers.iter().filter(|(kind, _, _)| *kind == colleague).count();
         // Four sessions, each possibly still cleaning up its replaced transport.
-        if running >= if colleague { 4 } else { 2 * crate::remote_sessions::MAX_SESSIONS } {
+        if running >= if colleague { crate::remote_sessions::MAX_SESSIONS } else { 2 * crate::remote_sessions::MAX_SESSIONS } {
             return Err("A prior media owner is still stopping".into());
         }
         workers.push((
@@ -3866,8 +3866,7 @@ async fn run(
                     ref other if command_session(other).is_some_and(|session|resuming_id(&resuming,&peer,&ctrl,session).is_some())=>{},
                     Command::Request(host,code,unattended,slot)=>{
                         // This computer is hosting a session: it does not start one of its own.
-                        if peer.is_some(){state.slot_end(generation,slot,"This computer is being helped right now; finish that first".into()).await;continue;}
-                        if ctrl.len()+outgoing.len()>=crate::remote_sessions::MAX_SESSIONS{state.slot_end(generation,slot,"You already have 4 sessions open. End one to start another.".into()).await;continue;}
+                        if ctrl.len()+outgoing.len()>=crate::remote_sessions::MAX_SESSIONS{state.slot_end(generation,slot,format!("You already have {} sessions open. End one to start another.", crate::remote_sessions::MAX_SESSIONS)).await;continue;}
                         if !state.slot_open(slot).await{continue;}
                         if let Some(ready)=warm.take(){pending_warm=Some(ready);}
                         crate::qa_timeline::begin(if unattended {"connect asked (unattended)"} else if code.is_some() {"connect asked (password)"} else {"connect asked (attended)"});
@@ -4249,7 +4248,7 @@ async fn run(
                         ServerMessage::Consent{session,requester_connection,requester,requester_identity,unattended,joining:Some(join),..}=>{
                             // A colleague of the technician asks to join the running session.
                             let primary=peer.as_ref().filter(|active|active.host && active.id==join.session && active.remote==join.inviter_connection && active.signals.is_some() && !active.cancel.load(Ordering::Acquire));
-                            let eligible=!crate::service_config::controller_only() && joined.len()<2 && requester_connection!=join.inviter_connection && !joined.iter().any(|colleague|colleague.remote==requester_connection) && (unattended || !own_ticket.unattended_host_only());
+                            let eligible=!crate::service_config::controller_only() && joined.len()<crate::remote_sessions::MAX_SESSIONS && requester_connection!=join.inviter_connection && !joined.iter().any(|colleague|colleague.remote==requester_connection) && (unattended || !own_ticket.unattended_host_only());
                             let checked=match (primary,requester_identity,eligible) {
                                 (Some(active),Some(ticket),true) if ticket.identity.profile==*requester.as_bytes() => peer_identity(&ticket,requester_connection,&principal,true,&roots).ok().map(|key|(key,ticket,active.source.clone(),active.confirm,active.control,#[cfg(target_os = "linux")] active.portal.clone())),
                                 _=>None,
@@ -4329,11 +4328,41 @@ async fn run(
                         },
                         ServerMessage::Consent{session,requester_connection,requester,requester_identity,unattended,..}=>{
                             crate::qa_timeline::begin(if unattended {"request came in (unattended)"} else {"request came in"});
-                            if early_ok && early_asked.len()<32 && !crate::service_config::controller_only() && peer.is_none() && ctrl.is_empty() && outgoing.is_empty(){
+                            if early_ok && early_asked.len()<32 && !crate::service_config::controller_only() && peer.is_none(){
                                 send(&mut socket,ClientMessage::Ice{session}).await?;
                                 early_asked.insert(session,std::time::Instant::now());
                             }
-                            if crate::service_config::controller_only() || peer.is_some() || !ctrl.is_empty() || !outgoing.is_empty(){send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;continue;}
+                            if crate::service_config::controller_only(){send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;continue;}
+                            if let Some(active)=peer.as_ref() {
+                                // Already hosting a session: allow additional direct unattended connections to mirror
+                                // the active host session (using the multi-viewer `joined` pipeline).
+                                let eligible=unattended
+                                    && active.host
+                                    && active.signals.is_some()
+                                    && !active.cancel.load(Ordering::Acquire)
+                                    && joined.len()<crate::remote_sessions::MAX_SESSIONS
+                                    && requester_connection!=active.remote
+                                    && !joined.iter().any(|colleague|colleague.remote==requester_connection);
+                                let checked=match (requester_identity,eligible) {
+                                    (Some(ticket),true) if ticket.identity.profile==*requester.as_bytes() => peer_identity(&ticket,requester_connection,&principal,true,&roots).ok().map(|key|(key,ticket,active.source.clone(),active.confirm,active.control,#[cfg(target_os = "linux")] active.portal.clone())),
+                                    _=>None,
+                                };
+                                #[cfg(target_os = "linux")]
+                                let Some((key,ticket,source,confirm,primary_control,portal))=checked else {send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;continue;};
+                                #[cfg(not(target_os = "linux"))]
+                                let Some((key,ticket,source,confirm,primary_control))=checked else {send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;continue;};
+                                if !unattended_join_allowed(&state.status().await) {
+                                    send(&mut socket,ClientMessage::Decide{session,accept:false}).await?;continue;
+                                }
+                                let expires=Arc::new(AtomicU64::new(ticket.expires_at));
+                                let mut colleague=Peer{id:session,ui:session,link:Default::default(),handover:None,fallback:None,remote:requester_connection,host:true,key,source,#[cfg(target_os = "linux")] portal,confirm,control:primary_control,clipboard:false,files:false,chat:false,recording:false,close_sent:false,consent_cancel:Arc::new(AtomicBool::new(false)),cancel:Arc::new(AtomicBool::new(false)),signals:None,early:Vec::new(),nonce:None,identity:Some(ticket),expires,relay_expires:0,restart_pending:None,restart_tries:0,rotated_at:std::time::Instant::now(),started_at:std::time::Instant::now(),local_consent:Some(true),accepted_at:Some(std::time::Instant::now()),consent_id:Uuid::new_v4(),joined:true,switched:false,reversed:false};
+                                colleague.control=primary_control;
+                                send(&mut socket,ClientMessage::Decide{session,accept:true}).await?;
+                                joined.push(colleague);
+                                let views=colleague_views(&joined);
+                                state.change(generation,|status|status.colleagues=views).await;
+                                continue;
+                            }
                             let ticket=requester_identity.ok_or("The invitation has no signed requester identity")?;
                             let key=peer_identity(&ticket,requester_connection,&principal,true,&roots)?;
                             #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -5684,18 +5713,19 @@ mod multi_session_tests {
     #[tokio::test]
     async fn four_sessions_run_side_by_side_and_a_fifth_fails_with_a_typed_error() {
         let (remote, mut commands) = registered().await;
+        let max = crate::remote_sessions::MAX_SESSIONS;
         let mut sessions = Vec::new();
-        for n in 0..4 {
-            sessions.push(open(&remote, &mut commands, 200_000_001 + n).await);
+        for n in 0..max {
+            sessions.push(open(&remote, &mut commands, 200_000_001 + n as u32).await);
         }
         let status = remote.status().await;
-        assert_eq!(status.sessions.len(), 4);
-        assert_eq!(status.max_sessions, 4);
+        assert_eq!(status.sessions.len(), max);
+        assert_eq!(status.max_sessions, max);
         assert!(status.sessions.iter().all(|view| view.phase == "active" && view.control));
-        let error = remote.request(200_000_099, None, false).await.unwrap_err();
+        let error = remote.request(200_000_999, None, false).await.unwrap_err();
         let json: serde_json::Value = serde_json::from_str(&error).unwrap();
         assert_eq!(json["hint"], "too_many_sessions");
-        assert_eq!(remote.status().await.sessions.len(), 4, "the refused request left nothing behind");
+        assert_eq!(remote.status().await.sessions.len(), max, "the refused request left nothing behind");
         assert!(commands.try_recv().is_err(), "and sent nothing to the broker");
         // The same device twice is refused as well.
         let again = remote.request(200_000_001, None, false).await.unwrap_err();

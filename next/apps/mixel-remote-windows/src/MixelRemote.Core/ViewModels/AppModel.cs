@@ -294,7 +294,7 @@ public sealed class AppModel : Observable
     /// engine's limit (4) is not reached. Never while this computer is shared.
     /// </summary>
     public bool CanRequestSession(RemoteStatus status) =>
-        status.Phase == "ready" || (status.Sessions is { Count: > 0 } open && !status.Sharing && open.Count < status.SessionLimit);
+        status.Phase == "ready" || (status.Sessions is { } open && status.Phase is not ("incoming" or "deciding") && open.Count < status.SessionLimit);
 
     /// <summary>The Connect button may be used: nothing runs, or another session fits.</summary>
     public bool CanStartConnection => !Remote.InSession || CanRequestSession(Remote);

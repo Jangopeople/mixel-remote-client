@@ -18,7 +18,7 @@ use uuid::Uuid;
 /// Connections and sessions a registry holds without `with_capacity` (tests; the broker sets
 /// `MIXEL_MAX_CONNECTIONS`, see `limits.rs`).
 const DEFAULT_CAPACITY: usize = 1000;
-const MAX_PER_PEER: usize = 4;
+const MAX_PER_PEER: usize = 64;
 const MAX_PRESENCE: usize = 64;
 /// Second (and third) technicians in one running session.
 const MAX_JOINED: usize = 2;

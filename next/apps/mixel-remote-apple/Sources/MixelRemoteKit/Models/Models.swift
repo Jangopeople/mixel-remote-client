@@ -224,18 +224,17 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
     /// Sessions the engine lets this app hold (1 for an older engine).
     public var sessionLimit: Int { max(1, maxSessions ?? 1) }
 
-    /// Another technician session may be requested now: below the limit, and this computer is not
-    /// being helped. An older engine (no `sessions`) runs one session and needs `ready`.
+    /// Another technician session may be requested now: below the limit (even while this computer is
+    /// also being helped in an unattended session). An older engine (no `sessions`) needs `ready`.
     public var canRequestSession: Bool {
         if sessions == nil { return phase == "ready" }
-        return connected && !sharing && !["incoming", "deciding"].contains(phase) && viewerSessions.count < sessionLimit
+        return connected && !["incoming", "deciding"].contains(phase) && viewerSessions.count < sessionLimit
     }
 
     /// A session of another computer is running, so Connect is off: an older engine runs one session;
-    /// a 2.1 engine allows several (at the limit it answers a request with `too_many_sessions`), but not
-    /// while this computer is being helped.
+    /// a 2.1+ engine allows concurrent host + viewer sessions up to `sessionLimit`.
     public var connectBlockedBySession: Bool {
-        sessions == nil ? inSession : sharing || ["incoming", "deciding"].contains(phase)
+        sessions == nil ? inSession : ["incoming", "deciding"].contains(phase)
     }
 
     /// A technician session is being requested (waiting for Accept, or negotiating).

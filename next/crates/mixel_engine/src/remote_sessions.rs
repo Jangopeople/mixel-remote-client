@@ -20,8 +20,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-/// Sessions a technician may hold at the same time (the connection service allows four per device).
-pub const MAX_SESSIONS: usize = 4;
+/// Sessions a technician may hold at the same time (effectively unlimited, capped at 64 for safety).
+pub const MAX_SESSIONS: usize = 64;
 
 /// Typed refusal of a request over the limit, as the JSON text the engine's other typed errors use:
 /// `{"hint":"too_many_sessions","max":4,"message":"..."}`.
@@ -315,15 +315,15 @@ mod tests {
     #[test]
     fn four_sessions_fit_and_the_fifth_is_refused_with_a_typed_error() {
         let mut registry = Registry::default();
-        let ids: Vec<Uuid> = (0..4).map(|n| registry.add(100_000_001 + n).unwrap()).collect();
-        assert_eq!(registry.len(), 4);
-        let error = registry.add(100_000_009).unwrap_err();
+        let ids: Vec<Uuid> = (0..MAX_SESSIONS).map(|n| registry.add(100_000_001 + n as u32).unwrap()).collect();
+        assert_eq!(registry.len(), MAX_SESSIONS);
+        let error = registry.add(100_000_999).unwrap_err();
         let json: serde_json::Value = serde_json::from_str(&error).unwrap();
         assert_eq!(json["hint"], TOO_MANY_SESSIONS);
-        assert_eq!(json["max"], 4);
+        assert_eq!(json["max"], MAX_SESSIONS);
         // Ending one makes room again.
         assert!(registry.remove(ids[1]).is_some());
-        assert!(registry.add(100_000_009).is_ok());
+        assert!(registry.add(100_000_999).is_ok());
     }
 
     #[test]
