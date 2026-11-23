@@ -24,7 +24,9 @@
     "applePassed": 126,
     "windowsPassed": 140,
     "linuxPassed": 88,
-    "failed": 0
+    "failed": 0,
+    "linuxDisplayPassed": 1,
+    "totalPassed": 722
   },
   "logs": {
     "audit-rust-green-r2.log": "043416c75425d2b780ab2645cd5f187850263583467a773f0d9a0d55b94cc367",
@@ -37,7 +39,8 @@
     "audit-macos-real-session.log": "f3b5e2de8686134a0c2358f56e52554f31777504244a7730c7cd890369465d38",
     "audit-advisories-final.log": "799fc05e6513bf365cc7565ea51cc5cb9ca6690b1cd1fe7777339be83437131b",
     "audit-semgrep-final.log": "7adf5932c9e6185775f1bf8150db34510bdffd1951c1d3e2ecd340718d7df4c2",
-    "audit-mac-release-build-r3.log": "7e4b891028fd64490f439867e0f27197d88030476ac57e76a7798426ebb21a7f"
+    "audit-mac-release-build-r3.log": "7e4b891028fd64490f439867e0f27197d88030476ac57e76a7798426ebb21a7f",
+    "audit-linux-gtk-clean.log": "2b61089d4c8bc5d030806b9bcfe860053c3f04f9d022e24881d0e73705b8f6a4"
   },
   "installedApplication": {
     "version": "2.1.21",

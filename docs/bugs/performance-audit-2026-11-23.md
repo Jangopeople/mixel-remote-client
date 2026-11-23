@@ -48,6 +48,7 @@ Rust protocol / signaling / engine / capture / bridges: 367 passed; 0 failed
 Apple native UI/model suite: Executed 126 tests, with 0 failures
 Windows native model suite: Failed: 0, Passed: 140, Skipped: 0
 Linux native suite: 88 passed; 0 failed
+Linux display-only GTK regression: 1 passed; 0 failed; 0 ignored
 Clippy (Mac six crates and native Linux): -D warnings, exit 0
 Semgrep: Ran 83 rules on 5 files: 0 findings
 cargo deny check advisories: advisories ok
@@ -62,8 +63,11 @@ byte-exact file transfer and readable MP4 output. This is a local native session
 not a new public cross-country latency qualification.
 
 The explicit manual exclusions in the Rust suites are the local printer-list
-mutation test and the encoder benchmark. Linux's display-only GTK test is
-reported separately from the ordinary suite.
+mutation test and the encoder benchmark. Linux's display-only GTK test also passes separately under Xvfb with the Cairo
+renderer and local VFS (1 passed, 0 failed, 0 ignored). Total: 722 distinct tests
+passed. The first display-only invocation used the VM's unavailable GPU/GVFS;
+explicit fixture renderer/VFS settings remove those environment warnings without
+changing the application.
 
 ## Installed application and live check
 
