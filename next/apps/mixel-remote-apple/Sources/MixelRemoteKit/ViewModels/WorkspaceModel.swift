@@ -78,6 +78,13 @@ public final class WorkspaceModel: ObservableObject {
     /// Sessions that became ready while the person stayed elsewhere: "SRV-DC-02 is ready · Open".
     @Published public private(set) var readyNotices: [UInt32] = []
 
+    func reset() {
+        attempt = nil
+        readyNotices.removeAll()
+        selected = .console
+        windows.removeAll()
+    }
+
     /// Opens a session window (set by the Mac app; `openWindow(id: "session", value: peer)`).
     public var openWindow: (UInt32) -> Void = { _ in }
     /// Brings an open session window to the front, or closes it (set by the Mac app).

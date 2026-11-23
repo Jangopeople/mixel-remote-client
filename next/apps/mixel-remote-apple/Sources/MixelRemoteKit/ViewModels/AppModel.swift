@@ -273,12 +273,8 @@ public final class AppModel: ObservableObject {
                 await company.loadPeople()
             }
         } else {
-            for model in sessionModels.values { model.stop() }
-            sessionModels.removeAll()
-            workspace.attempt = nil
-            workspace.readyNotices.removeAll()
-            workspace.selected = .console
-            workspace.windows.removeAll()
+            clearSessions()
+            workspace.reset()
         }
     }
 

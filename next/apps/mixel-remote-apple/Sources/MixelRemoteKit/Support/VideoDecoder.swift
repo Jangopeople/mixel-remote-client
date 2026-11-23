@@ -98,7 +98,7 @@ public final class H264Decoder: @unchecked Sendable {
         let sets = packet.units.filter { nalType($0) == 7 || nalType($0) == 8 }
         let slices = packet.units.filter { [1, 5].contains(nalType($0)) }
         let configChanged = !sets.isEmpty && sets != parameterSets
-        let sequenceReset = packet.sequence <= lastSequence && (configChanged || packet.keyframe)
+        let sequenceReset = (packet.sequence <= lastSequence && configChanged) || (packet.sequence < lastSequence && packet.keyframe)
         guard packet.sequence > lastSequence || sequenceReset else { throw Problem.invalid }
         if configChanged {
             guard sets.contains(where: { nalType($0) == 7 }), sets.contains(where: { nalType($0) == 8 }) else { throw Problem.invalid }
