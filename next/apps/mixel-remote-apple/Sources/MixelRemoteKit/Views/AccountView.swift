@@ -96,6 +96,7 @@ public struct AccountView: View {
                     Text(verbatim: L("Personal devices")).tag(true)
                 } label: { Text(verbatim: L("Devices of")) }
                     .pickerStyle(.segmented)
+                    .tint(Theme.brand)
                     .frame(maxWidth: 360)
             }
             if !profile.companies.isEmpty {

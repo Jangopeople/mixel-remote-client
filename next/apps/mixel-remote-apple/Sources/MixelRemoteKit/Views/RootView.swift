@@ -495,10 +495,17 @@ struct ProfileRow: View {
     var body: some View {
         Button { app.section = .account; app.workspace.selected = .console } label: {
             HStack(spacing: 10) {
-                Text(verbatim: initials)
-                    .font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
-                    .frame(width: 32, height: 32)
-                    .background(app.signedIn ? Color(light: 0x6D4BD8, dark: 0x7E62E0) : Color.secondary, in: Circle())
+                Group {
+                    if let initials {
+                        Text(verbatim: initials)
+                            .font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
+                    } else {
+                        Image(systemName: "person.fill")
+                            .font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+                    }
+                }
+                .frame(width: 32, height: 32)
+                .background(app.signedIn ? Theme.brand : Color.secondary, in: Circle())
                 VStack(alignment: .leading, spacing: 1) {
                     Text(verbatim: app.signedIn ? (app.account.account?.displayName ?? L("Signed in")) : L("Sign in")).font(.system(size: 13, weight: .semibold)).lineLimit(1)
                     Text(verbatim: app.signedIn ? L("Account") : L("Sign in to Mixel")).font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -511,10 +518,11 @@ struct ProfileRow: View {
         .accessibilityLabel(Text(verbatim: L("Account")))
     }
 
-    private var initials: String {
-        guard app.signedIn, let name = app.account.account?.displayName, !name.isEmpty else { return "?" }
+    private var initials: String? {
+        guard app.signedIn, let name = app.account.account?.displayName, !name.isEmpty else { return nil }
         let parts = name.split(separator: " ").prefix(2)
-        return parts.compactMap(\.first).map(String.init).joined().uppercased()
+        let out = parts.compactMap(\.first).map(String.init).joined().uppercased()
+        return out.isEmpty ? nil : out
     }
 }
 

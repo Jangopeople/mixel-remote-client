@@ -485,6 +485,28 @@
         }
       }
     },
+    "1 device · %d online": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 Gerät · %d online"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 appareil · %d en ligne"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 dispositivo · %d online"
+          }
+        }
+      }
+    },
     "1. Screen Recording": {
       "localizations": {
         "de": {

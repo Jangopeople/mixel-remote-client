@@ -672,6 +672,17 @@ impl SessionView {
             // The picture size changed: the recording went on in the next file (name-part2.mp4, ...).
             inner.append(&caption(&tf("The recording is in %d files: name, then name-part2, ...", &[&remote.recording_parts.len()])));
         }
+        let mode_row = hbox(4);
+        for (mode_id, mode_label) in [("auto", "Auto"), ("speed", "Speed"), ("quality", "Quality")] {
+            let (a_m, close_m) = (app.clone(), pop.clone());
+            let b = button(mode_label, move || {
+                close_m.popdown();
+                a_m.set_quality_mode(mode_id);
+            });
+            b.set_hexpand(true);
+            mode_row.append(&b);
+        }
+        inner.append(&mode_row);
         let (a, close) = (app.clone(), pop.clone());
         inner.append(&button(&t("Renew connection"), move || {
             close.popdown();

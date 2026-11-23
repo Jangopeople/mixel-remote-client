@@ -348,7 +348,7 @@ enum Columns {
     static let star: CGFloat = 24
     static let tile: CGFloat = 40
     static let id: CGFloat = 104
-    static let status: CGFloat = 150
+    static let status: CGFloat = 204
     static let seen: CGFloat = 84
     static let version: CGFloat = 112
     static let actions: CGFloat = 112
@@ -383,7 +383,7 @@ struct GroupHeader: View {
         HStack(spacing: 8) {
             Circle().fill(color).frame(width: 8, height: 8)
             Text(verbatim: name).font(.system(size: 13, weight: .semibold))
-            Text(verbatim: L("%d devices · %d online", count, online)).font(.system(size: 13)).foregroundStyle(.secondary)
+            Text(verbatim: count == 1 ? L("1 device · %d online", online) : L("%d devices · %d online", count, online)).font(.system(size: 13)).foregroundStyle(.secondary)
             Spacer()
         }
         .padding(.horizontal, 14).padding(.vertical, 8)
@@ -514,8 +514,13 @@ struct DeviceTableRow: View {
         } else {
             HStack(spacing: 6) {
                 StatusBadge(badge(presence), model.label(presence))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 if model.adminRow(device)?.unattendedOn == true {
-                    Pill(L("Unattended"), symbol: "key.fill", foreground: Theme.infoText, background: Theme.infoSoft).help(L("Unattended access is on"))
+                    Pill(L("Unattended"), symbol: "key.fill", foreground: Theme.infoText, background: Theme.infoSoft)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .help(L("Unattended access is on"))
                 }
             }
             .help(model.reason(for: device))
@@ -779,7 +784,9 @@ struct SessionsPage: View {
                                     .font(.caption).foregroundStyle(.secondary)
                                 }
                                 Spacer()
-                                Button(L("Save device…")) { app.devices.savePromptFor = connId }
+                                if known == nil {
+                                    Button(L("Save device…")) { app.devices.savePromptFor = connId }
+                                }
                                 Button(L("Connect")) {
                                     workspace.connect(peer: connId, name: known?.name, os: known?.os ?? "", unattended: known != nil, checkPhone: known == nil)
                                 }

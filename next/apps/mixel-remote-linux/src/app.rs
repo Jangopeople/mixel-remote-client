@@ -2634,6 +2634,11 @@ impl App {
         self.edit(|state| state.session.sound = on);
         self.session_action(if on { "sound:on" } else { "sound:off" }, true);
     }
+    pub fn set_quality_mode(self: &Rc<Self>, mode: &str) {
+        if matches!(mode, "auto" | "speed" | "quality") {
+            self.session_action(&format!("quality:{mode}"), true);
+        }
+    }
     pub fn lock_now(self: &Rc<Self>) {
         self.session_action("lock", false);
     }

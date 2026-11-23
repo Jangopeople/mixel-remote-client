@@ -17,6 +17,7 @@ NATIVE = {
     'Drop to send to %@': ('Loslassen, um an %@ zu senden', 'Déposer pour envoyer à %@', 'Rilascia per inviare a %@'),
     'Auto': ('Automatisch', 'Automatique', 'Automatico'),
     'Optimize speed': ('Geschwindigkeit', 'Vitesse', 'Velocità'),
+    '1 device · %d online': ('1 Gerät · %d online', '1 appareil · %d en ligne', '1 dispositivo · %d online'),
     'Optimize quality': ('Qualität', 'Qualité', 'Qualità'),
     'Mode': ('Modus', 'Mode', 'Modalità'),
     'Actual size (1:1)': ('Originalgrösse (1:1)', 'Taille réelle (1:1)', 'Dimensioni reali (1:1)'),

@@ -327,9 +327,15 @@ struct SettingsConsoleView: View {
             heading(L("Account & security"))
             ConsoleCard {
                 HStack(spacing: 12) {
-                    Text(verbatim: initials).font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
-                        .frame(width: 32, height: 32).background(app.signedIn ? Color(light: 0x6D4BD8, dark: 0x7E62E0) : Color.secondary, in: Circle())
-                        .accessibilityHidden(true)
+                    Group {
+                        if let initials {
+                            Text(verbatim: initials).font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
+                        } else {
+                            Image(systemName: "person.fill").font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+                        }
+                    }
+                    .frame(width: 32, height: 32).background(app.signedIn ? Theme.brand : Color.secondary, in: Circle())
+                    .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(verbatim: app.signedIn ? (app.account.account?.displayName ?? L("Signed in")) : L("Not signed in")).font(.system(size: 13, weight: .semibold))
                         Text(verbatim: accountLine).font(.system(size: 12)).foregroundStyle(.secondary)
@@ -370,9 +376,10 @@ struct SettingsConsoleView: View {
         }
     }
 
-    private var initials: String {
-        guard app.signedIn, let name = app.account.account?.displayName, !name.isEmpty else { return "?" }
-        return name.split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined().uppercased()
+    private var initials: String? {
+        guard app.signedIn, let name = app.account.account?.displayName, !name.isEmpty else { return nil }
+        let out = name.split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined().uppercased()
+        return out.isEmpty ? nil : out
     }
 
     private var accountLine: String {
