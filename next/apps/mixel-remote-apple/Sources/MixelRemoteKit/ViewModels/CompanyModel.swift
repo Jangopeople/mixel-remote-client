@@ -33,12 +33,12 @@ public final class CompanyModel: ObservableObject {
         notice = ""
     }
 
-    public func load() async {
+    public func load(includePeople: Bool = true) async {
         guard app.signedIn else { reset(); return }
         do {
             tenants = try await app.engine.run("saas_my_tenants")
             await loadOverview()
-            await loadPeople()
+            if includePeople { await loadPeople() }
         } catch {
             // Mixel team accounts, ISM companies and personal spaces have no Remote company.
             tenants = []

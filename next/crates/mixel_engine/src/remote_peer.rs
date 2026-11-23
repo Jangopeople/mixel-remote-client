@@ -1567,7 +1567,8 @@ pub(crate) fn adaptive_size(
     let sd540 = scale_to_box(full, 960.0, 540.0);
     let down_720 = if long_wan { 450_000.0 } else { 350_000.0 };
     let up_1080 = if long_wan { 700_000.0 } else { 550_000.0 };
-    let down_540 = 65_000.0; // < 520 kbps
+    // The pacer bottoms out at 75 kB/s: a lower threshold made this tier unreachable.
+    let down_540 = 85_000.0; // < 680 kbps, with recovery still at 880 kbps
     let up_720 = 110_000.0; // >= 880 kbps
 
     if pace_bytes_per_second < down_540 {
@@ -1610,6 +1611,25 @@ mod bitrate_tests {
         // Recovers to 1080p when bandwidth rises above the upper threshold.
         assert_eq!(adaptive_size(full, down, 800_000.0, Duration::from_millis(220)), full);
     }
+    #[test]
+    fn the_lowest_reachable_pace_selects_540p() {
+        let mut pacer = crate::video_pacing::Pacer::new(Instant::now());
+        pacer.set_cap(crate::video_rate::MIN_LIMIT);
+        let pace = pacer.rate();
+        assert_eq!(pace, crate::video_pacing::MIN_RATE);
+        let size = adaptive_size((1920, 1080), (1280, 720), pace, Duration::from_millis(220));
+        assert_eq!(size, (960, 540), "the 540p tier must be reachable through the real pacer");
+    }
+
+    #[test]
+    fn the_lowest_reachable_pace_fits_its_encoder_budget() {
+        let mut pacer = crate::video_pacing::Pacer::new(Instant::now());
+        pacer.set_cap(crate::video_rate::MIN_LIMIT);
+        let pace = pacer.rate();
+        assert!(f64::from(encoder_bitrate((960, 540), pace)) <= pace * 8.0 * 0.6,
+            "encoder must fit the congestion controller's payload budget");
+    }
+
     #[test]
     fn the_bit_rate_follows_the_pace_within_bounds() {
         let full_hd = (1920, 1080);

@@ -28,7 +28,7 @@ gettext = "0.4"
 ksni = "0.3"
 async-channel = "2"
 # Reads the 0.1.x app's settings (its web view's local storage, SQLite) once after the update.
-rusqlite = "0.32"
+rusqlite = "0.41"
 # The session report PDF (WinAnsi text): accented letters outside Latin-1 become their base letter.
 unicode-normalization = "0.1"
 # LAB only (qa-session): checks that each sign-in button reaches its provider.

@@ -622,6 +622,7 @@ fn output_queue_has_backpressure_and_failure_is_not_a_udp_send() {
             endpoint: "127.0.0.1:1".into(),
             name: "localhost".into(),
             tls: None,
+            defer: Duration::ZERO,
         },
         out: Mutex::new(Outbox {
             packets: VecDeque::new(),

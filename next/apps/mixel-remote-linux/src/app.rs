@@ -647,10 +647,12 @@ impl App {
             self.edit(|state| state.quick_support_mode = false);
             let app = self.clone();
             self.spawn(async move {
-                app.load_company().await;
+                // Administration lists are not a prerequisite for the launch device list.
+                app.load_company_context(false).await;
                 app.check_enrollment().await;
                 app.load_devices(0).await;
                 app.load_settings().await;
+                app.load_people().await;
                 // The choice made on the sign-in screen ("Stay signed in on this computer").
                 let wish = app.state.borrow_mut().signin_stay.take();
                 let remembered = app.state.borrow().settings.startup.as_ref().is_some_and(|startup| startup.remembered);
@@ -1306,8 +1308,11 @@ impl App {
             return;
         }
         let _ = self.perform("remote_presence", json!({ "hosts": hosts })).await;
-        // The answer arrives in remote_status.online; the next read shows it.
-        glib::timeout_future(Duration::from_millis(600)).await;
+        // The normal status reader receives the answer. Initial device loading
+        // must not wait for the background presence grace period.
+        if !force {
+            glib::timeout_future(Duration::from_millis(600)).await;
+        }
         self.edit(|state| state.devices.checked.extend(hosts));
     }
 
@@ -1499,6 +1504,10 @@ impl App {
     // ---- Company ----
 
     pub async fn load_company(self: &Rc<Self>) {
+        self.load_company_context(true).await;
+    }
+
+    async fn load_company_context(self: &Rc<Self>, include_people: bool) {
         if !self.state.borrow().signed_in() {
             self.edit(|state| state.company = CompanyState::default());
             return;
@@ -1507,7 +1516,9 @@ impl App {
             Ok(tenants) => {
                 self.edit(|state| state.company.data.tenants = tenants);
                 self.load_overview().await;
-                self.load_people().await;
+                if include_people {
+                    self.load_people().await;
+                }
             }
             // Mixel team accounts, ISM companies and personal spaces have no Remote company.
             Err(_) => self.edit(|state| state.company.data.tenants.clear()),

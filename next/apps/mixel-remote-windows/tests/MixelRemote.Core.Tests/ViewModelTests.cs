@@ -23,6 +23,19 @@ public sealed class ViewModelTests
     }
 
     [TestMethod]
+    public async Task Startup_loads_devices_before_company_administration()
+    {
+        var engine = new MockEngine();
+        DemoFixtures.Company(engine);
+        var app = new AppModel(engine);
+        await app.RefreshAccount();
+        var commands = engine.Calls.Select(call => call.Command).ToList();
+        Assert.IsTrue(commands.IndexOf("saas_devices") >= 0);
+        Assert.IsTrue(commands.IndexOf("saas_devices") < commands.IndexOf("saas_members"),
+            "administration requests must not delay the launch device list");
+    }
+
+    [TestMethod]
     public async Task Signed_out_app_offers_sign_in_and_stays_offline()
     {
         var engine = new MockEngine();

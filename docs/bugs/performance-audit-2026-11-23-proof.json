@@ -1,0 +1,59 @@
+{
+  "sourceBase": "3feffe356dd50baee542fb1b202849ab9a5cba50",
+  "sourceFiles": {
+    "next/Cargo.lock": "8cfab99b8bd9b4dd2e8a06527da0ab867ee4c19faea5e322fd38cb866312b4d2",
+    "next/apps/mixel-remote-apple/Sources/MixelRemoteKit/ViewModels/AppModel.swift": "84e1771a12ba10e7bea4f4f421a29a50fed33bc8747d3092643a2b1491b177b1",
+    "next/apps/mixel-remote-apple/Sources/MixelRemoteKit/ViewModels/CompanyModel.swift": "87b939719879861533c78de9845d098ebf996c65444be7f42319819f45820e94",
+    "next/apps/mixel-remote-apple/Sources/MixelRemoteKit/ViewModels/DevicesModel.swift": "8c5f3dc7d73aa1dffb6ad756f1f8e41555ef9e8fffa0bffdaaa7e90196707a35",
+    "next/apps/mixel-remote-apple/Sources/MixelRemoteKit/ViewModels/SessionModel.swift": "9363300ee9740c6145c8c0d56ed20d154469da516337f341df9ef43b7dda5c3e",
+    "next/apps/mixel-remote-apple/Tests/MixelRemoteKitTests/ViewModelTests.swift": "aa5f92e0a2f2f05e5701d1ec736d7a4e5d53c6aaea96f9235f80ad68d78da43f",
+    "next/apps/mixel-remote-apple/project.yml": "d711b006fcaf65a99ac9a38f33a554c5194abe3afde760a6d35c6538013f81f8",
+    "next/apps/mixel-remote-linux/Cargo.toml": "6567abefac9adceafbd2fc406109a27e1210ffdba8a9a01fa4f3ae264ab2f515",
+    "next/apps/mixel-remote-linux/src/app.rs": "22fb981df6a9dfc92626218fcbe43ce6e55bdd192311d4f3ad8930d3b382666d",
+    "next/apps/mixel-remote-linux/src/multi_tests.rs": "11dde00ac51a69eec215cb905f79e371a8094cce3dce2b6915351e61b7603e8f",
+    "next/apps/mixel-remote-windows/src/MixelRemote.Core/ViewModels/AppModel.cs": "59fa672ac4bab08107ab23e99bc4160a43963945665cd6cbd28341d1d0b855ea",
+    "next/apps/mixel-remote-windows/src/MixelRemote.Core/ViewModels/CompanyModel.cs": "4417411bdcf8c68c8e5ee39df115a8c6d0165094e794dccd74738bff654b495e",
+    "next/apps/mixel-remote-windows/tests/MixelRemote.Core.Tests/ViewModelTests.cs": "1ae5b97e9b4af47aca40e6d2c7b78ccbc566d172f3b7c6345f3bf790d55b3d83",
+    "next/crates/core_protocol/src/stream_turn_tests.rs": "68919f8ebb86dc26eabc5b3064cd1389e6110d972429530e99c002bd4073d123",
+    "next/crates/mixel_engine/src/remote_peer.rs": "2655d3ef5f52328ddf613833835eab2f743a61667bb5dd949be28c1277617834",
+    "next/crates/mixel_engine/src/remote_video.rs": "4868af3fcfa5582fbb4e452287fb77b47b00285942841bd74b2f03976f760ee4",
+    "next/deny.toml": "9774a1d97a645590ef9a141e580422eac74955b48905800caf6482ad8356d5b4"
+  },
+  "testResults": {
+    "rustPassed": 367,
+    "applePassed": 126,
+    "windowsPassed": 140,
+    "linuxPassed": 88,
+    "failed": 0
+  },
+  "logs": {
+    "audit-rust-green-r2.log": "043416c75425d2b780ab2645cd5f187850263583467a773f0d9a0d55b94cc367",
+    "audit-clippy-r2.log": "5c66b0a27b2620ceaac254e8b43b5543b05c2b9278af9ef4c7705fc7919d755d",
+    "audit-swift-final.log": "81ca1d72803cc164bc5e99b7ee57d83f73faf093e5cd0c3a2adf0863aeca5482",
+    "audit-windows-green.log": "30909e8381dc6a7303d74de58252dacc2d4379844e6c3c3f6ba7e735d517bdfd",
+    "audit-linux-tests-final.log": "df76f530549800e75b23ce5e6b139c8ff564b38865a5063b5368d975e2cb0e56",
+    "audit-linux-clippy.log": "cc06296421e6df2c44de1809e96941f53808208b02044d48e3398fa06de3af64",
+    "audit-linux-build.log": "3c70f100b0b945cae9dc92f17146d5e5102e1a55d77f7c74a79d8b1a4534b05a",
+    "audit-macos-real-session.log": "f3b5e2de8686134a0c2358f56e52554f31777504244a7730c7cd890369465d38",
+    "audit-advisories-final.log": "799fc05e6513bf365cc7565ea51cc5cb9ca6690b1cd1fe7777339be83437131b",
+    "audit-semgrep-final.log": "7adf5932c9e6185775f1bf8150db34510bdffd1951c1d3e2ecd340718d7df4c2",
+    "audit-mac-release-build-r3.log": "7e4b891028fd64490f439867e0f27197d88030476ac57e76a7798426ebb21a7f"
+  },
+  "installedApplication": {
+    "version": "2.1.21",
+    "build": "227",
+    "bundle": "ch.mixel.remote.next.qa",
+    "architectures": "x86_64 arm64",
+    "signature": "verified deep/strict",
+    "designatedRequirementMatchesInstalled": true,
+    "sha256": "3039be64f22967d6344855ed599bcf0b2d00f2df6f7d82f309ba55cc84cf9710"
+  },
+  "liveCheck": {
+    "accountRestored": true,
+    "sameRemoteId": true,
+    "deviceCount": 11,
+    "temporaryAppRemoved": true,
+    "installedRemoteApplicationCount": 1,
+    "publicDownloadsModified": false
+  }
+}

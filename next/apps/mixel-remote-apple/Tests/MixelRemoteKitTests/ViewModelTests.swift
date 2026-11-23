@@ -1,4 +1,5 @@
 import XCTest
+import os
 @testable import MixelRemoteKit
 
 @MainActor
@@ -25,6 +26,30 @@ final class ViewModelTests: XCTestCase {
         XCTAssertEqual(request["host"] as? Int, 731_204_118)
         XCTAssertEqual(request["password"] as? String, "123456")
         XCTAssertEqual(request["unattended"] as? Bool, false)
+    }
+
+    func testStartupLoadsDevicesBeforeCompanyAdministration() async throws {
+        let engine = MockEngine()
+        Fixtures.company(engine)
+        let app = AppModel(engine: engine)
+        await app.refreshAccount()
+        try await waitFor { !engine.calls("saas_devices").isEmpty && !engine.calls("saas_members").isEmpty }
+        let commands = engine.calls.map(\.command)
+        let devices = try XCTUnwrap(commands.firstIndex(of: "saas_devices"))
+        let members = try XCTUnwrap(commands.firstIndex(of: "saas_members"))
+        XCTAssertLessThan(devices, members, "administration requests must not delay the launch device list")
+    }
+
+    func testInitialPresenceDoesNotWaitForAnArtificialTimer() async throws {
+        let engine = MockEngine()
+        Fixtures.company(engine)
+        let app = await Fixtures.app(engine)
+        let clock = ContinuousClock()
+        let start = clock.now
+        await app.devices.checkPresence(force: true)
+        let elapsed = start.duration(to: clock.now)
+        print("Forced initial presence elapsed: \(elapsed)")
+        XCTAssertLessThan(elapsed, .milliseconds(300), "initial loading must not wait for the periodic presence grace timer")
     }
 
     func testFirstConnectWithoutIdentityOffersAddThisComputer() async throws {
@@ -63,15 +88,17 @@ final class ViewModelTests: XCTestCase {
         Fixtures.company(engine)
         let app = await Fixtures.app(engine)
         // The first status read says "connecting", every later one "ready".
-        var reads = 0
+        let reads = OSAllocatedUnfairLock(initialState: 0)
         engine.handle("remote_status") { _ in
-            reads += 1
-            let phase = reads <= 1 ? "connecting" : "ready"
+            let phase = reads.withLock { count in
+                count += 1
+                return count <= 1 ? "connecting" : "ready"
+            }
             return .success(#"{"phase":"\#(phase)","message":"","host":482913557,"online":[],"sessions":[]}"#)
         }
         try await app.connectSteps(id: 731_204_118, password: nil, unattended: true, checkPhone: false)
         XCTAssertEqual(engine.calls("remote_request").count, 1, "the request went out once this computer was ready")
-        XCTAssertGreaterThanOrEqual(reads, 2)
+        XCTAssertGreaterThanOrEqual(reads.withLock { $0 }, 2)
     }
 
     func testPhoneIsClaimedAndWaitedForBeforeTheRequest() async throws {

@@ -464,8 +464,9 @@ public final class DevicesModel: ObservableObject {
         for start in stride(from: 0, to: min(hosts.count, 2000), by: 100) {
             try? await app.engine.perform("remote_presence", ["hosts": Array(hosts[start..<min(hosts.count, start + 100)])])
         }
-        // The answer arrives in remote_status.online; the next read shows it.
-        try? await Task.sleep(nanoseconds: 600_000_000)
+        // The normal status reader receives the answer. Initial loading must not
+        // wait for the grace period used by background presence checks.
+        if !force { try? await Task.sleep(nanoseconds: 600_000_000) }
         checked.formUnion(hosts)
     }
 

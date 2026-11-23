@@ -264,11 +264,13 @@ public final class AppModel: ObservableObject {
         enrollment.reset()
         if signedIn {
             Task {
-                await company.load()
+                // Device access needs the company and its plan, not its administration lists.
+                await company.load(includePeople: false)
                 await enrollment.check()
                 await devices.load()
                 await settings.applySignInChoice()
                 await settings.load()
+                await company.loadPeople()
             }
         }
     }

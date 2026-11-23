@@ -283,9 +283,10 @@ public final class SessionModel: ObservableObject {
                             sequence = 0
                             let frameToShow = latest
                             let frameCount = decodedCount
+                            let deviceDecoding = decoder != nil
                             await MainActor.run {
                                 guard self.viewingSession == session else { return }
-                                if decoder != nil, self.decoding != .device { self.decoding = .device }
+                                if deviceDecoding, self.decoding != .device { self.decoding = .device }
                                 self.show(frameToShow, count: frameCount)
                             }
                             if let raw = fallbackRaw, let decodedRaw = try? VideoFrame.decode(raw, after: sequence) {

@@ -324,10 +324,13 @@ public sealed class AppModel : Observable
         Enrollment.Reset();
         if (!SignedIn) return;
         QuickSupportMode = false;
-        await Company.Load();
+        // Start registration and show devices before fetching administration-only lists.
+        await RefreshRemote();
+        await Company.Load(includePeople: false);
         await Enrollment.Check();
         await Devices.Load();
         await Settings.Load();
+        await Company.LoadPeople();
     }
 
     /// <summary>Runs an action; its failure shows in <see cref="Error"/>. The engine is read again afterwards.</summary>

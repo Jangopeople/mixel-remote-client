@@ -177,6 +177,22 @@ fn report_with_empty_top_level(rig: &Rig, items: Vec<Value>) {
 }
 
 scenarios! {
+    fn startup_loads_devices_before_company_administration() {
+        let engine = Rc::new(MockEngine::new());
+        mock::signed_in(&engine, false);
+        let app = App::new(engine.clone(), Store::memory(Settings::default()));
+        glib::MainContext::default().block_on(app.refresh_account());
+        pump_until("startup administration", || !engine.called("saas_members").is_empty());
+        let calls = engine.calls.borrow();
+        let devices = calls.iter().position(|(name, _)| name == "saas_devices").expect("devices loaded");
+        let members = calls.iter().position(|(name, _)| name == "saas_members").unwrap();
+        assert!(devices < members, "administration requests must not delay the launch device list");
+        drop(calls);
+        let started = std::time::Instant::now();
+        glib::MainContext::default().block_on(app.load_devices(0));
+        assert!(started.elapsed() < Duration::from_millis(300), "initial presence must not impose the background 600 ms grace period");
+    }
+
 fn two_to_four_sessions_give_two_to_four_tabs_bound_to_their_stable_ids() {
     for count in 2..=4 {
         let rig = rig();

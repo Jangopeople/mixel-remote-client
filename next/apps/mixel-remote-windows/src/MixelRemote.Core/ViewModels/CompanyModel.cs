@@ -49,7 +49,7 @@ public sealed class CompanyModel : Observable
         Notice = "";
     }
 
-    public async Task Load()
+    public async Task Load(bool includePeople = true)
     {
         if (!app.SignedIn)
         {
@@ -60,7 +60,7 @@ public sealed class CompanyModel : Observable
         {
             Tenants = await app.Engine.RunAsync<List<Tenant>>("saas_my_tenants");
             await LoadOverview();
-            await LoadPeople();
+            if (includePeople) await LoadPeople();
         }
         catch (EngineFailure)
         {

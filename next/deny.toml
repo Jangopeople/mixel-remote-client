@@ -1,0 +1,13 @@
+[advisories]
+version = 2
+# These are maintenance notices, not vulnerability exceptions. Keep vulnerability
+# detection enabled for every package, including these dependencies.
+ignore = [
+    { id = "RUSTSEC-2025-0141", reason = "bincode 2 is the bounded encrypted wire format; replacement needs a versioned peer-protocol migration. No patched version exists." },
+    { id = "RUSTSEC-2021-0153", reason = "encoding is a transitive gettext dependency of the native Linux UI. No patched version exists; track its replacement with the gettext dependency." },
+    { id = "RUSTSEC-2026-0441", reason = "pin-utils is transitive in platform dependencies; maintenance-only notice with no patched upgrade." },
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error is a build-time transitive platform dependency; maintenance-only notice with no patched upgrade." },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names is transitive in the native D-Bus stack; upstream merged it into zbus 6, requiring a compatible dependency migration." },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant is transitive in the native D-Bus stack; upstream merged it into zbus 6, requiring a compatible dependency migration." },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive is a transitive build-time dependency of the native D-Bus stack; its replacement requires migrating the parent dependency to zbus 6." },
+]

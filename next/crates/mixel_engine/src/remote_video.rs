@@ -200,6 +200,9 @@ impl VideoMailbox {
             slot.queued_bytes = 0;
             return Ok(false);
         }
+        // The first compressed picture supersedes the early/raw fallback. Otherwise
+        // draining the compressed queue repaints an older screen (and possibly its old size).
+        slot.latest = None;
         slot.queued_bytes += packet.bytes.len();
         slot.queue.push_back(packet);
         #[cfg(feature = "qa-session")]
@@ -347,6 +350,21 @@ mod handover_tests {
         let other = Uuid::from_u128(3);
         assert!(mailbox.expect_successor(other, stranger).is_err());
         assert!(mailbox.publish(picture(other, other, 1)).is_err());
+    }
+
+    #[test]
+    fn compressed_handover_does_not_replay_an_older_raw_picture() {
+        let mailbox = VideoMailbox::default();
+        let session = Uuid::from_u128(1);
+        mailbox.activate(session).unwrap();
+        // The early/raw decoder has a picture while the window enables its own decoder.
+        mailbox.publish(picture(session, session, 1)).unwrap();
+        mailbox.window_decodes(session, true);
+        // Keep the early picture available until compressed video actually arrives.
+        assert!(mailbox.0.lock().unwrap().latest.is_some());
+        assert!(mailbox.publish_compressed(picture(session, session, 2)).unwrap());
+        assert_eq!(sequence(&mailbox.take(session).unwrap()), 2);
+        assert!(mailbox.take(session).unwrap().is_empty(), "never paint the stale raw picture after the new compressed one");
     }
 
     #[test]
