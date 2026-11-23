@@ -13,9 +13,9 @@ struct ReportsConsoleView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ConsoleHeader(title: L("Session reports"), subtitle: reports.tenant.map { L("Every session of %@, with duration, type and notes.", $0.name) } ?? "") {
-                Button { save(Data(reports.csv().utf8), name: reports.fileStem + ".csv") } label: { Label(L("Export CSV"), systemImage: "arrow.down.to.line") }
+                Button { save(name: reports.fileStem + ".csv") { Data(reports.csv().utf8) } } label: { Label(L("Export CSV"), systemImage: "arrow.down.to.line") }
                     .disabled(reports.visibleRows.isEmpty)
-                Button { save(reports.pdf(), name: reports.fileStem + ".pdf") } label: { Label(L("Export PDF"), systemImage: "arrow.down.to.line") }
+                Button { save(name: reports.fileStem + ".pdf") { reports.pdf() } } label: { Label(L("Export PDF"), systemImage: "arrow.down.to.line") }
                     .disabled(reports.visibleRows.isEmpty)
             }
             .padding(.horizontal, 28).padding(.top, 22).padding(.bottom, 14)
@@ -119,12 +119,18 @@ struct ReportsConsoleView: View {
         let rows = reports.visibleRows
         ConsoleCard {
             if rows.isEmpty {
-                Text(verbatim: reports.loading ? L("Loading…") : reports.search.isEmpty ? L("No sessions in this period.") : L("No matching sessions."))
-                    .foregroundStyle(.secondary).padding(24).frame(maxWidth: .infinity)
+                HStack(spacing: 8) {
+                    if reports.loading { ProgressView().controlSize(.small) }
+                    Text(verbatim: reports.loading ? L("Loading…") : reports.search.isEmpty ? L("No sessions in this period.") : L("No matching sessions."))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(24).frame(maxWidth: .infinity)
             } else {
                 header
-                ForEach(rows) { row in
-                    self.row(row)
+                LazyVStack(spacing: 0) {
+                    ForEach(rows) { row in
+                        self.row(row)
+                    }
                 }
             }
         }
@@ -205,10 +211,17 @@ struct ReportsConsoleView: View {
         }
     }
 
-    private func save(_ data: Data, name: String) {
+    private func save(name: String, build: @escaping () -> Data) {
         Task {
             guard let path = await app.chooseSaveLocation(name) else { return }
-            do { try data.write(to: URL(fileURLWithPath: path), options: .atomic) } catch { reports.error = AppModel.message(error) }
+            let data = build()
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+                }.value
+            } catch {
+                reports.error = AppModel.message(error)
+            }
         }
     }
 }

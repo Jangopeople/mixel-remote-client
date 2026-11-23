@@ -91,18 +91,25 @@ public final class H264Decoder: @unchecked Sendable {
         return units
     }
 
-    /// Decodes one packet into a picture. Pictures must arrive in order (sequence numbers grow).
+    /// Decodes one packet into a picture. Pictures must arrive in order (sequence numbers grow),
+    /// except when a new SPS/PPS arrives (e.g. remote display switch or encoder restart).
     public func decode(_ data: Data) throws -> VideoFrame {
         let packet = try Self.parse(data)
-        guard packet.sequence > lastSequence else { throw Problem.invalid }
         let sets = packet.units.filter { nalType($0) == 7 || nalType($0) == 8 }
         let slices = packet.units.filter { [1, 5].contains(nalType($0)) }
-        if !sets.isEmpty, sets != parameterSets {
+        let configChanged = !sets.isEmpty && sets != parameterSets
+        guard packet.sequence > lastSequence || configChanged else { throw Problem.invalid }
+        if configChanged {
             guard sets.contains(where: { nalType($0) == 7 }), sets.contains(where: { nalType($0) == 8 }) else { throw Problem.invalid }
             try configure(sets)
+            if packet.sequence <= lastSequence { lastSequence = 0 }
         }
         guard let format, let session else { throw Problem.waitingForKeyframe }
-        guard !slices.isEmpty else { throw Problem.invalid }
+        if slices.isEmpty {
+            // Parameter-set-only packet (common right before a keyframe on display switch): keep decoder ready.
+            if configChanged { throw Problem.waitingForKeyframe }
+            throw Problem.invalid
+        }
         lastSequence = packet.sequence
 
         // AVCC: every NAL unit with a 4-byte big-endian length instead of a start code.
@@ -145,8 +152,8 @@ public final class H264Decoder: @unchecked Sendable {
         status = VTCreateCGImageFromCVPixelBuffer(pixels, options: nil, imageOut: &image)
         guard status == noErr, let image else { throw Problem.decoder(status) }
         let width = image.width, height = image.height
-        // The same bounds as decoded pictures (at most 1920 × 1088, or upright).
-        guard width >= 2, height >= 2, max(width, height) <= 1920, min(width, height) <= 1088 else { throw Problem.invalid }
+        // Allow up to 8K / wide multi-monitor ("All screens") frames while blocking absurd allocations.
+        guard width >= 2, height >= 2, max(width, height) <= 8192, min(width, height) <= 4320, width * height <= 33_177_600 else { throw Problem.invalid }
         return VideoFrame(image: image, width: width, height: height, sequence: packet.sequence)
     }
 

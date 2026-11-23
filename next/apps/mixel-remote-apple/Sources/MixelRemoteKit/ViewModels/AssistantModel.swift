@@ -73,7 +73,7 @@ public final class AssistantModel: ObservableObject {
     }
 
     /// The remote screen as JPEG (at most 1280 wide), base64, for the AI server.
-    static func screenshot(_ image: CGImage?) -> String? {
+    nonisolated static func screenshot(_ image: CGImage?) -> String? {
         guard let image, image.width >= 16 else { return nil }
         let scale = min(1, 1280 / CGFloat(image.width))
         let width = Int(CGFloat(image.width) * scale), height = Int(CGFloat(image.height) * scale)
@@ -97,7 +97,7 @@ public final class AssistantModel: ObservableObject {
         busy = true
         let typed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         answer = kind == .ask ? L("Looking at the screen…") : L("Writing the note…")
-        let image = Self.screenshot(app.session.frame)
+        let frame = app.session.frame
         let system: String, prompt: String
         switch kind {
         case .ask:
@@ -110,6 +110,7 @@ public final class AssistantModel: ObservableObject {
         }
         Task {
             defer { busy = false }
+            let image = await Task.detached(priority: .userInitiated) { Self.screenshot(frame) }.value
             do {
                 var text: String = try await app.engine.run("ai_ask", ["address": address, "model": model, "system": system, "prompt": prompt, "image": image])
                 text = Self.plain(text)

@@ -37,8 +37,8 @@ public struct DeviceConsoleView: View {
         .background(Theme.page)
         .onReceive(NotificationCenter.default.publisher(for: .mixelFocusConnectById)) { _ in focus = .byId }
         .background {
-            // "/" puts the cursor into the search field, as in the mockup.
-            Button("") { focus = .search }.keyboardShortcut("/", modifiers: []).hidden().accessibilityHidden(true)
+            // ⌘F puts the cursor into the search field (macOS HIG standard, avoids intercepting bare "/").
+            Button("") { focus = .search }.keyboardShortcut("f", modifiers: .command).hidden().accessibilityHidden(true)
         }
         .sheet(item: $renaming) { device in RenameDeviceDialog(model: model, device: device, company: model.tenant?.name ?? "") }
         .sheet(item: $noting) { device in DeviceNotesDialog(model: model, device: device) }
@@ -109,7 +109,7 @@ public struct DeviceConsoleView: View {
                         }
                         .buttonStyle(PrimaryButtonStyle())
                     } else {
-                        Text(verbatim: "/").font(.caption.monospaced()).foregroundStyle(.secondary)
+                        Text(verbatim: "⌘F").font(.caption.monospaced()).foregroundStyle(.secondary)
                             .padding(.horizontal, 5).padding(.vertical, 1)
                             .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.hairline))
                             .accessibilityHidden(true)
@@ -238,7 +238,11 @@ public struct DeviceConsoleView: View {
         if groups.isEmpty {
             VStack(spacing: 10) {
                 Spacer()
-                Image(systemName: "laptopcomputer.and.iphone").font(.system(size: 40)).foregroundStyle(.secondary)
+                if model.loading {
+                    ProgressView().controlSize(.regular)
+                } else {
+                    Image(systemName: "laptopcomputer.and.iphone").font(.system(size: 40)).foregroundStyle(.secondary)
+                }
                 Text(verbatim: emptyTitle).font(.title3.weight(.semibold))
                 Text(verbatim: emptyDetail).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 420)
                 if app.signedIn, let id = Format.parseRemoteId(model.filterText) {

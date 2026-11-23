@@ -21,6 +21,7 @@ public struct SessionPane: View {
     public var body: some View {
         if let session = workspace.session(for: peer), let tab = workspace.tab(peer) {
             SessionStage(app: app, session: session, drawing: session.drawing, workspace: workspace, tab: tab, inWindow: inWindow)
+                .id(peer)
         } else {
             VStack(spacing: 10) {
                 Image(systemName: "macwindow.badge.plus").font(.system(size: 34)).foregroundStyle(.secondary)
@@ -70,7 +71,11 @@ struct SessionStage: View {
                         HStack {
                             Text(verbatim: tool == .chat ? L("Chat with %@", tab.name) : tool.title).font(.headline)
                             Spacer()
-                            Button { self.tool = nil } label: { Image(systemName: "xmark") }
+                            Button { self.tool = nil } label: {
+                                Image(systemName: "xmark")
+                                    .frame(width: 24, height: 24)
+                                    .contentShape(Rectangle())
+                            }
                                 .buttonStyle(.plain).foregroundStyle(.secondary)
                                 .help(L("Close"))
                                 .accessibilityLabel(Text(verbatim: L("Close")))
@@ -92,7 +97,7 @@ struct SessionStage: View {
         ZStack {
             Theme.stage
             RemoteScreen(session: session)
-            if session.frame != nil, session.focused { DrawingOverlay(drawing: drawing, pictureSize: session.size) }
+            if session.hasFrame, session.focused { DrawingOverlay(drawing: drawing, pictureSize: session.size) }
             switch session.link {
             case .reconnecting:
                 VStack(spacing: 12) {
@@ -114,7 +119,7 @@ struct SessionStage: View {
                     }
                 }
             case .live:
-                if session.frame == nil {
+                if !session.hasFrame {
                     VStack(spacing: 12) {
                         ProgressView().controlSize(.large).tint(.white)
                         Text(verbatim: L("Starting video")).foregroundStyle(.white.opacity(0.85))
@@ -163,13 +168,18 @@ struct SessionNoticeBanner: View {
 
     var body: some View {
         let status = session.remote
-        if status.passwordSession != nil || session.lastRequestPassword || status.unattendedSession || session.item?.unattendedRefused == true {
-            TimelineView(.periodic(from: Date(), by: 1)) { context in
+        if status.passwordSession != nil || session.lastRequestPassword {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
                 let ends = status.passwordSession?.endsAt.flatMap(Format.parseDate)
                 if let notice = SessionNotice.make(passwordSession: status.passwordSession != nil, sentPassword: session.lastRequestPassword,
                                                    unattended: status.unattendedSession, unattendedRefused: session.item?.unattendedRefused == true, endsAt: ends, now: context.date) {
                     SessionNoticeBar(notice: notice)
                 }
+            }
+        } else if status.unattendedSession || session.item?.unattendedRefused == true {
+            if let notice = SessionNotice.make(passwordSession: false, sentPassword: false,
+                                               unattended: status.unattendedSession, unattendedRefused: session.item?.unattendedRefused == true, endsAt: nil, now: Date()) {
+                SessionNoticeBar(notice: notice)
             }
         }
     }
@@ -269,7 +279,7 @@ struct SessionBar: View {
                 button(recording.running ? L("Stop") : L("Record"), recording.running ? "stop.circle.fill" : "record.circle", on: recording.running, danger: recording.running) {
                     if recording.running { session.stopRecording() } else { record() }
                 }
-                .disabled(session.recordingPending || recording.phase == "saving" || session.frame == nil)
+                .disabled(session.recordingPending || recording.phase == "saving" || !session.hasFrame)
             }
             if app.assistant.available { toggle(.assistant, L("Report"), "doc.text") }
             more
@@ -504,19 +514,17 @@ public struct SessionWindowView: View {
             .onReceive(NotificationCenter.default.publisher(for: .mixelFocusSessionWindow)) { note in
                 if (note.object as? UInt32) == peer { window?.makeKeyAndOrderFront(nil) }
             }
-            .onAppear {
+            .task {
                 // A window restored at launch without its session closes at once.
-                if workspace.tab(peer) == nil || !workspace.isInWindow(peer) {
-                    DispatchQueue.main.async { window?.close() }
-                    // The engine lists its sessions a moment after launch and the window is found a moment after it appears:
-                    // check again, so an old session's window never stays empty.
-                    Task { @MainActor in
-                        for _ in 0..<6 {
-                            try? await Task.sleep(nanoseconds: 700_000_000)
-                            if workspace.tab(peer) != nil, workspace.isInWindow(peer) { return }
-                            if let window { window.close(); return }
-                        }
-                    }
+                guard workspace.tab(peer) == nil || !workspace.isInWindow(peer) else { return }
+                window?.close()
+                // The engine lists its sessions a moment after launch and the window is found a moment after it appears:
+                // check again, so an old session's window never stays empty.
+                for _ in 0..<6 {
+                    try? await Task.sleep(nanoseconds: 700_000_000)
+                    if Task.isCancelled { return }
+                    if workspace.tab(peer) != nil, workspace.isInWindow(peer) { return }
+                    if let window { window.close(); return }
                 }
             }
     }

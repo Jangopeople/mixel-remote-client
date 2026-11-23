@@ -15,6 +15,10 @@ public final class Translator: @unchecked Sendable {
     }
     private var tables: [String: Table] = [:]
     private var compiled: [String: [(NSRegularExpression, String)]] = [:]
+    private var cachedChoice: String?
+    private var cachedLanguage: String?
+    private var cachedLocale: Locale?
+    private var cachedBundles: [String: Bundle?] = [:]
     private let lock = NSLock()
 
     init() {
@@ -27,22 +31,48 @@ public final class Translator: @unchecked Sendable {
 
     /// `auto`, `en`, `de`, `fr` or `it`.
     public var choice: String {
-        get { UserDefaults.standard.string(forKey: Self.key) ?? "auto" }
+        get {
+            lock.withLock {
+                if let cachedChoice { return cachedChoice }
+                let value = UserDefaults.standard.string(forKey: Self.key) ?? "auto"
+                cachedChoice = value
+                return value
+            }
+        }
         set {
             if newValue == "auto" { UserDefaults.standard.removeObject(forKey: Self.key) }
             else { UserDefaults.standard.set(newValue, forKey: Self.key) }
+            lock.withLock {
+                cachedChoice = newValue
+                cachedLanguage = nil
+                cachedLocale = nil
+            }
         }
     }
 
     /// The language shown now.
     public var language: String {
-        let chosen = choice
-        if chosen != "auto", Self.supported.contains(chosen) { return chosen }
-        let system = Locale.preferredLanguages.first.map { String($0.prefix(2)).lowercased() } ?? "en"
-        return Self.supported.contains(system) ? system : "en"
+        lock.withLock {
+            if let cachedLanguage { return cachedLanguage }
+            let chosen = cachedChoice ?? (UserDefaults.standard.string(forKey: Self.key) ?? "auto")
+            cachedChoice = chosen
+            let resolved: String
+            if chosen != "auto", Self.supported.contains(chosen) {
+                resolved = chosen
+            } else {
+                let system = Locale.preferredLanguages.first.map { String($0.prefix(2)).lowercased() } ?? "en"
+                resolved = Self.supported.contains(system) ? system : "en"
+            }
+            cachedLanguage = resolved
+            cachedLocale = Locale(identifier: resolved)
+            return resolved
+        }
     }
 
-    public var locale: Locale { Locale(identifier: language) }
+    public var locale: Locale {
+        if let hit = lock.withLock({ cachedLocale }) { return hit }
+        return Locale(identifier: language)
+    }
 
     /// An engine text in the shown language (unknown texts stay English).
     public func translate(_ text: String) -> String {
@@ -85,11 +115,18 @@ public func L(_ key: String, _ args: CVarArg...) -> String {
 }
 
 extension Translator {
+    private func lprojBundle(for language: String) -> Bundle? {
+        lock.withLock {
+            if let hit = cachedBundles[language] { return hit }
+            let bundle = Bundle.module.path(forResource: language, ofType: "lproj").flatMap(Bundle.init(path:))
+            cachedBundles[language] = bundle
+            return bundle
+        }
+    }
+
     func screenText(_ key: String) -> String {
         let language = self.language
-        if language != "en",
-           let path = Bundle.module.path(forResource: language, ofType: "lproj"),
-           let bundle = Bundle(path: path) {
+        if language != "en", let bundle = lprojBundle(for: language) {
             let missing = "\u{1}"
             let value = bundle.localizedString(forKey: key, value: missing, table: nil)
             if value != missing { return value }

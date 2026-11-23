@@ -22,7 +22,7 @@ public struct VideoFrame: @unchecked Sendable {
         func u64(_ at: Int) -> UInt64 { (0..<8).reduce(UInt64(0)) { $0 | UInt64(bytes[at + $1]) << (8 * UInt64($1)) } }
         let width = u32(4), height = u32(8), stride = u32(12)
         let sequence = u64(16)
-        guard width >= 2, height >= 2, max(width, height) <= 1920, min(width, height) <= 1088,
+        guard width >= 2, height >= 2, max(width, height) <= 8192, min(width, height) <= 4320, width * height <= 33_177_600,
               stride >= width * 4, data.count == 32 + stride * height, sequence > previous
         else { throw Problem.invalid }
         let packed = bytes[3] == 50

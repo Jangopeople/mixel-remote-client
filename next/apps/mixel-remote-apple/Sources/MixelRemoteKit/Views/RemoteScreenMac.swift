@@ -12,29 +12,48 @@ public struct RemoteScreen: NSViewRepresentable {
 
     public func makeNSView(context: Context) -> RemoteScreenView {
         let view = RemoteScreenView()
-        view.session = session
+        view.attach(to: session)
         return view
     }
 
     public func updateNSView(_ view: RemoteScreenView, context: Context) {
-        view.session = session
-        view.image = session.frame
+        if view.session !== session {
+            view.releaseAll()
+            view.attach(to: session)
+        }
         view.pointerMode = session.pointerMode
         view.controllable = session.controllable
-        view.claimFocusIfAppropriate()
+    }
+
+    public static func dismantleNSView(_ view: RemoteScreenView, coordinator: ()) {
+        view.detach()
     }
 }
 
 public final class RemoteScreenView: NSView {
     weak var session: SessionModel?
-    var image: CGImage? { didSet { if image !== oldValue { layer?.contents = image; needsLayout = true } } }
+    var image: CGImage? {
+        didSet {
+            guard image !== oldValue else { return }
+            // Paint directly onto the CALayer without triggering AppKit layout (needsLayout = true
+            // at 60 Hz caused display-move stalls and SwiftUI layout storms).
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layer?.contents = image
+            CATransaction.commit()
+        }
+    }
     var controllable = false {
         didSet {
             if !controllable, oldValue { releaseAll() }
             else if controllable, !oldValue { claimFocusIfAppropriate() }
         }
     }
-    var pointerMode = false { didSet { window?.invalidateCursorRects(for: self) } }
+    var pointerMode = false {
+        didSet {
+            if pointerMode != oldValue { window?.invalidateCursorRects(for: self) }
+        }
+    }
     private var pressed: [Int: UInt8] = [:]
     private(set) var heldKeys: Set<UInt16> = []
     private var wheel = CGPoint.zero
@@ -51,6 +70,30 @@ public final class RemoteScreenView: NSView {
         setAccessibilityLabel(L("Remote screen"))
     }
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    func attach(to next: SessionModel) {
+        if let previous = session, previous !== next {
+            previous.onFrame = nil
+        }
+        session = next
+        image = next.frame
+        next.onFrame = { [weak self] frame in
+            self?.image = frame
+        }
+    }
+
+    func detach() {
+        releaseAll()
+        session?.onFrame = nil
+        session = nil
+    }
+
+    public override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        if let scale = window?.backingScaleFactor, scale > 0 {
+            layer?.contentsScale = scale
+        }
+    }
 
     public override var acceptsFirstResponder: Bool { true }
     public override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -112,9 +155,8 @@ public final class RemoteScreenView: NSView {
     public override func rightMouseDragged(with event: NSEvent) { if controllable { _ = move(event, clamp: true) } }
     public override func otherMouseDragged(with event: NSEvent) { if controllable { _ = move(event, clamp: true) } }
 
-    /// Buttons as the engine numbers them: 1 left, 2 middle, 3 right, 4 back, 5 forward.
+    /// Session protocol button numbering (matches desktop app): 1 left, 2 right, 3 middle, 4 back, 5 forward.
     private func button(_ event: NSEvent) -> UInt8? {
-        // Session protocol (as the desktop app): 1 left, 2 right, 3 middle.
         switch event.buttonNumber {
         case 0: 1
         case 1: 2

@@ -132,4 +132,32 @@ final class VideoDecoderTests: XCTestCase {
         let units = H264Decoder.splitAnnexB([0, 0, 0, 1, 0x67, 1, 2, 0, 0, 1, 0x68, 3, 0, 0, 0, 1, 0x65, 4, 5], from: 0)
         XCTAssertEqual(units, [Data([0x67, 1, 2]), Data([0x68, 3]), Data([0x65, 4, 5])])
     }
+
+    func testDisplaySwitchHighResAndSequenceResetDecodesCleanly() throws {
+        // Simulates switching from Display 1 (320x240) to a larger Display 2 (2560x1440, > 1920x1088)
+        // where the remote encoder restarts and sequence numbers reset to 1.
+        let first = try Self.encode(colors: [(200, 30, 40), (30, 180, 60)], width: 320, height: 240)
+        let second = try Self.encode(colors: [(40, 60, 200)], width: 2560, height: 1440)
+        let decoder = H264Decoder()
+        let f1 = try decoder.decode(first[0])
+        XCTAssertEqual(f1.width, 320)
+        XCTAssertEqual(f1.height, 240)
+        _ = try decoder.decode(first[1])
+        let f2 = try decoder.decode(second[0])
+        XCTAssertEqual(f2.width, 2560)
+        XCTAssertEqual(f2.height, 1440)
+    }
+
+    #if os(macOS)
+    @MainActor
+    func testRemoteScreenViewPaintsWithoutTriggeringAppKitLayout() {
+        let view = RemoteScreenView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        view.layoutSubtreeIfNeeded()
+        XCTAssertFalse(view.needsLayout)
+        let sample = try! VideoFrame.decode(VideoFrame.sample(width: 320, height: 200, sequence: 1))
+        view.image = sample.image
+        XCTAssertFalse(view.needsLayout, "Updating video frame must not trigger AppKit layout")
+        XCTAssertNotNil(view.layer?.contents)
+    }
+    #endif
 }

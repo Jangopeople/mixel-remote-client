@@ -199,23 +199,31 @@ public final class ReportsModel: ObservableObject {
         return hours > 0 ? String(format: "%d:%02d:%02d", hours, minutes, rest) : String(format: "%d:%02d", minutes, rest)
     }
 
+    private static let stampLock = NSLock()
+    private static let dayDotFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "dd.MM.yyyy"
+        return f
+    }()
+    private static let stampFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm"
+        return f
+    }()
+
     /// A day as dd.MM.yyyy (the report's period).
     public static func stamp(day date: Date) -> String {
-        let format = DateFormatter()
-        format.locale = Translator.shared.locale
-        format.dateFormat = "dd.MM.yyyy"
-        return format.string(from: date)
+        let locale = Translator.shared.locale
+        return stampLock.withLock {
+            if dayDotFormatter.locale != locale { dayDotFormatter.locale = locale }
+            return dayDotFormatter.string(from: date)
+        }
     }
 
     public static func stamp(_ iso: String?) -> String {
         guard let iso, !iso.isEmpty else { return "" }
-        let parser = ISO8601DateFormatter()
-        parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let date = parser.date(from: iso) ?? ISO8601DateFormatter().date(from: iso)
-        guard let date else { return iso }
-        let format = DateFormatter()
-        format.dateFormat = "yyyy-MM-dd HH:mm"
-        return format.string(from: date)
+        guard let date = Format.parseDate(iso) else { return iso }
+        return stampLock.withLock { stampFormatter.string(from: date) }
     }
 
     public func kindLabel(_ row: SessionRow) -> String {
@@ -256,8 +264,17 @@ public final class ReportsModel: ObservableObject {
         else { return Data() }
         let margin: CGFloat = 36, rowHeight: CGFloat = 16
         let widths: [CGFloat] = [88, 88, 54, 120, 130, 78, 90, 122]
+        let regular8 = CTFontCreateWithName("Helvetica" as CFString, 8, nil)
+        let bold8 = CTFontCreateWithName("Helvetica-Bold" as CFString, 8, nil)
+        let regular9 = CTFontCreateWithName("Helvetica" as CFString, 9, nil)
+        let bold14 = CTFontCreateWithName("Helvetica-Bold" as CFString, 14, nil)
         func text(_ string: String, _ x: CGFloat, _ y: CGFloat, width: CGFloat, size: CGFloat = 8, bold: Bool = false) {
-            let font = CTFontCreateWithName((bold ? "Helvetica-Bold" : "Helvetica") as CFString, size, nil)
+            let font: CTFont = switch (size, bold) {
+            case (14, true): bold14
+            case (9, false): regular9
+            case (8, true): bold8
+            default: regular8
+            }
             var shown = string.replacingOccurrences(of: "\n", with: " ")
             func line(_ value: String) -> CTLine { CTLineCreateWithAttributedString(NSAttributedString(string: value, attributes: [NSAttributedString.Key(kCTFontAttributeName as String): font])) }
             var built = line(shown)

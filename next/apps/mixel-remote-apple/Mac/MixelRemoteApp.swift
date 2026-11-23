@@ -361,9 +361,13 @@ struct AppCommands: Commands {
             Button(L("End session")) { model?.session.end() }
         }
         CommandGroup(after: .sidebar) {
-            ForEach(Array(AppSection.allCases.enumerated()), id: \.element) { index, section in
-                Button(section.title) { model?.section = section }
-                    .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
+            let sidebarSections: [AppSection] = [.devices, .sessions, .reports, .account, .settings]
+            ForEach(Array(sidebarSections.enumerated()), id: \.element) { index, section in
+                Button(section.title) {
+                    guard model?.workspace.selected == .console else { return }
+                    model?.section = section
+                }
+                .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
             }
             Divider()
         }

@@ -401,7 +401,8 @@ public final class AppModel: ObservableObject {
             await refreshRemote()
             await host.checkPermissions(promptIfMissing: true)
             do {
-                let deviceName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+                // Avoid Host.current().localizedName (synchronous DNS lookup on @MainActor).
+                let deviceName = ProcessInfo.processInfo.hostName
                 _ = try await engine.run("quick_support_start", ["device_name": deviceName], as: UInt32.self)
             } catch {
                 self.error = Self.message(error)
@@ -534,7 +535,14 @@ public final class AppModel: ObservableObject {
         stop()
         clearSessions()
         let engine = self.engine
-        final class Done: @unchecked Sendable { var value = false }
+        final class Done: @unchecked Sendable {
+            private let lock = NSLock()
+            private var flag = false
+            var value: Bool {
+                get { lock.withLock { flag } }
+                set { lock.withLock { flag = newValue } }
+            }
+        }
         let done = Done()
         Task.detached { try? await engine.shutdown(); done.value = true }
         for _ in 0..<7 {

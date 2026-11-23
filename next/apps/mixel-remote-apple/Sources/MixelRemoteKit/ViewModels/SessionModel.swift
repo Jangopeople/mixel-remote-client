@@ -17,7 +17,18 @@ import Foundation
 public final class SessionModel: ObservableObject {
     // The app model lives as long as the app; its parts keep it (no reference cycle matters there).
     let app: AppModel
+    #if os(macOS)
+    /// Latest decoded picture. Intentionally NOT `@Published` on macOS so 30–60 fps video updates never force
+    /// `SessionStage`, `SessionBar`, `ViewThatFits`, or tool panels to re-evaluate on every frame.
+    /// `RemoteScreenView` subscribes directly via `onFrame` and paints `CALayer.contents` on the GPU.
+    public private(set) var frame: CGImage?
+    #else
     @Published public private(set) var frame: CGImage?
+    #endif
+    /// Flips once when the first video frame arrives (`false -> true`) and on `clear()` (`true -> false`).
+    @Published public private(set) var hasFrame = false
+    /// Direct frame sink for the native `RemoteScreenView` (Mac) or canvas — avoids SwiftUI diffing per frame.
+    public var onFrame: ((CGImage?) -> Void)?
     @Published public private(set) var size = CGSize.zero
     @Published public private(set) var fps = 0
     @Published public private(set) var stopping = false
@@ -54,9 +65,11 @@ public final class SessionModel: ObservableObject {
     private var toggleSession: String?
     private var stoppedConsent: String?
     private var shownTimes: [Date] = []
+    private var lastFpsPublish = Date.distantPast
     private var inputQueue: [InputEvent] = []
     private var sending = false
     private var reconnect: Reconnect?
+    private var restartArmTask: Task<Void, Never>?
     private var clipboardSyncing = false
     private var clipboardPullTask: Task<Void, Never>?
     private var lastAutoClipboardPull = Date.distantPast
@@ -209,8 +222,12 @@ public final class SessionModel: ObservableObject {
         viewingSession = nil
         let had = frame != nil
         frame = nil
+        if hasFrame { hasFrame = false }
+        onFrame?(nil)
         size = .zero
         fps = 0
+        shownTimes.removeAll()
+        lastFpsPublish = .distantPast
         decoding = .none
         inputQueue.removeAll()
         if had { app.workspace.refresh() }
@@ -239,6 +256,7 @@ public final class SessionModel: ObservableObject {
                         do {
                             var latest = try active.decode(data)
                             var decodedCount = 1
+                            var fallbackRaw: Data?
                             // Drain up to 3 already-queued compressed frames if the queue had a burst.
                             for _ in 0..<3 {
                                 let nextData = (try? await engine.nextVideo(session: session, compressed: true)) ?? Data()
@@ -247,10 +265,18 @@ public final class SessionModel: ObservableObject {
                                     do {
                                         latest = try active.decode(nextData)
                                         decodedCount += 1
+                                    } catch H264Decoder.Problem.waitingForKeyframe {
+                                        continue
                                     } catch {
+                                        // Surface decoder failure after showing the last good frame so we fall back cleanly.
+                                        decoder = nil
+                                        await MainActor.run {
+                                            if self.viewingSession == session { self.decoding = .engine }
+                                        }
                                         break
                                     }
                                 } else {
+                                    fallbackRaw = nextData
                                     break
                                 }
                             }
@@ -259,8 +285,15 @@ public final class SessionModel: ObservableObject {
                             let frameCount = decodedCount
                             await MainActor.run {
                                 guard self.viewingSession == session else { return }
-                                self.decoding = .device
+                                if decoder != nil, self.decoding != .device { self.decoding = .device }
                                 self.show(frameToShow, count: frameCount)
+                            }
+                            if let raw = fallbackRaw, let decodedRaw = try? VideoFrame.decode(raw, after: sequence) {
+                                sequence = decodedRaw.sequence
+                                await MainActor.run {
+                                    guard self.viewingSession == session else { return }
+                                    self.show(decodedRaw, count: 1)
+                                }
                             }
                         } catch H264Decoder.Problem.waitingForKeyframe {
                             continue
@@ -301,7 +334,11 @@ public final class SessionModel: ObservableObject {
     private func show(_ decoded: VideoFrame, count: Int = 1) {
         let first = frame == nil
         frame = decoded.image
-        if first { app.workspace.refresh() }
+        onFrame?(decoded.image)
+        if first {
+            hasFrame = true
+            app.workspace.refresh()
+        }
         let next = CGSize(width: decoded.width, height: decoded.height)
         if next != size { size = next }
         let now = Date()
@@ -309,7 +346,11 @@ public final class SessionModel: ObservableObject {
             shownTimes.append(now)
         }
         shownTimes.removeAll { now.timeIntervalSince($0) > 1 }
-        if fps != shownTimes.count { fps = shownTimes.count }
+        // Publish FPS at most twice a second (or on first frame) so SwiftUI toolbars stay quiet.
+        if first || now.timeIntervalSince(lastFpsPublish) >= 0.5 {
+            lastFpsPublish = now
+            if fps != shownTimes.count { fps = shownTimes.count }
+        }
     }
 
     /// For screenshots and tests: show this picture without a running engine.
@@ -416,7 +457,10 @@ public final class SessionModel: ObservableObject {
     public func ctrlAltDel() { action("sas") }
     public func selectDisplay(_ index: UInt16) {
         guard let session, focused else { return }
-        Task { _ = try? await app.engine.send(input: .selectDisplay(index), session: session) }
+        Task {
+            do { _ = try await app.engine.send(input: .selectDisplay(index), session: session) }
+            catch { self.error = AppModel.message(error) }
+        }
     }
 
     /// The first click arms, the second (within 5 s) restarts the remote computer; the app reconnects
@@ -425,9 +469,15 @@ public final class SessionModel: ObservableObject {
         guard let session, focused, let peer = remote.peer else { return }
         if !restartArmed {
             restartArmed = true
-            Task { try? await Task.sleep(nanoseconds: 5_000_000_000); self.restartArmed = false }
+            restartArmTask?.cancel()
+            restartArmTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                if !Task.isCancelled { self?.restartArmed = false }
+            }
             return
         }
+        restartArmTask?.cancel()
+        restartArmTask = nil
         restartArmed = false
         let now = Date()
         reconnect = Reconnect(host: peer, signin: remote.signinId, unattended: lastRequestUnattended || remote.unattendedSession, until: now.addingTimeInterval(600), since: now, session: session)
@@ -523,7 +573,9 @@ public final class SessionModel: ObservableObject {
 
     @discardableResult
     func performClipboardSync(session: String, push: Bool, explicit: Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(3)
         while clipboardSyncing {
+            if Date() >= deadline || Task.isCancelled { return false }
             try? await Task.sleep(nanoseconds: 15_000_000)
             guard self.session == session else { return false }
         }

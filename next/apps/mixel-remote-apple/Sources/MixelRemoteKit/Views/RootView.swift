@@ -122,40 +122,44 @@ struct TitleTabStrip: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            TitleTab(selected: workspace.selected == .console, label: {
-                Image(systemName: "laptopcomputer").font(.system(size: 13))
-                Text(verbatim: L("Devices"))
-            }, select: { workspace.selected = .console }, close: nil)
-            .accessibilityLabel(Text(verbatim: L("Devices")))
-            ForEach(workspace.tabs) { tab in
-                TitleTab(selected: workspace.selected == .session(tab.peer), label: {
-                    Circle().fill(dot(tab)).frame(width: 7, height: 7)
-                    OSGlyph(os: tab.os).frame(width: 13, height: 13)
-                    Text(verbatim: tab.name).lineLimit(1)
-                    if workspace.isInWindow(tab.peer) {
-                        Image(systemName: "arrow.up.forward.square").foregroundStyle(Theme.infoText)
-                            .accessibilityLabel(Text(verbatim: L("In its own window")))
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 2) {
+                    TitleTab(selected: workspace.selected == .console, label: {
+                        Image(systemName: "laptopcomputer").font(.system(size: 13))
+                        Text(verbatim: L("Devices"))
+                    }, select: { workspace.selected = .console }, close: nil)
+                    .accessibilityLabel(Text(verbatim: L("Devices")))
+                    ForEach(workspace.tabs) { tab in
+                        TitleTab(selected: workspace.selected == .session(tab.peer), label: {
+                            Circle().fill(dot(tab)).frame(width: 7, height: 7)
+                            OSGlyph(os: tab.os).frame(width: 13, height: 13)
+                            Text(verbatim: tab.name).lineLimit(1)
+                            if workspace.isInWindow(tab.peer) {
+                                Image(systemName: "arrow.up.forward.square").foregroundStyle(Theme.infoText)
+                                    .accessibilityLabel(Text(verbatim: L("In its own window")))
+                            }
+                        }, select: { workspace.show(tab.peer, inWindow: false) }, close: { ending = tab })
+                        .accessibilityLabel(Text(verbatim: L("Session with %@", tab.name)))
+                        .contextMenu {
+                            if workspace.isInWindow(tab.peer) {
+                                Button(L("Move back into a tab")) { workspace.dock(tab.peer) }
+                            } else {
+                                Button(L("Open in its own window")) { workspace.popOut(tab.peer) }
+                            }
+                            Divider()
+                            Button(L("End session")) { ending = tab }
+                        }
                     }
-                }, select: { workspace.show(tab.peer, inWindow: false) }, close: { ending = tab })
-                .accessibilityLabel(Text(verbatim: L("Session with %@", tab.name)))
-                .contextMenu {
-                    if workspace.isInWindow(tab.peer) {
-                        Button(L("Move back into a tab")) { workspace.dock(tab.peer) }
-                    } else {
-                        Button(L("Open in its own window")) { workspace.popOut(tab.peer) }
-                    }
-                    Divider()
-                    Button(L("End session")) { ending = tab }
+                    Button {
+                        workspace.selected = .console
+                        app.section = .devices
+                        NotificationCenter.default.post(name: .mixelFocusConnectById, object: nil)
+                    } label: { Image(systemName: "plus").font(.system(size: 13, weight: .medium)).frame(width: 26, height: 26) }
+                        .buttonStyle(.plain)
+                        .help(L("Connect by ID"))
+                        .accessibilityLabel(Text(verbatim: L("Connect by ID")))
                 }
             }
-            Button {
-                workspace.selected = .console
-                app.section = .devices
-                NotificationCenter.default.post(name: .mixelFocusConnectById, object: nil)
-            } label: { Image(systemName: "plus").font(.system(size: 13, weight: .medium)).frame(width: 26, height: 26) }
-                .buttonStyle(.plain)
-                .help(L("Connect by ID"))
-                .accessibilityLabel(Text(verbatim: L("Connect by ID")))
             Spacer(minLength: 20)
         }
         .padding(.leading, 84)

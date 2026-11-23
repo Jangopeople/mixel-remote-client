@@ -25,12 +25,14 @@ public extension Theme {
     /// The session toolbar and the area around the remote picture.
     static let stage = Color(light: 0x111114, dark: 0x0B0B0D)
 
-    /// A stable colour for a group's dot.
+    /// A stable colour for a group's dot (light and dark variants for crisp contrast).
     static func groupColor(_ name: String) -> Color {
-        let palette: [UInt32] = [0x5B5BD6, 0x12A594, 0xE5800E, 0xB14FD6, 0x2F80ED, 0xD6409F, 0x7A8B19]
+        let lightPalette: [UInt32] = [0x5B5BD6, 0x12A594, 0xE5800E, 0xB14FD6, 0x2F80ED, 0xD6409F, 0x7A8B19]
+        let darkPalette: [UInt32] = [0x8E8EFF, 0x38D3BF, 0xFFB24C, 0xD580FF, 0x6AA8FF, 0xFF78C8, 0xB4C93B]
         var hash: UInt32 = 5381
         for byte in name.utf8 { hash = (hash &* 33) &+ UInt32(byte) }
-        return Color(light: palette[Int(hash % UInt32(palette.count))], dark: palette[Int(hash % UInt32(palette.count))])
+        let idx = Int(hash % UInt32(lightPalette.count))
+        return Color(light: lightPalette[idx], dark: darkPalette[idx])
     }
 }
 

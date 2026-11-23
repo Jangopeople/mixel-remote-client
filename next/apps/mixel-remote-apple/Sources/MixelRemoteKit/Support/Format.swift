@@ -29,21 +29,33 @@ public enum Format {
         return days == 1 ? L("Last seen yesterday") : L("Last seen %d days ago", days)
     }
 
+    private static let formatterLock = NSLock()
+    private static let isoFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    private static let isoPlain = ISO8601DateFormatter()
+    private static let mediumDay: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .none
+        return f
+    }()
+
     public static func parseDate(_ iso: String) -> Date? {
-        let full = ISO8601DateFormatter()
-        full.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = full.date(from: iso) { return date }
-        let plain = ISO8601DateFormatter()
-        return plain.date(from: iso)
+        formatterLock.withLock {
+            isoFractional.date(from: iso) ?? isoPlain.date(from: iso)
+        }
     }
 
     public static func day(_ iso: String?) -> String {
         guard let iso, let date = parseDate(iso) else { return "" }
-        let formatter = DateFormatter()
-        formatter.locale = Translator.shared.locale
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .none
-        return formatter.string(from: date)
+        let locale = Translator.shared.locale
+        return formatterLock.withLock {
+            if mediumDay.locale != locale { mediumDay.locale = locale }
+            return mediumDay.string(from: date)
+        }
     }
 
     public static func bytes(_ count: UInt64) -> String {

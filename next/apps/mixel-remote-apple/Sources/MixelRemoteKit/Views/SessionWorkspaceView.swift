@@ -62,8 +62,8 @@ public struct SessionWorkspaceView: View {
                 Image(decorative: frame, scale: 1).resizable().interpolation(.medium).aspectRatio(contentMode: .fit)
             }
             #endif
-            if session.frame != nil { DrawingOverlay(drawing: session.drawing, pictureSize: session.size) }
-            if session.frame == nil {
+            if session.hasFrame { DrawingOverlay(drawing: session.drawing, pictureSize: session.size) }
+            if !session.hasFrame {
                 VStack(spacing: 12) {
                     ProgressView().controlSize(.large).tint(.white)
                     Text(verbatim: remote.phase == "outgoing" ? app.connectionMessage : L("Connecting securely…"))
@@ -176,7 +176,7 @@ struct SessionToolbar: View {
             tool(recording.running ? L("Stop recording") : L("Record"), recording.running ? "stop.circle" : "record.circle") {
                 if recording.running { session.stopRecording() } else { record() }
             }
-            .disabled(session.recordingPending || recording.phase == "saving" || session.frame == nil)
+            .disabled(session.recordingPending || recording.phase == "saving" || !session.hasFrame)
         }
         if remote.phase == "active", !remote.switched {
             tool(L("Invite a colleague"), "person.badge.plus") { inviting = true }

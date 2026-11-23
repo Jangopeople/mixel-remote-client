@@ -81,7 +81,8 @@ public final class EnrollmentModel: ObservableObject {
         #if os(iOS)
         return "Mixel Remote (\(UIDevice.current.model))"
         #else
-        return Host.current().localizedName ?? ""
+        // Avoid Host.current().localizedName (triggers synchronous DNS/mDNS lookup on @MainActor).
+        return ProcessInfo.processInfo.hostName
         #endif
     }
 
