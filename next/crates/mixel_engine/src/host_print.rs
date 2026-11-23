@@ -122,7 +122,7 @@ impl Watcher {
             let state = (metadata.len(), metadata.modified().ok()?);
             match self.seen {
                 Some((length, modified, since)) if (length, modified) == state => {
-                    if since.elapsed() < std::time::Duration::from_millis(1500) || length < 64 {
+                    if since.elapsed() < std::time::Duration::from_millis(400) || length < 64 {
                         return None;
                     }
                 }
@@ -131,13 +131,18 @@ impl Watcher {
                     return None;
                 }
             }
-            // Still being written by the print system: try again on the next poll.
-            let data = std::fs::read(&path).ok()?;
+            // Atomically claim the spool file with a unique name so a subsequent print job cannot overwrite it.
+            let claimed = spool_folder().join(format!("job-{}.pdf", uuid::Uuid::new_v4()));
+            if std::fs::rename(&path, &claimed).is_err() {
+                return None;
+            }
+            let data = std::fs::read(&claimed).ok();
+            let _ = std::fs::remove_file(&claimed);
+            let data = data?;
             if data.len() as u64 != state.0 {
                 return None;
             }
             self.seen = None;
-            let _ = std::fs::remove_file(&path);
             (data.starts_with(b"%PDF") && data.len() <= core_protocol::clipboard::MAX_RICH - 4096).then_some(data)
         }
         #[cfg(any(target_os = "macos", target_os = "linux"))]

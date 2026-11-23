@@ -86,11 +86,12 @@ pub fn channel() -> String {
 }
 pub fn target() -> (&'static str, &'static str) {
     if cfg!(target_os = "macos") {
+        // macOS ships a universal (arm64 + x86_64) DMG on the macos-arm64 channel.
         ("macos", "arm64")
     } else if cfg!(target_os = "windows") {
-        ("windows", "x64")
+        ("windows", if cfg!(target_arch = "aarch64") { "arm64" } else { "x64" })
     } else {
-        ("linux", "x64")
+        ("linux", if cfg!(target_arch = "aarch64") { "arm64" } else { "x64" })
     }
 }
 

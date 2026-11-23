@@ -62,7 +62,7 @@ impl H264Decoder {
             || max_height > 8192
             || max_width
                 .checked_mul(max_height)
-                .is_none_or(|pixels| pixels > 16_777_216)
+                .is_none_or(|pixels| pixels > 35_389_440)
         {
             return Err(DecodeError::Dimensions);
         }

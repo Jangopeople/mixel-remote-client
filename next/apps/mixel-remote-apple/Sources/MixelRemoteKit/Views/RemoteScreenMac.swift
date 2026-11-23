@@ -23,6 +23,8 @@ public struct RemoteScreen: NSViewRepresentable {
         }
         view.pointerMode = session.pointerMode
         view.controllable = session.controllable
+        view.actualSize = session.actualSize
+        view.cursorShape = session.remote.cursorShape ?? "arrow"
     }
 
     public static func dismantleNSView(_ view: RemoteScreenView, coordinator: ()) {
@@ -54,6 +56,20 @@ public final class RemoteScreenView: NSView {
             if pointerMode != oldValue { window?.invalidateCursorRects(for: self) }
         }
     }
+    var cursorShape = "arrow" {
+        didSet {
+            if cursorShape != oldValue { window?.invalidateCursorRects(for: self) }
+        }
+    }
+    var actualSize = false {
+        didSet {
+            guard actualSize != oldValue else { return }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layer?.contentsGravity = actualSize ? .center : .resizeAspect
+            CATransaction.commit()
+        }
+    }
     private var pressed: [Int: UInt8] = [:]
     private(set) var heldKeys: Set<UInt16> = []
     private var wheel = CGPoint.zero
@@ -65,11 +81,40 @@ public final class RemoteScreenView: NSView {
         layer?.contentsGravity = .resizeAspect
         layer?.backgroundColor = NSColor.black.cgColor
         layer?.magnificationFilter = .linear
+        registerForDraggedTypes([.fileURL])
         setAccessibilityElement(true)
         setAccessibilityRole(.image)
         setAccessibilityLabel(L("Remote screen"))
     }
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    // MARK: Drag-and-drop file transfer
+
+    public override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard let session, session.remote.files,
+              sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
+        else { return [] }
+        session.draggingFiles = true
+        return .copy
+    }
+
+    public override func draggingExited(_ sender: NSDraggingInfo?) {
+        session?.draggingFiles = false
+    }
+
+    public override func draggingEnded(_ sender: NSDraggingInfo) {
+        session?.draggingFiles = false
+    }
+
+    public override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        session?.draggingFiles = false
+        guard let session, session.remote.files,
+              let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+              let first = urls.first(where: { !$0.hasDirectoryPath })
+        else { return false }
+        session.sendFile(path: first.path)
+        return true
+    }
 
     func attach(to next: SessionModel) {
         if let previous = session, previous !== next {
@@ -114,7 +159,25 @@ public final class RemoteScreenView: NSView {
         window.makeFirstResponder(self)
     }
     public override func resetCursorRects() {
-        addCursorRect(bounds, cursor: PointerPolicy.cursor(pointerMode: pointerMode) == .crosshair ? .crosshair : .arrow)
+        let cursor: NSCursor = if PointerPolicy.cursor(pointerMode: pointerMode) == .crosshair {
+            .crosshair
+        } else {
+            Self.nsCursor(for: cursorShape)
+        }
+        addCursorRect(bounds, cursor: cursor)
+    }
+
+    public static func nsCursor(for shape: String) -> NSCursor {
+        switch shape {
+        case "ibeam": .iBeam
+        case "pointing": .pointingHand
+        case "resize_ew": .resizeLeftRight
+        case "resize_ns": .resizeUpDown
+        case "crosshair": .crosshair
+        case "not_allowed": .operationNotAllowed
+        case "grab": .openHand
+        default: .arrow
+        }
     }
     public override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -132,13 +195,23 @@ public final class RemoteScreenView: NSView {
     func picturePoint(_ event: NSEvent, clamp: Bool = false) -> CGPoint? {
         guard let image else { return nil }
         let location = convert(event.locationInWindow, from: nil)
-        let scale = min(bounds.width / CGFloat(image.width), bounds.height / CGFloat(image.height))
-        guard scale > 0 else { return nil }
-        let width = CGFloat(image.width) * scale, height = CGFloat(image.height) * scale
+        let width: CGFloat
+        let height: CGFloat
+        if actualSize {
+            let backingScale = max(1, window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1)
+            width = CGFloat(image.width) / backingScale
+            height = CGFloat(image.height) / backingScale
+        } else {
+            let scale = min(bounds.width / CGFloat(image.width), bounds.height / CGFloat(image.height))
+            guard scale > 0 else { return nil }
+            width = CGFloat(image.width) * scale
+            height = CGFloat(image.height) * scale
+        }
+        guard width > 0, height > 0 else { return nil }
         let x = (location.x - (bounds.width - width) / 2) / width
         let y = 1 - (location.y - (bounds.height - height) / 2) / height
         if !clamp, x < 0 || x > 1 || y < 0 || y > 1 { return nil }
-        return CGPoint(x: x, y: y)
+        return CGPoint(x: max(0, min(1, x)), y: max(0, min(1, y)))
     }
 
     private func move(_ event: NSEvent, clamp: Bool = false) -> Bool {
@@ -219,12 +292,16 @@ public final class RemoteScreenView: NSView {
 
     /// Reconciles `heldKeys` with the live modifier flags on `event` so modifiers pressed or
     /// released outside the window (such as ⌘Tab) can never become inverted.
+    /// Distinguishes Left Option (`0x20` -> HID 226) from Right Option (`0x40` -> HID 230 / AltGr on Windows/Linux).
     func syncModifiers(_ flags: NSEvent.ModifierFlags) {
         let cmdAsCtrl = remoteShortcutModifier == KeyMap.control
+        let raw = flags.rawValue
+        let leftAltDown = flags.contains(.option) && ((raw & 0x20) != 0 || (raw & 0x40) == 0)
+        let rightAltDown = flags.contains(.option) && (raw & 0x40) != 0
+
         let pairs: [(Bool, UInt16, UInt16)] = [
             (flags.contains(.control) || (cmdAsCtrl && flags.contains(.command)), KeyMap.control, 228),
             (flags.contains(.shift), KeyMap.shift, 229),
-            (flags.contains(.option), KeyMap.alt, 230),
             (!cmdAsCtrl && flags.contains(.command), KeyMap.command, 231),
         ]
         for (isDown, left, right) in pairs {
@@ -238,11 +315,31 @@ public final class RemoteScreenView: NSView {
                 }
             }
         }
+        // Left Alt (226) and Right Alt / AltGr (230) tracked independently so European Windows AltGr works from macOS.
+        for (isDown, usage) in [(leftAltDown, KeyMap.alt), (rightAltDown, UInt16(230))] {
+            let wasDown = heldKeys.contains(usage)
+            if isDown && !wasDown {
+                heldKeys.insert(usage)
+                session?.send(.key(usage: usage, down: true))
+            } else if !isDown && wasDown {
+                heldKeys.remove(usage)
+                session?.send(.key(usage: usage, down: false))
+            }
+        }
     }
 
     public override func keyDown(with event: NSEvent) {
         guard controllable, let usage = KeyMap.usage(macKeyCode: event.keyCode) else { return super.keyDown(with: event) }
         syncModifiers(event.modifierFlags)
+        // Layout-aware typing mode: send printable non-shortcut characters via `.text` so CH/DE/FR/US layouts match seamlessly.
+        if session?.matchLocalKeyboard == true,
+           !event.modifierFlags.contains(.command),
+           !event.modifierFlags.contains(.control),
+           let chars = event.characters, !chars.isEmpty,
+           chars.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value != 0x7F }) {
+            session?.send(.text(chars))
+            return
+        }
         if event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control) {
             let mod = event.modifierFlags.contains(.control) ? KeyMap.control : remoteShortcutModifier
             let needsWrap = !heldKeys.contains(mod) && !heldKeys.contains(mod + 4)

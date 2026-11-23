@@ -32,7 +32,7 @@ impl Worker {
                             display.id,
                             display.width,
                             display.height,
-                            30,
+                            60,
                         )
                         .map_err(|e| e.to_string());
                     }

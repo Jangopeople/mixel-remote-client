@@ -90,19 +90,32 @@ fn bgra_to_nv12(frame: &CapturedFrame, width: usize, height: usize, out: &mut [u
             }
         }
     } else {
+        // Bilinear 2x2-averaged downscale to preserve 1px text strokes when scaling 4K/1440p -> 1080p/720p.
         let (sw, sh) = (frame.width(), frame.height());
+        let sample_rgb = |dx: usize, dy: usize| -> (i32, i32, i32) {
+            let sx0 = (dx * sw / width).min(sw - 1);
+            let sx1 = (sx0 + 1).min(sw - 1);
+            let sy0 = (dy * sh / height).min(sh - 1);
+            let sy1 = (sy0 + 1).min(sh - 1);
+            let r0 = sy0 * stride;
+            let r1 = sy1 * stride;
+            let o00 = r0 + sx0 * 4;
+            let o01 = r0 + sx1 * 4;
+            let o10 = r1 + sx0 * 4;
+            let o11 = r1 + sx1 * 4;
+            let b = (i32::from(pixels[o00]) + i32::from(pixels[o01]) + i32::from(pixels[o10]) + i32::from(pixels[o11]) + 2) >> 2;
+            let g = (i32::from(pixels[o00 + 1]) + i32::from(pixels[o01 + 1]) + i32::from(pixels[o10 + 1]) + i32::from(pixels[o11 + 1]) + 2) >> 2;
+            let r = (i32::from(pixels[o00 + 2]) + i32::from(pixels[o01 + 2]) + i32::from(pixels[o10 + 2]) + i32::from(pixels[o11 + 2]) + 2) >> 2;
+            (b, g, r)
+        };
         for y in (0..height).step_by(2) {
-            let sy0 = (y * sh / height).min(sh - 1) * stride;
-            let sy1 = ((y + 1) * sh / height).min(sh - 1) * stride;
             let (y_out0, y_out1) = y_plane[y * width..(y + 2) * width].split_at_mut(width);
             let uv_out = &mut uv_plane[(y / 2) * width..(y / 2 + 1) * width];
             for x in (0..width).step_by(2) {
-                let sx0 = (x * sw / width).min(sw - 1) * 4;
-                let sx1 = ((x + 1) * sw / width).min(sw - 1) * 4;
-                let (b00, g00, r00) = (i32::from(pixels[sy0 + sx0]), i32::from(pixels[sy0 + sx0 + 1]), i32::from(pixels[sy0 + sx0 + 2]));
-                let (b01, g01, r01) = (i32::from(pixels[sy0 + sx1]), i32::from(pixels[sy0 + sx1 + 1]), i32::from(pixels[sy0 + sx1 + 2]));
-                let (b10, g10, r10) = (i32::from(pixels[sy1 + sx0]), i32::from(pixels[sy1 + sx0 + 1]), i32::from(pixels[sy1 + sx0 + 2]));
-                let (b11, g11, r11) = (i32::from(pixels[sy1 + sx1]), i32::from(pixels[sy1 + sx1 + 1]), i32::from(pixels[sy1 + sx1 + 2]));
+                let (b00, g00, r00) = sample_rgb(x, y);
+                let (b01, g01, r01) = sample_rgb(x + 1, y);
+                let (b10, g10, r10) = sample_rgb(x, y + 1);
+                let (b11, g11, r11) = sample_rgb(x + 1, y + 1);
 
                 y_out0[x] = (((66 * r00 + 129 * g00 + 25 * b00 + 128) >> 8) + 16).clamp(16, 235) as u8;
                 y_out0[x + 1] = (((66 * r01 + 129 * g01 + 25 * b01 + 128) >> 8) + 16).clamp(16, 235) as u8;
@@ -164,18 +177,19 @@ fn apply_low_latency_codec_api(api: &ICodecAPI, fps: u32, bitrate: u32) {
         let _ = api.SetValue(&CODECAPI_AVEncCommonMeanBitRate, &VARIANT::from(bitrate));
         let _ = api.SetValue(&CODECAPI_AVEncMPVDefaultBPictureCount, &VARIANT::from(0u32));
         let _ = api.SetValue(&CODECAPI_AVEncMPVGOPSize, &VARIANT::from(fps * 10));
-        let _ = api.SetValue(&CODECAPI_AVEncCommonQualityVsSpeed, &VARIANT::from(0u32));
+        let _ = api.SetValue(&CODECAPI_AVEncCommonQualityVsSpeed, &VARIANT::from(50u32));
     }
 }
 
 impl MfHardwareEncoder {
     fn try_new(width: usize, height: usize, fps: u32, bitrate: u32) -> Result<Self, EncodeError> {
-        if !(16..=1920).contains(&width)
-            || !(16..=1088).contains(&height)
+        if !(16..=8192).contains(&width)
+            || !(16..=4320).contains(&height)
+            || width.saturating_mul(height) > 33_177_600
             || !width.is_multiple_of(2)
             || !height.is_multiple_of(2)
             || !(1..=60).contains(&fps)
-            || !(100_000..=12_000_000).contains(&bitrate)
+            || !(100_000..=24_000_000).contains(&bitrate)
         {
             return Err(EncodeError::Configuration);
         }

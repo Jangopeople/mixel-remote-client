@@ -13,6 +13,14 @@ TABLES = json.load(open(os.path.join(HERE, 'Sources/MixelRemoteKit/Resources/eng
 
 # English key: (German (Swiss spelling), French, Italian)
 NATIVE = {
+    # --- 2.1.23: TeamViewer Quality Parity (drag-and-drop, quality mode, 1:1, keyboard layout) ---
+    'Drop to send to %@': ('Loslassen, um an %@ zu senden', 'Déposer pour envoyer à %@', 'Rilascia per inviare a %@'),
+    'Auto': ('Automatisch', 'Automatique', 'Automatico'),
+    'Optimize speed': ('Geschwindigkeit', 'Vitesse', 'Velocità'),
+    'Optimize quality': ('Qualität', 'Qualité', 'Qualità'),
+    'Mode': ('Modus', 'Mode', 'Modalità'),
+    'Actual size (1:1)': ('Originalgrösse (1:1)', 'Taille réelle (1:1)', 'Dimensioni reali (1:1)'),
+    'Match my keyboard layout': ('Mein Tastaturlayout verwenden', 'Utiliser ma disposition clavier', 'Usa il mio layout tastiera'),
     'Connecting control…': ('Steuerung wird verbunden…', 'Connexion du contrôle…', 'Connessione del controllo…'),
     # --- 2.1.6 - 2.1.11: Quick Support, macOS permissions, Save device, instant sign-in ---
     '1. Screen Recording': ('1. Bildschirmaufnahme', '1. Enregistrement de l’écran', '1. Registrazione schermo'),

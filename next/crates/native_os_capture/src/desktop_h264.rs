@@ -33,12 +33,13 @@ pub struct ScreenH264Encoder {
 
 impl ScreenH264Encoder {
     pub fn new(width: usize, height: usize, fps: u32, bitrate: u32) -> Result<Self, EncodeError> {
-        if !(16..=1920).contains(&width)
-            || !(16..=1088).contains(&height)
+        if !(16..=8192).contains(&width)
+            || !(16..=4320).contains(&height)
+            || width.saturating_mul(height) > 33_177_600
             || !width.is_multiple_of(2)
             || !height.is_multiple_of(2)
             || !(1..=60).contains(&fps)
-            || !(1..=12_000_000).contains(&bitrate)
+            || !(1..=24_000_000).contains(&bitrate)
         {
             return Err(EncodeError::Configuration);
         }
@@ -129,13 +130,23 @@ impl ScreenH264Encoder {
                         .copy_from_slice(&frame.pixels()[source..source + row]);
                 }
             } else {
+                // 2x2 box-averaged downscale to keep thin UI text readable when scaling down.
+                let (sw, sh, sstride, spix) = (frame.width(), frame.height(), frame.stride(), frame.pixels());
                 for y in 0..self.height {
-                    let source_row = y * frame.height() / self.height * frame.stride();
+                    let sy0 = (y * sh / self.height).min(sh - 1) * sstride;
+                    let sy1 = ((y * sh / self.height) + 1).min(sh - 1) * sstride;
                     for x in 0..self.width {
-                        let source = source_row + x * frame.width() / self.width * 4;
+                        let sx0 = (x * sw / self.width).min(sw - 1) * 4;
+                        let sx1 = ((x * sw / self.width) + 1).min(sw - 1) * 4;
                         let target = (y * self.width + x) * 4;
-                        self.pixels[target..target + 4]
-                            .copy_from_slice(&frame.pixels()[source..source + 4]);
+                        for c in 0..3 {
+                            let sum = u16::from(spix[sy0 + sx0 + c])
+                                + u16::from(spix[sy0 + sx1 + c])
+                                + u16::from(spix[sy1 + sx0 + c])
+                                + u16::from(spix[sy1 + sx1 + c]);
+                            self.pixels[target + c] = ((sum + 2) >> 2) as u8;
+                        }
+                        self.pixels[target + 3] = 255;
                     }
                 }
             }
@@ -190,8 +201,8 @@ pub struct H264Decoder {
 
 impl H264Decoder {
     pub fn new(width: usize, height: usize) -> Result<Self, DecodeError> {
-        // Landscape up to 1920x1088, or the same picture upright (a phone screen).
-        if !(16..=1920).contains(&width) || !(16..=1920).contains(&height) {
+        // Landscape up to 8K / 4K / multi-monitor ("All screens"), or upright phone screen.
+        if !(16..=8192).contains(&width) || !(16..=8192).contains(&height) || width.saturating_mul(height) > 33_177_600 {
             return Err(DecodeError::Dimensions);
         }
         Ok(Self {
@@ -237,7 +248,7 @@ impl H264Decoder {
                 .map_err(|_| DecodeError::Dimensions)?;
             if width < 2
                 || height < 2
-                || width.min(height) > 1088
+                || width.min(height) > 4320
                 || width as usize > self.limits.0
                 || height as usize > self.limits.1
                 || !matches!(sps.frame_mbs_flags, FrameMbsFlags::Frames)
@@ -262,7 +273,7 @@ impl H264Decoder {
             return Ok(None);
         };
         let (width, height) = decoded.dimensions();
-        if width < 2 || height < 2 || width.min(height) > 1088 || width > self.limits.0 || height > self.limits.1 {
+        if width < 2 || height < 2 || width.min(height) > 4320 || width > self.limits.0 || height > self.limits.1 {
             return Err(DecodeError::Dimensions);
         }
         let mut pixels = Zeroizing::new(vec![0; width * height * 4]);

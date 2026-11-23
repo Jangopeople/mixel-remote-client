@@ -71,6 +71,21 @@ internal sealed class RemoteScreen : Grid
         // Keys reach the remote computer through the hook; nothing typed here acts on this window.
         input.KeyDown += (sender, e) => e.Handled = true;
         input.KeyUp += (sender, e) => e.Handled = true;
+        AllowDrop = true;
+        DragOver += (_, e) =>
+        {
+            if (session.Remote.Files && e.DataView.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
+            {
+                e.AcceptedOperation = Windows.ApplicationModel.DataTransfer.DataPackageOperation.Copy;
+            }
+        };
+        Drop += async (_, e) =>
+        {
+            if (!session.Remote.Files || !e.DataView.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems)) return;
+            var items = await e.DataView.GetStorageItemsAsync();
+            var file = items.OfType<Windows.Storage.StorageFile>().FirstOrDefault();
+            if (file is not null && !string.IsNullOrEmpty(file.Path)) session.SendFile(file.Path);
+        };
         Unloaded += (_, _) => ReleaseKeyboard();
     }
 
@@ -153,7 +168,23 @@ internal sealed class RemoteScreen : Grid
     private void UpdateCursor()
     {
         var wanted = PointerPolicy.For(session.PointerMode, HostDrawsCursor);
-        input.Use(wanted == PointerPolicy.LocalCursor.Cross ? InputSystemCursorShape.Cross : InputSystemCursorShape.Arrow);
+        var shape = wanted == PointerPolicy.LocalCursor.Cross
+            ? InputSystemCursorShape.Cross
+            : session.Remote.CursorShape switch
+            {
+                "ibeam" => InputSystemCursorShape.IBeam,
+                "pointing" => InputSystemCursorShape.Hand,
+                "resize_ew" => InputSystemCursorShape.SizeWestEast,
+                "resize_ns" => InputSystemCursorShape.SizeNorthSouth,
+                "resize_nwse" => InputSystemCursorShape.SizeNorthwestSoutheast,
+                "resize_nesw" => InputSystemCursorShape.SizeNortheastSouthwest,
+                "crosshair" => InputSystemCursorShape.Cross,
+                "not_allowed" => InputSystemCursorShape.UniversalNo,
+                "wait" => InputSystemCursorShape.Wait,
+                "grab" => InputSystemCursorShape.SizeAll,
+                _ => InputSystemCursorShape.Arrow,
+            };
+        input.Use(shape);
         var hide = inside && wanted == PointerPolicy.LocalCursor.Hidden;
         if (hide == cursorHidden) return;
         cursorHidden = hide;

@@ -38,6 +38,7 @@ const PERMISSIONS_V4: &[u8] = b"mixel-permissions-v4";
 const DISPLAY_SELECT: &[u8] = b"mixel-display-select-v1";
 /// Controller to host: run a one-click action the host offered (name as text).
 const HOST_ACTION: &[u8] = b"mixel-action-v1:";
+const CURSOR_SHAPE: &[u8] = b"mixel-cursor-v1:";
 /// Host to controller: one input record was applied, or this host cannot apply that kind of input.
 /// 0.1.22 and 2.0 hosts send exactly one of these per input record, in order, without a number.
 const INPUT_POSTED: &[u8] = b"mixel-input-posted-v1";
@@ -150,6 +151,8 @@ pub fn own_features_with(vrate2: bool) -> Vec<&'static str> {
         crate::host_print::FEATURE,
         core_protocol::sound::FEATURE,
         FULL_HD,
+        ULTRA_HD,
+        CURSOR_FEATURE,
         crate::video_rate::FEATURE,
         crate::remote_session::JOIN,
         crate::remote_session::SWITCH,
@@ -197,6 +200,29 @@ mod release_defaults_tests {
 pub const ALL_MONITORS: &str = "allmon";
 /// Feature: the app shows (and a host may send) pictures up to 1920x1080.
 pub const FULL_HD: &str = "hd";
+/// Feature flag: this app can decode up to 4K/UHD (3840x2160) video streams.
+pub const ULTRA_HD: &str = "uhd";
+/// Feature flag: this app synchronizes native host cursor shapes (`mixel-cursor-v1:`).
+pub const CURSOR_FEATURE: &str = "cursor";
+
+/// User-selected quality preference sent via `quality:auto|speed|quality`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QualityMode {
+    Auto,
+    Speed,
+    Quality,
+}
+
+impl QualityMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "auto" => Some(Self::Auto),
+            "speed" => Some(Self::Speed),
+            "quality" => Some(Self::Quality),
+            _ => None,
+        }
+    }
+}
 
 /// Controller: an in-flight clipboard request driven asynchronously across poll turns
 /// so waiting for the host's reply never blocks video reception or rate-control reports.
@@ -237,6 +263,9 @@ pub struct ControlPipe {
     /// The other app understands sound frames; host: the technician wants to hear them.
     sound_peer: bool,
     sound_on: bool,
+    quality_mode: QualityMode,
+    cursor_peer: bool,
+    cursor_shape: Option<String>,
     /// Host: privacy screen, input block and lock-at-end are undone when the session ends.
     _guard: Option<crate::session_guard::Guard>,
     /// Controller: received sound frames not yet handed to the player.
@@ -422,6 +451,9 @@ impl ControlPipe {
             print_peer: features.iter().any(|name| name == crate::host_print::FEATURE),
             sound_peer: features.iter().any(|name| name == core_protocol::sound::FEATURE),
             sound_on: true,
+            quality_mode: QualityMode::Auto,
+            cursor_peer: features.iter().any(|name| name == CURSOR_FEATURE),
+            cursor_shape: None,
             _guard: config.host.then(crate::session_guard::Guard::new),
             sound_in: std::collections::VecDeque::new(),
             print_out: None,
@@ -429,7 +461,7 @@ impl ControlPipe {
             current_display: if config.host { 0 } else { display_offer.1 },
             display_count: if config.host { 0 } else { display_offer.0 },
             displays: if config.host && allowed { displays } else { Vec::new() },
-            actions: if allowed { actions } else { Vec::new() },
+            actions: if allowed { actions } else { actions.into_iter().filter(|a| a == crate::host_actions::QUALITY).collect() },
             drawings_in,
             drawings_out,
             acks: PendingAcks::default(),
@@ -467,6 +499,9 @@ impl ControlPipe {
             print_peer: false,
             sound_peer: true,
             sound_on: true,
+            quality_mode: QualityMode::Auto,
+            cursor_peer: false,
+            cursor_shape: None,
             _guard: None,
             sound_in: std::collections::VecDeque::new(),
             print_out: None,
@@ -597,12 +632,40 @@ impl ControlPipe {
     /// transport (ends the session); the inner one only fails this request.
     async fn send_action(&mut self, name: &str, channel: &Arc<dyn NativeDataChannel>) -> Result<Result<(), String>, String> {
         let offered = name.split(':').next().unwrap_or(name);
-        if self.host || !self.allowed || name.len() > 40 || !self.actions.iter().any(|action| action == offered) {
+        let view_only_ok = offered == crate::host_actions::QUALITY;
+        if self.host || (!self.allowed && !view_only_ok) || name.len() > 40 || !self.actions.iter().any(|action| action == offered) {
             return Ok(Err("This action is not available on the remote computer".into()));
         }
         let mut plain = HOST_ACTION.to_vec();
         plain.extend_from_slice(name.as_bytes());
         self.send_sealed(&plain, channel, "The action request").await.map(Ok)
+    }
+
+    pub fn quality_mode(&self) -> QualityMode {
+        self.quality_mode
+    }
+
+    /// Host: notifies a cursor-capable controller when the host cursor shape changes.
+    pub async fn send_cursor_shape(
+        &mut self,
+        channel: &Arc<dyn NativeDataChannel>,
+        shape: &str,
+    ) -> Result<(), String> {
+        if !self.host || !self.cursor_peer {
+            return Ok(());
+        }
+        let Some(clean) = native_os_capture::cursor_shape::normalize(shape) else {
+            return Ok(());
+        };
+        let mut plain = Vec::with_capacity(CURSOR_SHAPE.len() + clean.len());
+        plain.extend_from_slice(CURSOR_SHAPE);
+        plain.extend_from_slice(clean.as_bytes());
+        self.send_sealed(&plain, channel, "Cursor shape update").await
+    }
+
+    /// Controller: returns the latest cursor shape update received from the host.
+    pub fn take_cursor_shape(&mut self) -> Option<String> {
+        self.cursor_shape.take()
     }
     /// Controller: shows another of the host's displays (errors as for `send_action`).
     async fn select_display(
@@ -689,8 +752,17 @@ impl ControlPipe {
         if let Some(rest) = plain.strip_prefix(crate::host_print::RECORD) {
             self.clipboard.accept_print(rest);
         } else if let Some(frame) = plain.strip_prefix(core_protocol::sound::RECORD) {
-            if self.sound_in.len() < 100 {
-                self.sound_in.push_back(frame.to_vec());
+            // Keep at most 8 frames (~160 ms) of receive jitter buffer so audio stays lip-synced
+            // after WAN bursts instead of building multi-second lag.
+            while self.sound_in.len() >= 8 {
+                let _ = self.sound_in.pop_front();
+            }
+            self.sound_in.push_back(frame.to_vec());
+        } else if let Some(rest) = plain.strip_prefix(CURSOR_SHAPE) {
+            if let Ok(name) = std::str::from_utf8(rest)
+                && let Some(clean) = native_os_capture::cursor_shape::normalize(name)
+            {
+                self.cursor_shape = Some(clean.to_owned());
             }
         } else if plain == VIDEO_IDLE {
             self.last_video_idle = Instant::now();
@@ -946,9 +1018,17 @@ impl ControlPipe {
             if let Some(rest) = plain.strip_prefix(HOST_ACTION) {
                 let name = std::str::from_utf8(rest).map_err(|_| "Invalid host action")?.to_owned();
                 let offered = name.split(':').next().unwrap_or(&name).to_owned();
-                let switch = [crate::host_actions::WOL, crate::host_actions::SOUND, crate::session_guard::MEET, crate::session_guard::POINTER, crate::session_guard::PRIVACY, crate::session_guard::BLOCK, crate::session_guard::LOCK_AT_END];
-                if !self.allowed || name.len() > 40 || !self.actions.contains(&offered) || (name.contains(':') && !switch.contains(&offered.as_str())) {
+                let switch = [crate::host_actions::WOL, crate::host_actions::SOUND, crate::host_actions::QUALITY, crate::session_guard::MEET, crate::session_guard::POINTER, crate::session_guard::PRIVACY, crate::session_guard::BLOCK, crate::session_guard::LOCK_AT_END];
+                let view_only_ok = offered == crate::host_actions::QUALITY;
+                if (!self.allowed && !view_only_ok) || name.len() > 40 || !self.actions.contains(&offered) || (name.contains(':') && !switch.contains(&offered.as_str())) {
                     return Err("Invalid host action".into());
+                }
+                if offered == crate::host_actions::QUALITY {
+                    let mode_str = name.strip_prefix("quality:").unwrap_or("auto");
+                    if let Some(mode) = QualityMode::parse(mode_str) {
+                        self.quality_mode = mode;
+                    }
+                    continue;
                 }
                 if offered == crate::session_guard::MEET {
                     let room = name.strip_prefix("meet:").unwrap_or_default();

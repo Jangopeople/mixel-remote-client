@@ -114,6 +114,7 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
     public var hostMacs: [String]
     /// The technician offers to show their screen in this meeting room: (session, room).
     public var meetingOffer: [String]?
+    public var cursorShape: String?
     public var colleagues: [Colleague]
     public var joinRequest: JoinRequest?
     public var invitations: [Invitation]
@@ -190,6 +191,7 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
         self.signinId = nil
         self.hostMacs = []
         self.meetingOffer = nil
+        self.cursorShape = nil
         self.colleagues = colleagues
         self.joinRequest = joinRequest
         self.invitations = invitations
@@ -217,7 +219,7 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
         return [RemoteSessionItem(id: session, session: session, peer: peer, phase: phase, message: message, consent: consent, received: received,
                                   control: control, clipboard: clipboard, files: files, recordingPermitted: recordingPermitted, recording: recording, recordingParts: recordingParts ?? [],
                                   displays: displays, display: display, displayAll: displayAll, printJobs: printJobs, hostActions: hostActions,
-                                  signinId: signinId, hostMacs: hostMacs, meetingOffer: meetingOffer, peerFeatures: peerFeatures,
+                                  signinId: signinId, hostMacs: hostMacs, meetingOffer: meetingOffer, cursorShape: cursorShape, peerFeatures: peerFeatures,
                                   joinedSession: joinedSession, switched: switched, passwordSession: passwordSession, unattendedSession: unattendedSession)]
     }
 
@@ -266,6 +268,7 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
         copy.signinId = item.signinId
         copy.hostMacs = item.hostMacs
         copy.meetingOffer = item.meetingOffer
+        copy.cursorShape = item.cursorShape
         copy.peerFeatures = item.peerFeatures
         copy.joinedSession = item.joinedSession
         copy.switched = item.switched
@@ -305,6 +308,7 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
     public var signinId: UInt32?
     public var hostMacs: [String]
     public var meetingOffer: [String]?
+    public var cursorShape: String?
     public var peerFeatures: [String]
     public var joinedSession: Bool
     public var switched: Bool
@@ -326,7 +330,7 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
     public init(id: String, session: String? = nil, peer: UInt32? = nil, phase: String = "active", message: String = "", consent: String? = nil,
                 received: UInt64 = 0, control: Bool = false, clipboard: Bool = false, files: Bool = false, recordingPermitted: Bool = false,
                 recording: RecordingView? = nil, recordingParts: [String] = [], displays: UInt16 = 0, display: UInt16 = 0, displayAll: Bool = false, printJobs: [String] = [],
-                hostActions: [String] = [], signinId: UInt32? = nil, hostMacs: [String] = [], meetingOffer: [String]? = nil,
+                hostActions: [String] = [], signinId: UInt32? = nil, hostMacs: [String] = [], meetingOffer: [String]? = nil, cursorShape: String? = nil,
                 peerFeatures: [String] = [], joinedSession: Bool = false, switched: Bool = false, quality: SessionQuality? = nil, startedAt: Double? = nil,
                 reconnecting: Bool = false, reconnectFailed: Bool = false, passwordSession: PasswordSessionView? = nil, unattendedSession: Bool = false) {
         self.reconnecting = reconnecting; self.reconnectFailed = reconnectFailed
@@ -335,13 +339,13 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
         self.received = received; self.control = control; self.clipboard = clipboard; self.files = files
         self.recordingPermitted = recordingPermitted; self.recording = recording; self.recordingParts = recordingParts; self.displays = displays; self.display = display
         self.displayAll = displayAll; self.printJobs = printJobs; self.hostActions = hostActions; self.signinId = signinId
-        self.hostMacs = hostMacs; self.meetingOffer = meetingOffer; self.peerFeatures = peerFeatures
+        self.hostMacs = hostMacs; self.meetingOffer = meetingOffer; self.cursorShape = cursorShape; self.peerFeatures = peerFeatures
         self.joinedSession = joinedSession; self.switched = switched; self.quality = quality; self.startedAt = startedAt
     }
 
     private enum Key: String, CodingKey {
         case id, session, peer, device, phase, message, consent, received, control, controlPending, clipboard, files, recordingPermitted, recording, recordingParts, displays, display
-        case displayAll, printJobs, hostActions, signinId, hostMacs, meetingOffer, peerFeatures, joinedSession, switched, quality, startedAt
+        case displayAll, printJobs, hostActions, signinId, hostMacs, meetingOffer, cursorShape, peerFeatures, joinedSession, switched, quality, startedAt
         case reconnecting, reconnectFailed, passwordSession, unattendedSession, unattendedRefused
     }
 
@@ -369,6 +373,7 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
         signinId = try? c.decodeIfPresent(UInt32.self, forKey: .signinId)
         hostMacs = (try? c.decodeIfPresent([String].self, forKey: .hostMacs)) ?? []
         meetingOffer = try? c.decodeIfPresent([String].self, forKey: .meetingOffer)
+        cursorShape = try? c.decodeIfPresent(String.self, forKey: .cursorShape)
         peerFeatures = (try? c.decodeIfPresent([String].self, forKey: .peerFeatures)) ?? []
         joinedSession = (try? c.decodeIfPresent(Bool.self, forKey: .joinedSession)) ?? false
         switched = (try? c.decodeIfPresent(Bool.self, forKey: .switched)) ?? false
@@ -406,6 +411,7 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
         try c.encode(signinId, forKey: .signinId)
         try c.encode(hostMacs, forKey: .hostMacs)
         try c.encode(meetingOffer, forKey: .meetingOffer)
+        try c.encode(cursorShape, forKey: .cursorShape)
         try c.encode(peerFeatures, forKey: .peerFeatures)
         try c.encode(joinedSession, forKey: .joinedSession)
         try c.encode(switched, forKey: .switched)

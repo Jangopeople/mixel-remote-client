@@ -97,6 +97,16 @@ struct SessionStage: View {
         ZStack {
             Theme.stage
             RemoteScreen(session: session)
+            if session.draggingFiles {
+                VStack(spacing: 10) {
+                    Image(systemName: "arrow.down.doc.fill").font(.system(size: 38)).foregroundStyle(.white)
+                    Text(verbatim: L("Drop to send to %@", tab.name)).font(.title3.weight(.semibold)).foregroundStyle(.white)
+                }
+                .padding(24)
+                .background(.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.brand, lineWidth: 2))
+                .allowsHitTesting(false)
+            }
             if session.hasFrame, session.focused { DrawingOverlay(drawing: drawing, pictureSize: session.size) }
             switch session.link {
             case .reconnecting:
@@ -388,6 +398,14 @@ struct SessionBar: View {
                     Text(verbatim: session.decoding == .device ? L("This Mac (hardware)") : session.decoding == .engine ? L("Mixel engine") : "—")
                 } label: { Text(verbatim: L("Video decoding")) }
                 LabeledContent { Text(verbatim: Format.bytes(remote.received)) } label: { Text(verbatim: L("Received")) }
+                Divider()
+                Picker(selection: Binding(get: { session.qualityMode }, set: { session.setQualityMode($0) })) {
+                    Text(verbatim: L("Auto")).tag("auto")
+                    Text(verbatim: L("Optimize speed")).tag("speed")
+                    Text(verbatim: L("Optimize quality")).tag("quality")
+                } label: { Text(verbatim: L("Mode")) }
+                    .pickerStyle(.segmented)
+                Toggle(isOn: $session.actualSize) { Text(verbatim: L("Actual size (1:1)")) }
                 Text(verbatim: L("The picture adapts to the line by itself.")).font(.caption).foregroundStyle(.secondary)
             }
             .padding(16)
@@ -401,6 +419,7 @@ struct SessionBar: View {
             if remote.offers("block") { menuToggle(L("Block input"), session.blockInput) { session.toggleBlockInput() } }
             if remote.offers("pointer") { menuToggle(L("Show pointer"), session.pointerMode) { session.togglePointer() } }
             if remote.offers("sound") { menuToggle(L("Sound"), session.sound) { session.toggleSound() } }
+            menuToggle(L("Match my keyboard layout"), session.matchLocalKeyboard) { session.matchLocalKeyboard.toggle() }
             if remote.offers("lock") { Button(L("Lock computer")) { session.lockNow() } }
             if remote.offers("lockend") { menuToggle(L("Lock when done"), session.lockWhenDone) { session.toggleLockWhenDone() } }
             if remote.offers("restart") {

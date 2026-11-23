@@ -22,6 +22,11 @@ impl ScreenH264Encoder {
         })
     }
 
+    /// Updates VideoToolbox target bitrate in-place without recreating the compression session.
+    pub fn set_bitrate(&mut self, bitrate: u32) -> bool {
+        self.hardware.set_bitrate(bitrate)
+    }
+
     /// Retry the retained latest capture even when ScreenCaptureKit has no new
     /// dirty image. Callers still poll input and check authorization per retry.
     pub fn needs_retry(&self) -> bool {

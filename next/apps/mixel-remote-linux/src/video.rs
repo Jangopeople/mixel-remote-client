@@ -14,14 +14,33 @@ pub enum Layout {
     Bgra,
 }
 
+/// Zero-copy pixel buffer slice backed by the original engine `Vec<u8>` (avoids a multi-MB `drain(..32)` memmove per frame).
+pub struct PixelBuffer {
+    raw: Vec<u8>,
+    offset: usize,
+}
+
+impl AsRef<[u8]> for PixelBuffer {
+    fn as_ref(&self) -> &[u8] {
+        &self.raw[self.offset..]
+    }
+}
+
+impl std::ops::Deref for PixelBuffer {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.raw[self.offset..]
+    }
+}
+
 pub struct Frame {
     pub width: usize,
     pub height: usize,
     pub stride: usize,
     pub sequence: u64,
     pub layout: Layout,
-    /// Rows of 4-byte pixels with an opaque fourth byte.
-    pub pixels: Vec<u8>,
+    /// Rows of 4-byte pixels with an opaque fourth byte (zero-copy view past the 32-byte header).
+    pub pixels: PixelBuffer,
 }
 
 fn u32_at(bytes: &[u8], at: usize) -> usize {
@@ -51,14 +70,13 @@ pub fn decode(mut data: Vec<u8>, after: u64) -> Result<Frame, Problem> {
     if !fits || stride < width * 4 || data.len() != 32 + stride * height || sequence <= after {
         return Err(Problem::Invalid);
     }
-    data.drain(..32);
-    // The padding byte is not alpha: make every pixel opaque so the picture never shows through.
-    for row in data.chunks_exact_mut(stride) {
+    // The padding byte is not alpha: make every pixel opaque in place without shifting the 32-byte header.
+    for row in data[32..].chunks_exact_mut(stride) {
         for pixel in row[..width * 4].as_chunks_mut::<4>().0 {
             pixel[3] = 255;
         }
     }
-    Ok(Frame { width, height, stride, sequence, layout, pixels: data })
+    Ok(Frame { width, height, stride, sequence, layout, pixels: PixelBuffer { raw: data, offset: 32 } })
 }
 
 /// A calm stand-in desktop in the engine's format (for screenshots and tests): wallpaper, two

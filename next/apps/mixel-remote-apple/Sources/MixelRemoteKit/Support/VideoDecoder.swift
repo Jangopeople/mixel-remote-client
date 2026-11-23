@@ -175,7 +175,11 @@ public final class H264Decoder: @unchecked Sendable {
             return
         }
         invalidate()
-        let attributes: [CFString: Any] = [kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA]
+        let attributes: [CFString: Any] = [
+            kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
+            kCVPixelBufferMetalCompatibilityKey: true,
+        ]
         var created: VTDecompressionSession?
         let made = VTDecompressionSessionCreate(allocator: kCFAllocatorDefault, formatDescription: description, decoderSpecification: nil,
                                                 imageBufferAttributes: attributes as CFDictionary, outputCallback: nil,

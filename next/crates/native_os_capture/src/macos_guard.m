@@ -549,3 +549,38 @@ bool mixel_lock_available(void) {
     bool found = library && dlsym(library, "SACLockScreenImmediate") != NULL;
     return found;
 }
+
+#include <stdatomic.h>
+
+static _Atomic int g_cursor_kind = 0;
+static _Atomic bool g_cursor_pending = false;
+
+static int classify_system_cursor(void) {
+    @autoreleasepool {
+        NSCursor *cur = [NSCursor currentSystemCursor];
+        if (!cur) return 0;
+        NSData *curTiff = cur.image.TIFFRepresentation;
+        if (!curTiff) return 0;
+        if ([curTiff isEqualToData:[NSCursor IBeamCursor].image.TIFFRepresentation]) return 1;
+        if ([curTiff isEqualToData:[NSCursor pointingHandCursor].image.TIFFRepresentation]) return 2;
+        if ([curTiff isEqualToData:[NSCursor resizeLeftRightCursor].image.TIFFRepresentation]) return 3;
+        if ([curTiff isEqualToData:[NSCursor resizeUpDownCursor].image.TIFFRepresentation]) return 4;
+        if ([curTiff isEqualToData:[NSCursor crosshairCursor].image.TIFFRepresentation]) return 5;
+        if ([curTiff isEqualToData:[NSCursor operationNotAllowedCursor].image.TIFFRepresentation]) return 6;
+        if ([curTiff isEqualToData:[NSCursor openHandCursor].image.TIFFRepresentation] ||
+            [curTiff isEqualToData:[NSCursor closedHandCursor].image.TIFFRepresentation]) return 7;
+        return 0;
+    }
+}
+
+// Non-blocking cursor shape lookup safe to call from any worker thread.
+int mixel_current_cursor_kind(void) {
+    bool expected = false;
+    if (atomic_compare_exchange_strong(&g_cursor_pending, &expected, true)) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            atomic_store(&g_cursor_kind, classify_system_cursor());
+            atomic_store(&g_cursor_pending, false);
+        });
+    }
+    return atomic_load(&g_cursor_kind);
+}

@@ -606,6 +606,16 @@ public sealed class SessionModel : Observable
         Action(Sound ? "sound:on" : "sound:off", quiet: true);
     }
 
+    public string QualityMode { get; private set; } = "auto";
+
+    public void SetQualityMode(string mode)
+    {
+        if (mode is not ("auto" or "speed" or "quality")) return;
+        QualityMode = mode;
+        Action($"quality:{mode}", quiet: true);
+        RaiseChanged();
+    }
+
     public void LockNow() => Action("lock");
     public void CtrlAltDel() => Action("sas");
 

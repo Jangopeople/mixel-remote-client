@@ -47,12 +47,13 @@ impl H264VideoSender {
     ) -> Result<Self, MediaError> {
         if width == 0
             || height == 0
-            // Landscape up to 1920x1088, or the same picture upright (a phone screen).
-            // Level 4.2 macroblock rate supports up to 1920x1088 @ 60 FPS (522,240 MB/s).
-            || width.max(height) > 1920
-            || width.min(height) > 1088
+            // Landscape up to 8K / 4K / dual-4K ("All screens"), or upright phone screen.
+            // Level 5.2 macroblock rate supports up to 4096x2160 @ 60 FPS (2,073,600 MB/s).
+            || width.max(height) > 8192
+            || width.min(height) > 4320
+            || width.saturating_mul(height) > 33_177_600
             || !(1..=60).contains(&fps)
-            || width.div_ceil(16) * height.div_ceil(16) * fps as usize > 522_240
+            || width.div_ceil(16) * height.div_ceil(16) * fps as usize > 2_073_600
         {
             return Err(MediaError::Invalid);
         }

@@ -991,6 +991,28 @@
         }
       }
     },
+    "Actual size (1:1)": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Originalgrösse (1:1)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Taille réelle (1:1)"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dimensioni reali (1:1)"
+          }
+        }
+      }
+    },
     "Add a note? It appears in the session report of your company.": {
       "localizations": {
         "de": {
@@ -1691,6 +1713,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Presidiata"
+          }
+        }
+      }
+    },
+    "Auto": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatisch"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatique"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatico"
           }
         }
       }
@@ -4467,6 +4511,28 @@
         }
       }
     },
+    "Drop to send to %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loslassen, um an %@ zu senden"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Déposer pour envoyer à %@"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rilascia per inviare a %@"
+          }
+        }
+      }
+    },
     "Duration": {
       "localizations": {
         "de": {
@@ -7085,6 +7151,28 @@
         }
       }
     },
+    "Match my keyboard layout": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mein Tastaturlayout verwenden"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Utiliser ma disposition clavier"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usa il mio layout tastiera"
+          }
+        }
+      }
+    },
     "Meeting link": {
       "localizations": {
         "de": {
@@ -7433,6 +7521,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "Account del team Mixel"
+          }
+        }
+      }
+    },
+    "Mode": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modus"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mode"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modalità"
           }
         }
       }
@@ -8643,6 +8753,50 @@
           "stringUnit": {
             "state": "translated",
             "value": "Aperta con una password monouso. La sessione termina da sola tra %@."
+          }
+        }
+      }
+    },
+    "Optimize quality": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Qualität"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Qualité"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Qualità"
+          }
+        }
+      }
+    },
+    "Optimize speed": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Geschwindigkeit"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vitesse"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Velocità"
           }
         }
       }

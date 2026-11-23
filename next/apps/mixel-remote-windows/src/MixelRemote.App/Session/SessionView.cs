@@ -452,12 +452,22 @@ internal sealed class SessionView : Grid
         }
         var fps = new TextBlock { Text = L("%d fps", session.Fps), FontSize = 13, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
         fpsText = fps;
+        var modePicker = new RadioButtons { MaxColumns = 3, SelectedIndex = session.QualityMode switch { "speed" => 1, "quality" => 2, _ => 0 } };
+        modePicker.Items.Add(L("Auto"));
+        modePicker.Items.Add(L("Optimize speed"));
+        modePicker.Items.Add(L("Optimize quality"));
+        modePicker.SelectionChanged += (_, _) =>
+        {
+            var chosen = modePicker.SelectedIndex switch { 1 => "speed", 2 => "quality", _ => "auto" };
+            if (chosen != session.QualityMode) session.SetQualityMode(chosen);
+        };
         var facts = Ui.Column(8,
             Ui.Heading(L("Picture quality")),
             Ui.Split(Ui.Text(L("Pictures per second"), secondary: true), Ui.Text(L("%d fps", session.Fps))),
             Ui.Split(Ui.Text(L("Resolution"), secondary: true), Ui.Text(session.Frame is { } frame ? $"{frame.Width} × {frame.Height}" : "—")),
             Ui.Split(Ui.Text(L("Video decoding"), secondary: true), Ui.Text(L("Mixel engine"))),
             Ui.Split(Ui.Text(L("Received"), secondary: true), Ui.Text(Format.Bytes(session.Remote.Received))),
+            modePicker,
             Ui.Caption(L("The picture adapts to the line by itself.")));
         facts.Width = 280;
         var button = new Button

@@ -265,11 +265,12 @@ pub fn decoded_packet(
 ) -> Result<VideoPacket, String> {
     if frame.width() < 2
         || frame.height() < 2
-        // Landscape up to 1920x1088, or the same picture upright (a phone screen).
-        || frame.width().max(frame.height()) > 1920
-        || frame.width().min(frame.height()) > 1088
+        // Landscape up to 8K / 4K / dual-monitor ("All screens"), or upright phone screen.
+        || frame.width().max(frame.height()) > 8192
+        || frame.width().min(frame.height()) > 4320
+        || frame.width().saturating_mul(frame.height()) > 33_177_600
         || sequence == 0
-        || frame.pixels().len() > 16_777_216
+        || frame.pixels().len() > 134_217_728
     {
         return Err("Decoded video exceeds its negotiated bounds".into());
     }

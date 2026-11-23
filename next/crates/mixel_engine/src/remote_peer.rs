@@ -972,8 +972,15 @@ async fn negotiate(
     // Host: the first picture is captured and encoded while DTLS is still opening (nothing is sent before the peer is verified).
     // Must match host_media's initial `size` so EarlyPicture hands over capture & encoder seamlessly without re-opening either.
     let early_size = if early && config.host {
+        let uhd = peer_features.iter().any(|name| name == crate::remote_control::ULTRA_HD);
         let full_hd = peer_features.iter().any(|name| name == crate::remote_control::FULL_HD);
-        Some(if full_hd { source_size_within(config, (1920.0, 1080.0))? } else { size })
+        Some(if uhd {
+            source_size_within(config, (3840.0, 2160.0))?
+        } else if full_hd {
+            source_size_within(config, (1920.0, 1080.0))?
+        } else {
+            size
+        })
     } else {
         None
     };
@@ -1127,10 +1134,11 @@ async fn negotiate(
             0,
         )
         .await;
-    // Full HD when the technician's app can show it; otherwise the classic 1280x720.
+    // Up to 4K/UHD when the technician's app announces `uhd`, 1080p for `hd`, else 720p.
+    let uhd = config.host && peer_features.iter().any(|name| name == crate::remote_control::ULTRA_HD);
     let full_hd = config.host && peer_features.iter().any(|name| name == crate::remote_control::FULL_HD);
-    let limit = if full_hd { (1920.0, 1080.0) } else { (1280.0, 720.0) };
-    let size = if full_hd { source_size_within(config, limit)? } else { size };
+    let limit = if uhd { (3840.0, 2160.0) } else if full_hd { (1920.0, 1080.0) } else { (1280.0, 720.0) };
+    let size = if uhd || full_hd { source_size_within(config, limit)? } else { size };
     Ok((consent, channel, sender, size, limit, control, early_track, prepared))
 }
 /// Host, fast first picture: the peer is verified on the encrypted transport, the control channel is
@@ -1513,17 +1521,21 @@ fn perf_log(line: &str) {
 /// lossy line the encoder used to aim at 3 to 6 Mbit/s whatever the line carried, so the pace held
 /// big pictures back and the technician saw a few a second; smaller pictures come more often.
 pub(crate) fn encoder_bitrate(size: (usize, usize), pace_bytes_per_second: f64) -> u32 {
-    let ceiling: u32 = if size.0 > 1280 || size.1 > 720 { 6_000_000 } else { 3_000_000 };
+    let ceiling: u32 = if size.0 > 1920 || size.1 > 1080 {
+        16_000_000
+    } else if size.0 > 1280 || size.1 > 720 {
+        6_000_000
+    } else {
+        3_000_000
+    };
     let carried = (pace_bytes_per_second * 8.0 * 0.6).clamp(0.0, f64::from(ceiling)) as u32;
-    // Steps of 1.5x instead of every value: the encoder cannot change its bit rate while it runs
-    // (a new encoder, a complete picture each time), so small moves in the pace must not restart it.
     let rung = ENCODER_LADDER.iter().copied().filter(|rung| *rung <= carried).max().unwrap_or(ENCODER_MIN_BITRATE);
     if carried >= ceiling { ceiling } else { rung.clamp(ENCODER_MIN_BITRATE.min(ceiling), ceiling) }
 }
-/// The bit rates the encoder is set to (bit/s), ~1.5x apart down to 180 kbps for sub-Mbps WAN links.
-const ENCODER_LADDER: [u32; 10] = [
+/// The bit rates the encoder is set to (bit/s), ~1.5x apart from 180 kbps (WAN) to 16 Mbps (4K LAN).
+const ENCODER_LADDER: [u32; 13] = [
     180_000, 260_000, 380_000, 550_000, 800_000, 1_200_000, 1_800_000, 2_700_000, 4_000_000,
-    6_000_000,
+    6_000_000, 9_000_000, 12_000_000, 16_000_000,
 ];
 /// The encoder's next bit rate: down at once when the pace fell to less than two thirds of it, up
 /// by half at most when the pace allows 40 % more (the pace rises fast after a few complete
@@ -1585,6 +1597,26 @@ pub(crate) fn adaptive_size(
         full
     } else {
         current
+    }
+}
+
+/// Applies the user-chosen quality preference (`Auto`, `Speed`, or `Quality`) on top of `adaptive_size`.
+pub(crate) fn adaptive_size_for_mode(
+    full: (usize, usize),
+    current: (usize, usize),
+    pace_bytes_per_second: f64,
+    base_rtt: Duration,
+    mode: crate::remote_control::QualityMode,
+) -> (usize, usize) {
+    match mode {
+        crate::remote_control::QualityMode::Auto => {
+            adaptive_size(full, current, pace_bytes_per_second, base_rtt)
+        }
+        crate::remote_control::QualityMode::Speed => {
+            let cap = scale_to_box(full, 1280.0, 720.0);
+            adaptive_size(cap, current.min(cap), pace_bytes_per_second, base_rtt)
+        }
+        crate::remote_control::QualityMode::Quality => full,
     }
 }
 
@@ -1671,7 +1703,7 @@ fn start_encoder(size: (usize, usize), bitrate: u32) -> Result<mpsc::Sender<Enco
             while let Some(request) = worker.blocking_recv() {
                 let result = match &mut encoder {
                     Ok(encoder) => {
-                        #[cfg(target_os = "windows")]
+                        #[cfg(any(target_os = "windows", target_os = "macos"))]
                         if let Some(target_bps) = request.bitrate {
                             let _ = encoder.set_bitrate(target_bps);
                         }
@@ -1803,6 +1835,7 @@ async fn host_media(
         };
         let mut bitrate_set = Instant::now();
         let mut pending_bitrate: Option<u32> = None;
+        let mut quality_mode = control.quality_mode();
         crate::qa_timeline::mark("encoder started");
         let mut retry_encode = false;
         // The encoder left the last picture out: it is given again although the screen is unchanged.
@@ -1816,6 +1849,8 @@ async fn host_media(
         let mut print_installed = control.forwards_print_jobs().then(|| tokio::task::spawn_blocking(crate::host_print::installed));
         let mut print_watch: Option<crate::host_print::Watcher> = None;
         let mut print_checked = Instant::now();
+        let mut last_cursor: &'static str = "arrow";
+        let mut cursor_checked = Instant::now();
         #[cfg(feature = "qa-session")]
         let mut qa_video = (0u32, Duration::ZERO, Duration::ZERO, Duration::ZERO, 0usize, Instant::now());
         #[cfg(feature = "qa-session")]
@@ -1840,9 +1875,15 @@ async fn host_media(
                     sound_failed = sound.is_none();
                 }
                 if let Some(capture) = &sound {
-                    for _ in 0..8 {
-                        let Some(frame) = capture.next() else { break };
-                        control.send_sound(channel, &frame).await?;
+                    if rate.backlogged(Instant::now()) {
+                        // Drop stale queued audio frames while the link is congested so sound never
+                        // head-of-line blocks keyboard/mouse input or builds multi-second lag.
+                        while capture.next().is_some() {}
+                    } else {
+                        for _ in 0..4 {
+                            let Some(frame) = capture.next() else { break };
+                            control.send_sound(channel, &frame).await?;
+                        }
                     }
                 }
             } else if sound.is_some() {
@@ -1863,6 +1904,14 @@ async fn host_media(
                 print_checked = Instant::now();
                 if let Some(pdf) = watch.poll() {
                     control.queue_print(pdf);
+                }
+            }
+            if cursor_checked.elapsed() >= Duration::from_millis(50) {
+                cursor_checked = Instant::now();
+                let shape = native_os_capture::cursor_shape::current_cursor_shape();
+                if shape != last_cursor {
+                    last_cursor = shape;
+                    control.send_cursor_shape(channel, shape).await?;
                 }
             }
             pump_ice(config, transport).await?;
@@ -2076,17 +2125,24 @@ async fn host_media(
                 perf_bytes = 0;
                 perf_logged = Instant::now();
             }
-            // The encoder follows the pace (see `encoder_bitrate` and `adaptive_size`); a new
-            // encoder starts with a complete picture.
-            if bitrate_set.elapsed() >= BITRATE_SETTLE {
-                let next_size = adaptive_size(full_size, size, pacer.rate(), rate.base_delay());
-                let wanted = next_bitrate(bitrate, encoder_bitrate(next_size, pacer.rate()));
+            // The encoder follows the pace and user quality preference (`Auto` / `Speed` / `Quality`).
+            let mode_changed = control.quality_mode() != quality_mode;
+            if mode_changed || bitrate_set.elapsed() >= BITRATE_SETTLE {
+                quality_mode = control.quality_mode();
+                let next_size = adaptive_size_for_mode(full_size, size, pacer.rate(), rate.base_delay(), quality_mode);
+                let pace_bias = match quality_mode {
+                    crate::remote_control::QualityMode::Quality => pacer.rate() * 1.35,
+                    crate::remote_control::QualityMode::Speed => pacer.rate() * 0.75,
+                    crate::remote_control::QualityMode::Auto => pacer.rate(),
+                };
+                let target_bps = encoder_bitrate(next_size, pace_bias);
+                let wanted = if mode_changed { target_bps } else { next_bitrate(bitrate, target_bps) };
                 if next_size != size || wanted != bitrate {
                     #[cfg(feature = "qa-session")]
                     eprintln!("QA encoder {}x{} -> {}x{}, bit rate {} -> {} kbit/s (pace {:.0} kB/s, base {} ms)", size.0, size.1, next_size.0, next_size.1, bitrate / 1000, wanted / 1000, pacer.rate() / 1000.0, rate.base_delay().as_millis());
-                    if next_size == size && cfg!(target_os = "windows") {
-                        // Update Media Foundation hardware bitrate in-place without restarting the MFT
-                        // or injecting a large IDR keyframe onto a constrained WAN link.
+                    if next_size == size && cfg!(any(target_os = "windows", target_os = "macos")) {
+                        // Update hardware encoder bitrate in-place (VideoToolbox / Media Foundation)
+                        // without tearing down the encoder or injecting an IDR spike.
                         pending_bitrate = Some(wanted);
                     } else {
                         encoder = start_encoder(next_size, wanted)?;
@@ -2328,6 +2384,9 @@ impl<'a> Ctl<'a> {
     fn take_print_job(&mut self) -> Option<Vec<u8>> {
         self.pipe.as_mut().and_then(|pipe| pipe.take_print_job())
     }
+    fn take_cursor_shape(&mut self) -> Option<String> {
+        self.pipe.as_mut().and_then(|pipe| pipe.take_cursor_shape())
+    }
 }
 fn hand_over(
     config: &mut Config,
@@ -2416,7 +2475,7 @@ async fn viewer_media(
     // What arrives is reported to the host five times a second (`video_rate`).
     let mut report_rx = crate::video_rate::Receiver::new(Instant::now());
     let mut decoder =
-        session_platform::H264Decoder::new(1920, 1920).map_err(|error| error.to_string())?;
+        session_platform::H264Decoder::new(8192, 4320).map_err(|error| error.to_string())?;
     let mut previous_rtp: Option<u32> = None;
     let mut timestamp_ticks = 0u64;
     let mut received = 0u64;
@@ -2484,6 +2543,9 @@ async fn viewer_media(
                     let _ = std::fs::write(path, format!("frames={}", player.frames.load(std::sync::atomic::Ordering::Relaxed)));
                 }
             }
+        }
+        if let Some(shape) = control.take_cursor_shape() {
+            config.state.set_cursor_shape(config.generation, config.session, shape).await;
         }
         if let Some(pdf) = control.take_print_job() {
             match tokio::task::spawn_blocking(move || crate::host_print::store(&pdf)).await {
@@ -2622,7 +2684,7 @@ async fn viewer_media(
                             window_decodes = compressed;
                             waiting_for_key = true;
                             if !compressed {
-                                decoder = session_platform::H264Decoder::new(1920, 1920)
+                                decoder = session_platform::H264Decoder::new(8192, 4320)
                                     .map_err(|error| error.to_string())?;
                             }
                         }
@@ -2723,7 +2785,7 @@ async fn viewer_media(
                                 return Err("decoded dimensions exceed the negotiated limit".into());
                             }
                             Err(_) => {
-                                decoder = session_platform::H264Decoder::new(1920, 1920)
+                                decoder = session_platform::H264Decoder::new(8192, 4320)
                                     .map_err(|error| error.to_string())?;
                                 waiting_for_key = true;
                                 control.request_keyframe(channel).await?;

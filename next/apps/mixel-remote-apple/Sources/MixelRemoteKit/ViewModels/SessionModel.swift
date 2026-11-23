@@ -41,6 +41,14 @@ public final class SessionModel: ObservableObject {
     @Published public var pointerMode = false
     @Published public private(set) var sound = true
     @Published public private(set) var restartArmed = false
+    /// When enabled, sends printable characters using the technician's local keyboard layout instead of raw HID scancodes.
+    @Published public var matchLocalKeyboard = false
+    /// True while a local file is being dragged over the remote screen.
+    @Published public var draggingFiles = false
+    /// Active quality preference: "auto", "speed", or "quality".
+    @Published public private(set) var qualityMode = "auto"
+    /// True for 1:1 Actual Size view on macOS (false = Fit to window).
+    @Published public var actualSize = false
     // Tools.
     @Published public private(set) var chat: [ChatMessage] = []
     @Published public var chatDraft = ""
@@ -454,6 +462,11 @@ public final class SessionModel: ObservableObject {
         if !pointerMode { action("pointer:off", quiet: true) }
     }
     public func toggleSound() { sound.toggle(); action(sound ? "sound:on" : "sound:off", quiet: true) }
+    public func setQualityMode(_ mode: String) {
+        guard ["auto", "speed", "quality"].contains(mode), mode != qualityMode else { return }
+        qualityMode = mode
+        action("quality:\(mode)", quiet: true)
+    }
     public func lockNow() { action("lock") }
     public func ctrlAltDel() { action("sas") }
     public func selectDisplay(_ index: UInt16) {

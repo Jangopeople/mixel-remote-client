@@ -8,6 +8,8 @@ pub mod macos;
 pub mod stream;
 
 pub mod input;
+#[allow(unsafe_code)] // Thread-safe OS cursor shape query (GetCursorInfo / NSCursor cache).
+pub mod cursor_shape;
 
 pub mod h264;
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "android", test))]

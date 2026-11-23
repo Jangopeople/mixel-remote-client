@@ -119,6 +119,8 @@ pub struct Status {
     pub host_macs: Vec<String>,
     /// Host: the technician offers to show their screen in this Mixel Meet room (session, room id).
     pub meeting_offer: Option<(Uuid, String)>,
+    #[serde(default)]
+    pub cursor_shape: Option<String>,
     /// Host: colleagues of the technician who joined the running session.
     pub colleagues: Vec<Colleague>,
     /// Host: a colleague of the technician asks to join the running session.
@@ -291,6 +293,7 @@ impl Default for Status {
             print_jobs: Vec::new(),
             host_actions: Vec::new(),
             meeting_offer: None,
+            cursor_shape: None,
             signin_id: None,
             host_macs: Vec::new(),
             colleagues: Vec::new(),
@@ -536,6 +539,7 @@ impl Status {
         self.signin_id = view.signin_id;
         self.host_macs = view.host_macs.clone();
         self.meeting_offer = view.meeting_offer.clone();
+        self.cursor_shape = view.cursor_shape.clone();
         self.joined_session = view.joined_session;
         self.switched = view.switched;
         self.peer_features = view.peer_features.clone();
@@ -2270,6 +2274,18 @@ impl RemoteSession {
         }
         if inner.generation == generation && inner.status.session == Some(session) && !inner.cancel.load(Ordering::Acquire) {
             inner.status.meeting_offer = Some((session, room));
+        }
+    }
+    pub async fn set_cursor_shape(&self, generation: u64, session: Uuid, shape: String) {
+        let mut inner = self.0.lock().await;
+        if inner.generation == generation && !inner.cancel.load(Ordering::Acquire)
+            && let Some(slot) = inner.slots.find_mut(session)
+        {
+            slot.view.cursor_shape = Some(shape);
+            return;
+        }
+        if inner.generation == generation && inner.status.session == Some(session) && !inner.cancel.load(Ordering::Acquire) {
+            inner.status.cursor_shape = Some(shape);
         }
     }
     pub async fn set_recording_permission(

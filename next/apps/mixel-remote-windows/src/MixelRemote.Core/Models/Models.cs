@@ -93,6 +93,7 @@ public sealed record RemoteStatus
     public List<string> HostMacs { get; init; } = [];
     /// <summary>The technician offers to show their screen in this meeting room: [session, room].</summary>
     public List<string>? MeetingOffer { get; init; }
+    public string? CursorShape { get; init; }
     public List<Colleague> Colleagues { get; init; } = [];
     public JoinRequest? JoinRequest { get; init; }
     public List<Invitation> Invitations { get; init; } = [];
@@ -136,7 +137,7 @@ public sealed record RemoteStatus
                 Id = Session ?? "", Session = Session, Peer = peer, Device = peer, Phase = Phase, Message = Message, Consent = Consent,
                 Received = Received, Control = Control, ControlPending = ControlPending, Clipboard = Clipboard, Files = Files, RecordingPermitted = RecordingPermitted,
                 Recording = Recording, RecordingParts = RecordingParts, Displays = Displays, Display = Display, DisplayAll = DisplayAll, PrintJobs = PrintJobs,
-                HostActions = HostActions, SigninId = SigninId, HostMacs = HostMacs, MeetingOffer = MeetingOffer, PeerFeatures = PeerFeatures,
+                HostActions = HostActions, SigninId = SigninId, HostMacs = HostMacs, MeetingOffer = MeetingOffer, CursorShape = CursorShape, PeerFeatures = PeerFeatures,
                 JoinedSession = JoinedSession, Switched = Switched, PasswordSession = PasswordSession, UnattendedSession = UnattendedSession, UnattendedRefused = UnattendedRefused,
             },
         ];
@@ -192,6 +193,7 @@ public sealed record SessionStatus
     public uint? SigninId { get; init; }
     public List<string> HostMacs { get; init; } = [];
     public List<string>? MeetingOffer { get; init; }
+    public string? CursorShape { get; init; }
     public List<string> PeerFeatures { get; init; } = [];
     public bool JoinedSession { get; init; }
     public bool Switched { get; init; }
@@ -222,7 +224,7 @@ public sealed record SessionStatus
         Phase = Phase, Message = Message, Session = Id.Length == 0 ? Session : Id, Consent = Consent, Peer = Peer, Sharing = false,
         Received = Received, Control = Control, ControlPending = ControlPending, Clipboard = Clipboard, Files = Files, RecordingPermitted = RecordingPermitted,
         Recording = Recording, RecordingParts = RecordingParts, Displays = Displays, Display = Display, DisplayAll = DisplayAll, PrintJobs = PrintJobs,
-        HostActions = HostActions, SigninId = SigninId, HostMacs = HostMacs, MeetingOffer = MeetingOffer, PeerFeatures = PeerFeatures,
+        HostActions = HostActions, SigninId = SigninId, HostMacs = HostMacs, MeetingOffer = MeetingOffer, CursorShape = CursorShape, PeerFeatures = PeerFeatures,
         JoinedSession = JoinedSession, Switched = Switched,
         // The engine reports these per session: the top-level values (one session) belong to an older engine only.
         PasswordSession = PasswordSession, UnattendedSession = UnattendedSession, UnattendedRefused = UnattendedRefused,

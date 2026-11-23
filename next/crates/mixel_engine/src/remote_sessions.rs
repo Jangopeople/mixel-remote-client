@@ -76,6 +76,8 @@ pub struct SessionStatus {
     pub signin_id: Option<u32>,
     pub host_macs: Vec<String>,
     pub meeting_offer: Option<(Uuid, String)>,
+    #[serde(default)]
+    pub cursor_shape: Option<String>,
     pub peer_features: Vec<String>,
     pub joined_session: bool,
     pub switched: bool,
@@ -237,6 +239,7 @@ impl Registry {
                 signin_id: None,
                 host_macs: Vec::new(),
                 meeting_offer: None,
+                cursor_shape: None,
                 peer_features: Vec::new(),
                 joined_session: false,
                 switched: false,

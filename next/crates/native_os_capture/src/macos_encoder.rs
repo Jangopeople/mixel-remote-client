@@ -154,6 +154,24 @@ impl HardwareH264Encoder {
             })
         }
     }
+
+    /// Updates target average bitrate in-place without tearing down the VideoToolbox session or forcing an IDR flash.
+    pub fn set_bitrate(&mut self, bitrate: u32) -> bool {
+        if !(100_000..=100_000_000).contains(&bitrate) {
+            return false;
+        }
+        let ok = self
+            .property(
+                // SAFETY: immutable CoreFoundation property key constant from VideoToolbox.
+                unsafe { kVTCompressionPropertyKey_AverageBitRate },
+                CFNumber::new_i64(bitrate.into()).as_ref(),
+            )
+            .is_ok();
+        if ok {
+            self.bitrate = bitrate;
+        }
+        ok
+    }
     pub fn hardware_active(&self) -> Result<bool, EncodeError> {
         let mut value: *const CFType = ptr::null();
         // SAFETY: typed output storage receives an owned CF property reference.
