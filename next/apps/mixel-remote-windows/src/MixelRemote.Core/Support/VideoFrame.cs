@@ -39,7 +39,7 @@ public sealed class VideoFrame
 
     public static bool IsCompressed(byte[] data) => data.Length >= 4 && data[0] == 77 && data[1] == 82 && data[2] == 72 && data[3] == 49;
 
-    /// <summary>Checks the header and bounds exactly as the desktop app does (at most 1920 × 1088, or upright).</summary>
+    /// <summary>Checks the header and bounds (up to 8K / multi-monitor "All screens" frames).</summary>
     public static VideoFrame Decode(byte[] data, ulong after = 0)
     {
         if (data.Length <= HeaderSize || data[0] != 77 || data[1] != 82 || data[2] != 70 || (data[3] != 50 && data[3] != 49)) throw new InvalidFrame();
@@ -48,7 +48,8 @@ public sealed class VideoFrame
         long height = BinaryPrimitives.ReadUInt32LittleEndian(span[8..]);
         long stride = BinaryPrimitives.ReadUInt32LittleEndian(span[12..]);
         var sequence = BinaryPrimitives.ReadUInt64LittleEndian(span[16..]);
-        if (width < 2 || height < 2 || Math.Max(width, height) > 1920 || Math.Min(width, height) > 1088
+        if (width < 2 || height < 2 || Math.Max(width, height) > 8192 || Math.Min(width, height) > 4320
+            || width * height > 33_177_600
             || stride < width * 4 || data.Length != HeaderSize + stride * height || sequence <= after)
         {
             throw new InvalidFrame();
