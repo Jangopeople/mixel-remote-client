@@ -84,7 +84,7 @@ internal sealed class RemoteScreen : Grid
             if (!session.Remote.Files || !e.DataView.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems)) return;
             var items = await e.DataView.GetStorageItemsAsync();
             var file = items.OfType<Windows.Storage.StorageFile>().FirstOrDefault();
-            if (file is not null && !string.IsNullOrEmpty(file.Path)) session.SendFile(file.Path);
+            if (file is not null && !string.IsNullOrEmpty(file.Path)) await session.SendFile(file.Path);
         };
         Unloaded += (_, _) => ReleaseKeyboard();
     }
