@@ -127,16 +127,19 @@ def turn_configuration(secret: str) -> str:
         "listening-port=3479", "tls-listening-port=5350", f"listening-ip={PUBLIC_IP}", f"relay-ip={PUBLIC_IP}",
         "realm=mixel-remote-next-qa", "use-auth-secret", f"static-auth-secret={secret}", "fingerprint",
         "cert=/run/turn-tls/fullchain.pem", "pkey=/run/turn-tls/privkey.pem", "no-tcp-relay", "no-multicast-peers",
-        "min-port=60000", "max-port=60099", "user-quota=8", "total-quota=48", "relay-threads=2",
+        "min-port=60000", "max-port=60099", "user-quota=32", "total-quota=256", "relay-threads=2",
         "userdb=/tmp/turn.sqlite", "pidfile=/tmp/coturn.pid", "log-file=stdout", "simple-log", "no-software-attribute",
-        # The two allocations exchange packets on this single public relay IP.
-        # Coturn's catch-all IPv6 range also matched the IPv4 peer in live QA.
+        # Allow public IPv4 peers while blocking all RFC1918/loopback/link-local/multicast ranges.
+        # NEVER use `denied-peer-ip=::-ffff:...` — in coturn that wildcard also matches IPv4-mapped
+        # IPv6 addresses and blocks every public IPv4 client with 403 (incident 2026-11-23).
         f"allowed-peer-ip={PUBLIC_IP}",
         "denied-peer-ip=0.0.0.0-0.255.255.255", "denied-peer-ip=10.0.0.0-10.255.255.255",
         "denied-peer-ip=100.64.0.0-100.127.255.255", "denied-peer-ip=127.0.0.0-127.255.255.255",
         "denied-peer-ip=169.254.0.0-169.254.255.255", "denied-peer-ip=172.16.0.0-172.31.255.255",
         "denied-peer-ip=192.168.0.0-192.168.255.255", "denied-peer-ip=224.0.0.0-255.255.255.255",
-        "denied-peer-ip=::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", "",
+        "denied-peer-ip=::1",
+        "denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+        "denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff", "",
     ])
 
 
