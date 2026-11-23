@@ -35,7 +35,7 @@ fn nv12_to_bgra(
     let uv_rows = height / 2;
     let needed_uv = stride.checked_mul(uv_rows).ok_or(DecodeError::Dimensions)?;
     if uv_offset < needed_y || uv_offset.saturating_add(needed_uv) > nv12.len() {
-        return Err(DecodeError::Decoder("MF NV12 output buffer smaller than expected".into()));
+        return Err(DecodeError::Codec);
     }
     let out_stride = width.checked_mul(4).ok_or(DecodeError::Dimensions)?;
     let out_len = out_stride.checked_mul(height).ok_or(DecodeError::Dimensions)?;
@@ -172,10 +172,10 @@ impl MfH264Decoder {
             return Ok(sample.clone());
         }
         unsafe {
-            let sample = MFCreateSample().map_err(|e| DecodeError::Decoder(e.to_string()))?;
+            let sample = MFCreateSample().map_err(|_| DecodeError::Codec)?;
             let buffer = MFCreateMemoryBuffer(self.output_buf_size)
-                .map_err(|e| DecodeError::Decoder(e.to_string()))?;
-            sample.AddBuffer(&buffer).map_err(|e| DecodeError::Decoder(e.to_string()))?;
+                .map_err(|_| DecodeError::Codec)?;
+            sample.AddBuffer(&buffer).map_err(|_| DecodeError::Codec)?;
             self.sample_buf = Some(sample.clone());
             Ok(sample)
         }
@@ -192,27 +192,27 @@ impl MfH264Decoder {
                     || (w[0] == 0 && w[1] == 0 && w[2] == 0 && w[3] == 1 && (w[4] & 0x1F) == 5)
             });
             if !has_idr {
-                return Err(DecodeError::NeedsKeyframe);
+                return Ok(None);
             }
             self.has_keyframe = true;
         }
 
         unsafe {
-            let in_sample = MFCreateSample().map_err(|e| DecodeError::Decoder(e.to_string()))?;
+            let in_sample = MFCreateSample().map_err(|_| DecodeError::Codec)?;
             let in_buf = MFCreateMemoryBuffer(annex_b.len() as u32)
-                .map_err(|e| DecodeError::Decoder(e.to_string()))?;
+                .map_err(|_| DecodeError::Codec)?;
             let mut ptr: *mut u8 = std::ptr::null_mut();
-            in_buf.Lock(&mut ptr, None, None).map_err(|e| DecodeError::Decoder(e.to_string()))?;
+            in_buf.Lock(&mut ptr, None, None).map_err(|_| DecodeError::Codec)?;
             std::ptr::copy_nonoverlapping(annex_b.as_ptr(), ptr, annex_b.len());
             let _ = in_buf.Unlock();
             in_buf.SetCurrentLength(annex_b.len() as u32)
-                .map_err(|e| DecodeError::Decoder(e.to_string()))?;
-            in_sample.AddBuffer(&in_buf).map_err(|e| DecodeError::Decoder(e.to_string()))?;
+                .map_err(|_| DecodeError::Codec)?;
+            in_sample.AddBuffer(&in_buf).map_err(|_| DecodeError::Codec)?;
             let _ = in_sample.SetSampleTime((timestamp_us * 10) as i64);
 
             self.mft
                 .ProcessInput(0, &in_sample, 0)
-                .map_err(|e| DecodeError::Decoder(format!("ProcessInput: {e}")))?;
+                .map_err(|_| DecodeError::Codec)?;
 
             let mut latest: Option<CapturedFrame> = None;
             for _ in 0..8 {
@@ -242,11 +242,11 @@ impl MfH264Decoder {
                         }
                         let buf = out_sample
                             .ConvertToContiguousBuffer()
-                            .map_err(|e| DecodeError::Decoder(e.to_string()))?;
+                            .map_err(|_| DecodeError::Codec)?;
                         let mut data_ptr: *mut u8 = std::ptr::null_mut();
                         let mut cur_len = 0u32;
                         buf.Lock(&mut data_ptr, None, Some(&mut cur_len))
-                            .map_err(|e| DecodeError::Decoder(e.to_string()))?;
+                            .map_err(|_| DecodeError::Codec)?;
                         let slice = std::slice::from_raw_parts(data_ptr, cur_len as usize);
                         let stride = self.stride.max(width);
                         // MF aligns NV12 chroma plane on `stride * height` (or 16-row-aligned height).
@@ -260,11 +260,11 @@ impl MfH264Decoder {
                         latest = Some(frame?);
                     }
                     Err(e) if e.code() == MF_E_TRANSFORM_STREAM_CHANGE => {
-                        self.select_nv12_output().map_err(DecodeError::Decoder)?;
+                        self.select_nv12_output().map_err(|_| DecodeError::Codec)?;
                         continue;
                     }
                     Err(e) if e.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => break,
-                    Err(e) => return Err(DecodeError::Decoder(format!("ProcessOutput: {e}"))),
+                    Err(_) => return Err(DecodeError::Codec),
                 }
             }
             Ok(latest)

@@ -86,7 +86,7 @@ impl GstH264Decoder {
                     || (w[0] == 0 && w[1] == 0 && w[2] == 0 && w[3] == 1 && (w[4] & 0x1F) == 5)
             });
             if !has_idr {
-                return Err(DecodeError::NeedsKeyframe);
+                return Ok(None);
             }
             self.has_keyframe = true;
         }
@@ -94,17 +94,14 @@ impl GstH264Decoder {
         if let Some(buf_ref) = buffer.get_mut() {
             buf_ref.set_pts(gst::ClockTime::from_useconds(timestamp_us));
         }
-        self.src
-            .push_buffer(buffer)
-            .map_err(|e| DecodeError::Decoder(format!("GStreamer push_buffer: {e:?}")))?;
+        self.src.push_buffer(buffer).map_err(|_| DecodeError::Codec)?;
 
         let sample = self.sink.try_pull_sample(gst::ClockTime::from_mseconds(40));
         let Some(sample) = sample else {
             return Ok(None);
         };
-        let caps = sample.caps().ok_or_else(|| DecodeError::Decoder("missing caps".into()))?;
-        let info = VideoInfo::from_caps(caps)
-            .map_err(|e| DecodeError::Decoder(format!("VideoInfo::from_caps: {e}")))?;
+        let caps = sample.caps().ok_or(DecodeError::Codec)?;
+        let info = VideoInfo::from_caps(caps).map_err(|_| DecodeError::Codec)?;
         let width = info.width() as usize;
         let height = info.height() as usize;
         if width < 2
@@ -115,13 +112,11 @@ impl GstH264Decoder {
         {
             return Err(DecodeError::Dimensions);
         }
-        let buf = sample.buffer().ok_or_else(|| DecodeError::Decoder("missing buffer".into()))?;
-        let frame = VideoFrameRef::from_buffer_readable(buf, &info)
-            .map_err(|_| DecodeError::Decoder("cannot map GStreamer video frame".into()))?;
+        let buf = sample.buffer().ok_or(DecodeError::Codec)?;
+        let frame = VideoFrameRef::from_buffer_ref_readable(buf, &info)
+            .map_err(|_| DecodeError::Codec)?;
         let src_stride = frame.plane_stride()[0] as usize;
-        let data = frame
-            .plane_data(0)
-            .map_err(|_| DecodeError::Decoder("missing BGRA plane".into()))?;
+        let data = frame.plane_data(0).map_err(|_| DecodeError::Codec)?;
         let out_stride = width.checked_mul(4).ok_or(DecodeError::Dimensions)?;
         let mut pixels = vec![0u8; out_stride.checked_mul(height).ok_or(DecodeError::Dimensions)?];
         for y in 0..height {
