@@ -43,7 +43,11 @@ pub fn decode(mut data: Vec<u8>, after: u64) -> Result<Frame, Problem> {
     };
     let (width, height, stride) = (u32_at(&data, 4), u32_at(&data, 8), u32_at(&data, 12));
     let sequence = u64::from_le_bytes(data[16..24].try_into().map_err(|_| Problem::Invalid)?);
-    let fits = width >= 2 && height >= 2 && width.max(height) <= 1920 && width.min(height) <= 1088;
+    let fits = width >= 2
+        && height >= 2
+        && width.max(height) <= 8192
+        && width.min(height) <= 4320
+        && width.saturating_mul(height) <= 33_177_600;
     if !fits || stride < width * 4 || data.len() != 32 + stride * height || sequence <= after {
         return Err(Problem::Invalid);
     }
