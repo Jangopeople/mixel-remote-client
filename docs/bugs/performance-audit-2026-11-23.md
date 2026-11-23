@@ -104,3 +104,36 @@ No customer download alias, marketplace listing or public release was changed.
   temporarily, compilation used one job and no debug symbols, and tests/build/
   Clippy passed. The original balloon setting and stopped power state are restored
   after QA. No production VM was changed.
+
+## Follow-up: installed public-service connections, 23 November 2026
+
+The original audit did **not** include a connection from the installed controller
+to the user's two real online computers. Its earlier completion statement was too
+broad. This follow-up closes that specific verification gap without presenting it
+as an exhaustive audit of every deployment or an explanation of every earlier
+failure.
+
+- Installed build 227 connected to the Windows laptop through its normal Connect
+  action. The live remote desktop appeared; a remote application window was
+  dragged and restored, proving actual input delivery. Normal End session passed.
+- A second Windows Connect also reached ready, with 4.268 s between the CUA click
+  and its ready accessibility observation (includes observation overhead).
+  That repeat session also ended normally.
+- While the first Windows session was active, normal Connect to the MacBook also
+  reached ready. Its desktop opened and the displayed live decoder rate changed
+  between 17, 35 and 19 FPS; local telemetry confirms hardware decoding and new
+  received frame samples. The two actual sessions coexisted and Mac End passed.
+- The installed app remains open and registered, with zero test session tabs left.
+  No additional app was built or installed during these checks.
+- Broker health returned HTTP 200; public TURN UDP binding and certificate-verified
+  TURN TLS both succeeded. These probes alone are not session acceptance; the
+  live desktop observations above are the session evidence.
+
+The current default `WhenReady.stay` leaves the technician in Devices/Sessions and
+adds an Open notice and a session tab. Both observed connections needed Open/Show
+before the remote desktop was displayed. This is an existing explicit navigation
+choice, not a reproduced transport refusal. The user was asked whether their
+failure means staying in Devices, remaining on Connecting/Starting video, or an
+error/black picture. Do not claim the reported failure's cause is established
+until that distinction is known. No navigation preference was silently changed.
+Remote desktop images were not saved into repository evidence or PR attachments.
