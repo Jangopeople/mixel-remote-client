@@ -92,10 +92,13 @@ impl QaGaps {
 const MAX_QUEUE: usize = 90;
 const MAX_QUEUE_BYTES: usize = 12 * 1024 * 1024;
 #[derive(Default)]
-pub struct VideoMailbox(Mutex<Slot>);
+pub struct VideoMailbox {
+    slot: Mutex<Slot>,
+    notify: tokio::sync::Notify,
+}
 impl VideoMailbox {
     pub fn activate(&self, session: Uuid) -> Result<(), String> {
-        let mut slot = self.0.lock().map_err(|_| "Video state failed")?;
+        let mut slot = self.slot.lock().map_err(|_| "Video state failed")?;
         if slot.closed {
             return Err("Video delivery is closed".into());
         }
@@ -110,7 +113,7 @@ impl VideoMailbox {
         Ok(())
     }
     pub fn clear(&self) {
-        if let Ok(mut slot) = self.0.lock() {
+        if let Ok(mut slot) = self.slot.lock() {
             slot.latest = None;
             slot.queue.clear();
             slot.queued_bytes = 0;
@@ -118,9 +121,10 @@ impl VideoMailbox {
             slot.session = None;
             (slot.publisher, slot.successor) = (None, None);
         }
+        self.notify.notify_waiters();
     }
     pub fn close(&self) {
-        if let Ok(mut slot) = self.0.lock() {
+        if let Ok(mut slot) = self.slot.lock() {
             slot.latest = None;
             slot.queue.clear();
             slot.queued_bytes = 0;
@@ -128,11 +132,12 @@ impl VideoMailbox {
             (slot.publisher, slot.successor) = (None, None);
             slot.closed = true;
         }
+        self.notify.notify_waiters();
     }
     /// The session's transport is being renewed: the running transport keeps delivering until the
     /// renewed one delivers its first picture; from then on only the renewed one is shown.
     pub fn expect_successor(&self, session: Uuid, transport: Uuid) -> Result<(), String> {
-        let mut slot = self.0.lock().map_err(|_| "Video state failed")?;
+        let mut slot = self.slot.lock().map_err(|_| "Video state failed")?;
         if slot.closed || slot.session != Some(session) {
             return Err("This video session has stopped".into());
         }
@@ -172,7 +177,7 @@ impl VideoMailbox {
     }
     /// The window says, with every fetch, whether it decodes compressed pictures itself.
     pub fn window_decodes(&self, session: Uuid, compressed: bool) {
-        if let Ok(mut slot) = self.0.lock()
+        if let Ok(mut slot) = self.slot.lock()
             && slot.session == Some(session)
             && slot.compressed != compressed
         {
@@ -185,40 +190,46 @@ impl VideoMailbox {
         }
     }
     pub fn wants_compressed(&self) -> bool {
-        self.0.lock().is_ok_and(|slot| slot.compressed)
+        self.slot.lock().is_ok_and(|slot| slot.compressed)
     }
     /// Queues a compressed picture. `false`: the window fell behind, the queue was
     /// emptied and the stream has to restart with a complete picture.
     pub fn publish_compressed(&self, mut packet: VideoPacket) -> Result<bool, String> {
-        let mut slot = self.0.lock().map_err(|_| "Video state failed")?;
-        Self::admit(&mut slot, &mut packet)?;
-        if !slot.compressed {
-            return Ok(true);
+        {
+            let mut slot = self.slot.lock().map_err(|_| "Video state failed")?;
+            Self::admit(&mut slot, &mut packet)?;
+            if !slot.compressed {
+                return Ok(true);
+            }
+            if slot.queue.len() >= MAX_QUEUE || slot.queued_bytes + packet.bytes.len() > MAX_QUEUE_BYTES {
+                slot.queue.clear();
+                slot.queued_bytes = 0;
+                return Ok(false);
+            }
+            // The first compressed picture supersedes the early/raw fallback. Otherwise
+            // draining the compressed queue repaints an older screen (and possibly its old size).
+            slot.latest = None;
+            slot.queued_bytes += packet.bytes.len();
+            slot.queue.push_back(packet);
+            #[cfg(feature = "qa-session")]
+            slot.qa.shown();
         }
-        if slot.queue.len() >= MAX_QUEUE || slot.queued_bytes + packet.bytes.len() > MAX_QUEUE_BYTES {
-            slot.queue.clear();
-            slot.queued_bytes = 0;
-            return Ok(false);
-        }
-        // The first compressed picture supersedes the early/raw fallback. Otherwise
-        // draining the compressed queue repaints an older screen (and possibly its old size).
-        slot.latest = None;
-        slot.queued_bytes += packet.bytes.len();
-        slot.queue.push_back(packet);
-        #[cfg(feature = "qa-session")]
-        slot.qa.shown();
+        self.notify.notify_one();
         Ok(true)
     }
     pub fn publish(&self, mut packet: VideoPacket) -> Result<(), String> {
-        let mut slot = self.0.lock().map_err(|_| "Video state failed")?;
-        Self::admit(&mut slot, &mut packet)?;
-        slot.latest = Some(packet);
-        #[cfg(feature = "qa-session")]
-        slot.qa.shown();
+        {
+            let mut slot = self.slot.lock().map_err(|_| "Video state failed")?;
+            Self::admit(&mut slot, &mut packet)?;
+            slot.latest = Some(packet);
+            #[cfg(feature = "qa-session")]
+            slot.qa.shown();
+        }
+        self.notify.notify_one();
         Ok(())
     }
     pub fn take(&self, session: Uuid) -> Result<Vec<u8>, String> {
-        let mut slot = self.0.lock().map_err(|_| "Video state failed")?;
+        let mut slot = self.slot.lock().map_err(|_| "Video state failed")?;
         if slot.closed || slot.session != Some(session) {
             return Ok(Vec::new());
         }
@@ -231,6 +242,30 @@ impl VideoMailbox {
             .take()
             .map(|mut packet| std::mem::take(&mut *packet.bytes))
             .unwrap_or_default())
+    }
+    /// Returns the next picture immediately if one is queued, or waits up to `timeout`
+    /// for a new picture (or session close) to arrive. Wakes immediately on publish
+    /// instead of relying on client-side polling sleeps.
+    pub async fn take_wait(
+        &self,
+        session: Uuid,
+        timeout: std::time::Duration,
+    ) -> Result<Vec<u8>, String> {
+        let notified = self.notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        let first = self.take(session)?;
+        if !first.is_empty() {
+            return Ok(first);
+        }
+        {
+            let slot = self.slot.lock().map_err(|_| "Video state failed")?;
+            if slot.closed || slot.session != Some(session) {
+                return Ok(Vec::new());
+            }
+        }
+        let _ = tokio::time::timeout(timeout, notified).await;
+        self.take(session)
     }
 }
 /// A compressed picture for the window's own decoder: "MRH1", flags (1 = complete
@@ -362,7 +397,7 @@ mod handover_tests {
         mailbox.publish(picture(session, session, 1)).unwrap();
         mailbox.window_decodes(session, true);
         // Keep the early picture available until compressed video actually arrives.
-        assert!(mailbox.0.lock().unwrap().latest.is_some());
+        assert!(mailbox.slot.lock().unwrap().latest.is_some());
         assert!(mailbox.publish_compressed(picture(session, session, 2)).unwrap());
         assert_eq!(sequence(&mailbox.take(session).unwrap()), 2);
         assert!(mailbox.take(session).unwrap().is_empty(), "never paint the stale raw picture after the new compressed one");
@@ -400,5 +435,27 @@ mod handover_tests {
         assert_eq!(sequence(&mailbox.take(session).unwrap()), 4);
         mailbox.publish(picture(session, session, 3)).unwrap();
         assert_eq!(sequence(&mailbox.take(session).unwrap()), 5);
+    }
+
+    #[tokio::test]
+    async fn take_wait_wakes_immediately_on_publish() {
+        let mailbox = std::sync::Arc::new(VideoMailbox::default());
+        let session = Uuid::from_u128(99);
+        mailbox.activate(session).unwrap();
+        let publisher = mailbox.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            publisher.publish(picture(session, session, 7)).unwrap();
+        });
+        let started = std::time::Instant::now();
+        let data = mailbox
+            .take_wait(session, std::time::Duration::from_millis(250))
+            .await
+            .unwrap();
+        assert_eq!(sequence(&data), 7);
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(80),
+            "take_wait must wake immediately on publish instead of sleeping out the timeout"
+        );
     }
 }

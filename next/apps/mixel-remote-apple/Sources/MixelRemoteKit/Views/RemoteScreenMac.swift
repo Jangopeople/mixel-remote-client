@@ -37,15 +37,26 @@ public struct RemoteScreen: NSViewRepresentable {
 
 public final class RemoteScreenView: NSView {
     weak var session: SessionModel?
-    var image: CGImage? {
+    private var fallbackSize = CGSize.zero
+    var layerContents: AnyObject? {
         didSet {
-            guard image !== oldValue else { return }
-            // Paint directly onto the CALayer without triggering AppKit layout (needsLayout = true
-            // at 60 Hz caused display-move stalls and SwiftUI layout storms).
+            guard layerContents !== oldValue else { return }
+            // Paint GPU IOSurface (or CGImage fallback) directly onto CALayer without triggering AppKit layout.
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            layer?.contents = image
+            layer?.contents = layerContents
             CATransaction.commit()
+        }
+    }
+    /// Compatibility helper for tests that assign a standalone CGImage without attaching a SessionModel.
+    var image: CGImage? {
+        get {
+            guard let obj = layerContents, CFGetTypeID(obj) == CGImage.typeID else { return nil }
+            return (obj as! CGImage)
+        }
+        set {
+            fallbackSize = newValue.map { CGSize(width: $0.width, height: $0.height) } ?? .zero
+            layerContents = newValue
         }
     }
     var controllable = false {
@@ -126,9 +137,9 @@ public final class RemoteScreenView: NSView {
             previous.onFrame = nil
         }
         session = next
-        image = next.frame
-        next.onFrame = { [weak self] frame in
-            self?.image = frame
+        layerContents = next.currentFrame?.layerContents
+        next.onFrame = { [weak self] contents in
+            self?.layerContents = contents
         }
     }
 
@@ -198,19 +209,21 @@ public final class RemoteScreenView: NSView {
 
     /// The point in the picture (0…1, top left origin), or nil outside it.
     func picturePoint(_ event: NSEvent, clamp: Bool = false) -> CGPoint? {
-        guard let image else { return nil }
+        let sessionSize = session?.size ?? .zero
+        let pictureSize = (sessionSize.width > 0 && sessionSize.height > 0) ? sessionSize : fallbackSize
+        guard layerContents != nil, pictureSize.width > 0, pictureSize.height > 0 else { return nil }
         let location = convert(event.locationInWindow, from: nil)
         let width: CGFloat
         let height: CGFloat
         if actualSize {
             let backingScale = max(1, window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1)
-            width = CGFloat(image.width) / backingScale
-            height = CGFloat(image.height) / backingScale
+            width = pictureSize.width / backingScale
+            height = pictureSize.height / backingScale
         } else {
-            let scale = min(bounds.width / CGFloat(image.width), bounds.height / CGFloat(image.height))
+            let scale = min(bounds.width / pictureSize.width, bounds.height / pictureSize.height)
             guard scale > 0 else { return nil }
-            width = CGFloat(image.width) * scale
-            height = CGFloat(image.height) * scale
+            width = pictureSize.width * scale
+            height = pictureSize.height * scale
         }
         guard width > 0, height > 0 else { return nil }
         let x = (location.x - (bounds.width - width) / 2) / width

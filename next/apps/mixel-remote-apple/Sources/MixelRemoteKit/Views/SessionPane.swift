@@ -647,20 +647,25 @@ public struct SessionWindowView: View {
                     let peerKey = "MixelSessionWindowFrame-\(peer)"
                     let lastKey = "MixelSessionWindowFrame-last"
                     let defaults = UserDefaults.standard
-                    if let saved = defaults.string(forKey: peerKey) ?? defaults.string(forKey: lastKey) {
-                        let rect = NSRectFromString(saved)
-                        if rect.width >= 820, rect.height >= 520 {
-                            found.setFrame(rect, display: true)
-                        }
-                    } else {
-                        var frame = found.frame
-                        if frame.width > 1440 || frame.height > 920 {
-                            frame.size = NSSize(width: 1180, height: 760)
-                            found.setFrame(frame, display: true)
-                            found.center()
+                    let saved = defaults.string(forKey: peerKey) ?? defaults.string(forKey: lastKey)
+                    found.setFrameAutosaveName("MixelSessionWindow-\(peer)")
+                    // Defer frame mutation to next runloop turn so it never re-enters SwiftUI layout.
+                    DispatchQueue.main.async { [weak found] in
+                        guard let found else { return }
+                        if let saved {
+                            let rect = NSRectFromString(saved)
+                            if rect.width >= 820, rect.height >= 520 {
+                                found.setFrame(rect, display: true)
+                            }
+                        } else {
+                            var frame = found.frame
+                            if frame.width > 1440 || frame.height > 920 {
+                                frame.size = NSSize(width: 1180, height: 760)
+                                found.setFrame(frame, display: true)
+                                found.center()
+                            }
                         }
                     }
-                    found.setFrameAutosaveName("MixelSessionWindow-\(peer)")
                 }
                 guard let found, closeGuard == nil else { return }
                 let guardian = WindowCloseGuard(window: found) { [weak found] in
@@ -673,15 +678,20 @@ public struct SessionWindowView: View {
             })
             .navigationTitle(L("%@ — Mixel Remote", workspace.tab(peer)?.name ?? app.devices.name(of: peer)))
             .tint(Theme.brand)
-            .onChange(of: workspace.tab(peer) == nil) { ended in if ended { window?.orderOut(nil); window?.close() } }
-            .onChange(of: workspace.isInWindow(peer)) { inWindow in if !inWindow { window?.orderOut(nil); window?.close() } }
+            .onChange(of: workspace.tab(peer) == nil) { ended in if ended { safeClose(window) } }
+            .onChange(of: workspace.isInWindow(peer)) { inWindow in if !inWindow { safeClose(window) } }
             .onDisappear {
-                if let window { closeGuard?.detach(from: window) }
+                if let window {
+                    let str = NSStringFromRect(window.frame)
+                    UserDefaults.standard.set(str, forKey: "MixelSessionWindowFrame-\(peer)")
+                    UserDefaults.standard.set(str, forKey: "MixelSessionWindowFrame-last")
+                    closeGuard?.detach(from: window)
+                }
                 closeGuard = nil
                 workspace.windowFocusChanged(peer, focused: false)
                 workspace.windowClosed(peer)
             }
-            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResizeNotification)) { note in
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEndLiveResizeNotification)) { note in
                 if let window, (note.object as? NSWindow) === window {
                     let str = NSStringFromRect(window.frame)
                     UserDefaults.standard.set(str, forKey: "MixelSessionWindowFrame-\(peer)")
@@ -705,21 +715,34 @@ public struct SessionWindowView: View {
                 if (note.object as? UInt32) == peer { window?.makeKeyAndOrderFront(nil) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .mixelCloseSessionWindow)) { note in
-                if (note.object as? UInt32) == peer { window?.orderOut(nil); window?.close() }
+                if (note.object as? UInt32) == peer { safeClose(window) }
             }
             .task {
                 // A window restored at launch without its session closes at once.
                 guard workspace.tab(peer) == nil || !workspace.isInWindow(peer) else { return }
-                window?.close()
+                safeClose(window)
                 // The engine lists its sessions a moment after launch and the window is found a moment after it appears:
                 // check again, so an old session's window never stays empty.
                 for _ in 0..<6 {
                     try? await Task.sleep(nanoseconds: 700_000_000)
                     if Task.isCancelled { return }
                     if workspace.tab(peer) != nil, workspace.isInWindow(peer) { return }
-                    if let window { window.close(); return }
+                    if let window { safeClose(window); return }
                 }
             }
+    }
+
+    /// Defer NSWindow teardown to the next runloop turn (outside SwiftUI's DisplayList.ViewUpdater /
+    /// CA::Transaction commit) to prevent macOS 27 SwiftUICore CoreInteractionRepresentableEffect SIGSEGV.
+    private func safeClose(_ win: NSWindow?) {
+        guard let win else { return }
+        DispatchQueue.main.async { [weak win] in
+            guard let win else { return }
+            if win.isVisible || win.isMiniaturized {
+                win.orderOut(nil)
+                win.close()
+            }
+        }
     }
 }
 
@@ -739,7 +762,7 @@ extension SessionWindowView {
         }
         Task { @MainActor in
             defer { workspace.confirmEnd = { _ in false } }
-            if await workspace.windowCloseRequested(peer) { window.close() }
+            if await workspace.windowCloseRequested(peer) { safeClose(window) }
         }
     }
 }

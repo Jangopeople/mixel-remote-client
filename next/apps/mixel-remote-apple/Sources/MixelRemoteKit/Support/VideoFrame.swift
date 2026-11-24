@@ -1,13 +1,62 @@
 import CoreGraphics
+import CoreVideo
 import Foundation
+import VideoToolbox
 
 /// A session picture from the engine. "MRF2": a 32-byte header (magic, width, height, stride,
 /// sequence, timestamp; little endian) followed by RGBA rows. "MRF1": the same with BGRA rows.
 public struct VideoFrame: @unchecked Sendable {
-    public let image: CGImage
+    private let storedImage: CGImage?
+    /// Hardware-decoded pixel buffer backed by an IOSurface for zero-copy CALayer presentation on macOS.
+    public let pixelBuffer: CVPixelBuffer?
     public let width: Int
     public let height: Int
     public let sequence: UInt64
+
+    public init(image: CGImage, width: Int, height: Int, sequence: UInt64) {
+        self.storedImage = image
+        self.pixelBuffer = nil
+        self.width = width
+        self.height = height
+        self.sequence = sequence
+    }
+
+    public init(pixelBuffer: CVPixelBuffer, width: Int, height: Int, sequence: UInt64) {
+        self.storedImage = nil
+        self.pixelBuffer = pixelBuffer
+        self.width = width
+        self.height = height
+        self.sequence = sequence
+    }
+
+    /// Zero-copy CALayer.contents payload: GPU IOSurface on macOS when available, otherwise CGImage.
+    public var layerContents: AnyObject? {
+        #if os(macOS)
+        if let pixelBuffer, let surface = CVPixelBufferGetIOSurface(pixelBuffer)?.takeUnretainedValue() {
+            return surface
+        }
+        #endif
+        return storedImage ?? materializeImage()
+    }
+
+    /// Materializes a CGImage on demand (used by screenshots, thumbnails, iOS UIImage, and tests —
+    /// never called on the 60 fps macOS hardware-decode presentation path).
+    public var image: CGImage {
+        if let storedImage { return storedImage }
+        if let cg = materializeImage() { return cg }
+        // Fallback 1x1 black pixel if a pixel buffer ever fails conversion.
+        let ctx = CGContext(data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        return ctx.makeImage()!
+    }
+
+    private func materializeImage() -> CGImage? {
+        guard let pixelBuffer else { return nil }
+        var image: CGImage?
+        let status = VTCreateCGImageFromCVPixelBuffer(pixelBuffer, options: nil, imageOut: &image)
+        return status == noErr ? image : nil
+    }
 
     public enum Problem: Error, Equatable { case invalid, compressed }
 

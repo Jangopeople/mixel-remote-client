@@ -2142,7 +2142,7 @@ async fn host_media(
                             static_refined = true;
                         } else {
                             control.video_idle(channel).await?;
-                            tokio::time::sleep(Duration::from_millis(40)).await;
+                            tokio::time::sleep(Duration::from_millis(4)).await;
                             continue;
                         }
                     } else {

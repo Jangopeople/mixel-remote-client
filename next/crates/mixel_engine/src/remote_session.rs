@@ -2362,36 +2362,40 @@ impl RemoteSession {
             .map_err(|_| "The clipboard transport closed")?
     }
     pub async fn next_video(&self, session: Uuid, window_decodes: bool) -> Result<Vec<u8>, String> {
-        let inner = self.0.lock().await;
-        if let Some(slot) = inner.slots.find(session) {
-            // This session's own mailbox: a picture of another session never arrives here.
-            if inner.cancel.load(Ordering::Acquire) || slot.cancelled() {
-                slot.video.clear();
-                return Ok(Vec::new());
+        let (video, target) = {
+            let inner = self.0.lock().await;
+            if let Some(slot) = inner.slots.find(session) {
+                // This session's own mailbox: a picture of another session never arrives here.
+                if inner.cancel.load(Ordering::Acquire) || slot.cancelled() {
+                    slot.video.clear();
+                    return Ok(Vec::new());
+                }
+                let Some(current) = slot.view.session.filter(|_| slot.view.phase == "active") else {
+                    return Ok(Vec::new());
+                };
+                slot.video.window_decodes(current, window_decodes);
+                (slot.video.clone(), current)
+            } else {
+                if inner.cancel.load(Ordering::Acquire)
+                    || inner
+                        .session_cancel
+                        .as_ref()
+                        .is_some_and(|flag| flag.load(Ordering::Acquire))
+                {
+                    if let Some(video) = &inner.video {
+                        video.clear();
+                    }
+                    return Ok(Vec::new());
+                }
+                if inner.status.session != Some(session) || inner.status.phase != "active" {
+                    return Ok(Vec::new());
+                }
+                let video = inner.video.as_ref().ok_or("Video is closed")?.clone();
+                video.window_decodes(session, window_decodes);
+                (video, session)
             }
-            let Some(current) = slot.view.session.filter(|_| slot.view.phase == "active") else {
-                return Ok(Vec::new());
-            };
-            slot.video.window_decodes(current, window_decodes);
-            return slot.video.take(current);
-        }
-        if inner.cancel.load(Ordering::Acquire)
-            || inner
-                .session_cancel
-                .as_ref()
-                .is_some_and(|flag| flag.load(Ordering::Acquire))
-        {
-            if let Some(video) = &inner.video {
-                video.clear();
-            }
-            return Ok(Vec::new());
-        }
-        if inner.status.session != Some(session) || inner.status.phase != "active" {
-            return Ok(Vec::new());
-        }
-        let video = inner.video.as_ref().ok_or("Video is closed")?;
-        video.window_decodes(session, window_decodes);
-        video.take(session)
+        };
+        video.take_wait(target, Duration::from_millis(50)).await
     }
 
     pub(crate) async fn change(&self, generation: u64, update: impl FnOnce(&mut Status)) {

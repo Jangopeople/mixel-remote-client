@@ -151,7 +151,7 @@ public final class WorkspaceModel: ObservableObject {
     func sessionTabs(_ status: RemoteStatus) -> [SessionTab] {
         status.viewerSessions.compactMap { item in
             guard let peer = item.peer else { return nil }
-            let shown = app.sessionModels[peer]?.frame != nil
+            let shown = app.sessionModels[peer]?.hasFrame == true
             let state: String
             if item.reconnectFailed {
                 state = "reconnect_failed"
@@ -246,7 +246,7 @@ public final class WorkspaceModel: ObservableObject {
             switch item.phase {
             case "outgoing": step = max(step, 1)
             case "negotiating": step = max(step, 2)
-            case "active": step = max(step, app.sessionModels[current.peer]?.frame == nil ? 3 : 4)
+            case "active": step = max(step, app.sessionModels[current.peer]?.hasFrame == true ? 4 : 3)
             default: break
             }
         }

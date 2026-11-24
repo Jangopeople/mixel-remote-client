@@ -34,4 +34,15 @@ if [ -d "$NEXT/apps/mixel-remote-apple/Core/MixelCoreFFI.xcframework" ]; then
   rm -rf /tmp/mixel-gate-dd
 fi
 
+echo "=== Gate 7: macOS 27 safe deferred NSWindow close (no sync window.close in SessionWindowView) ==="
+grep -q 'private func safeClose(' "$NEXT/apps/mixel-remote-apple/Sources/MixelRemoteKit/Views/SessionPane.swift"
+! grep -q 'window?\.orderOut(nil); window?\.close()' "$NEXT/apps/mixel-remote-apple/Sources/MixelRemoteKit/Views/SessionPane.swift"
+
+echo "=== Gate 8: Low-latency video pipeline (Notify take_wait, 4 ms host idle poll, VT RealTime + IOSurface) ==="
+grep -q 'pub async fn take_wait(' "$NEXT/crates/mixel_engine/src/remote_video.rs"
+grep -q 'video.take_wait(' "$NEXT/crates/mixel_engine/src/remote_session.rs"
+grep -q 'kVTDecompressionPropertyKey_RealTime' "$NEXT/apps/mixel-remote-apple/Sources/MixelRemoteKit/Support/VideoDecoder.swift"
+grep -q 'CVPixelBufferGetIOSurface' "$NEXT/apps/mixel-remote-apple/Sources/MixelRemoteKit/Support/VideoFrame.swift"
+! grep -q 'Duration::from_millis(40)' "$NEXT/crates/mixel_engine/src/remote_peer.rs"
+
 echo "=== ALL REGRESSION GATE CHECKS PASSED ==="

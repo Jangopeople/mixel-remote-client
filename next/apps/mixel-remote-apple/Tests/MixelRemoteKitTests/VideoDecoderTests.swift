@@ -155,7 +155,7 @@ final class VideoDecoderTests: XCTestCase {
         view.layoutSubtreeIfNeeded()
         XCTAssertFalse(view.needsLayout)
         let sample = try! VideoFrame.decode(VideoFrame.sample(width: 320, height: 200, sequence: 1))
-        view.image = sample.image
+        view.layerContents = sample.layerContents
         XCTAssertFalse(view.needsLayout, "Updating video frame must not trigger AppKit layout")
         XCTAssertNotNil(view.layer?.contents)
     }

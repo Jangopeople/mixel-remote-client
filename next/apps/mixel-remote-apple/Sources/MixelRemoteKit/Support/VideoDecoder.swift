@@ -149,13 +149,19 @@ public final class H264Decoder: @unchecked Sendable {
             reset()
             throw Problem.decoder(status)
         }
+        let width = CVPixelBufferGetWidth(pixels), height = CVPixelBufferGetHeight(pixels)
+        // Allow up to 8K / wide multi-monitor ("All screens") frames while blocking absurd allocations.
+        guard width >= 2, height >= 2, max(width, height) <= 8192, min(width, height) <= 4320, width * height <= 33_177_600 else { throw Problem.invalid }
+        #if os(macOS)
+        // Zero-copy GPU path: keep the IOSurface-backed CVPixelBuffer directly for CALayer.contents,
+        // skipping per-frame VTCreateCGImageFromCVPixelBuffer CPU/CoreGraphics conversion.
+        return VideoFrame(pixelBuffer: pixels, width: width, height: height, sequence: packet.sequence)
+        #else
         var image: CGImage?
         status = VTCreateCGImageFromCVPixelBuffer(pixels, options: nil, imageOut: &image)
         guard status == noErr, let image else { throw Problem.decoder(status) }
-        let width = image.width, height = image.height
-        // Allow up to 8K / wide multi-monitor ("All screens") frames while blocking absurd allocations.
-        guard width >= 2, height >= 2, max(width, height) <= 8192, min(width, height) <= 4320, width * height <= 33_177_600 else { throw Problem.invalid }
         return VideoFrame(image: image, width: width, height: height, sequence: packet.sequence)
+        #endif
     }
 
     private func nalType(_ unit: Data) -> UInt8 { unit.first.map { $0 & 0x1F } ?? 0 }
@@ -186,6 +192,8 @@ public final class H264Decoder: @unchecked Sendable {
                                                 imageBufferAttributes: attributes as CFDictionary, outputCallback: nil,
                                                 decompressionSessionOut: &created)
         guard made == noErr, let created else { throw Problem.decoder(made) }
+        // Request Apple Silicon real-time low-latency decode scheduling.
+        VTSessionSetProperty(created, key: kVTDecompressionPropertyKey_RealTime, value: kCFBooleanTrue)
         session = created
         format = description
         parameterSets = sets

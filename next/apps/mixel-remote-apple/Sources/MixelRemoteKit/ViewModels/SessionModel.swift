@@ -18,17 +18,18 @@ public final class SessionModel: ObservableObject {
     // The app model lives as long as the app; its parts keep it (no reference cycle matters there).
     let app: AppModel
     #if os(macOS)
-    /// Latest decoded picture. Intentionally NOT `@Published` on macOS so 30–60 fps video updates never force
-    /// `SessionStage`, `SessionBar`, `ViewThatFits`, or tool panels to re-evaluate on every frame.
-    /// `RemoteScreenView` subscribes directly via `onFrame` and paints `CALayer.contents` on the GPU.
-    public private(set) var frame: CGImage?
+    /// Latest decoded video frame (retains the IOSurface-backed CVPixelBuffer while displayed).
+    /// Intentionally NOT `@Published` on macOS so 60 fps updates never trigger SwiftUI diffing.
+    public private(set) var currentFrame: VideoFrame?
+    /// Lazy CGImage for screenshots/thumbnails; never called on the 60 fps presentation path.
+    public var frame: CGImage? { currentFrame?.image }
     #else
     @Published public private(set) var frame: CGImage?
     #endif
     /// Flips once when the first video frame arrives (`false -> true`) and on `clear()` (`true -> false`).
     @Published public private(set) var hasFrame = false
-    /// Direct frame sink for the native `RemoteScreenView` (Mac) or canvas — avoids SwiftUI diffing per frame.
-    public var onFrame: ((CGImage?) -> Void)?
+    /// Direct GPU frame sink (`IOSurface` or `CGImage`) for `RemoteScreenView` — zero SwiftUI diffing per frame.
+    public var onFrame: ((AnyObject?) -> Void)?
     @Published public private(set) var size = CGSize.zero
     @Published public private(set) var fps = 0
     /// W-1: True only when the engine reports neither video frames nor idle-liveness notifications for >3 s.
@@ -234,8 +235,13 @@ public final class SessionModel: ObservableObject {
         video?.cancel()
         video = nil
         viewingSession = nil
+        #if os(macOS)
+        let had = currentFrame != nil
+        currentFrame = nil
+        #else
         let had = frame != nil
         frame = nil
+        #endif
         if hasFrame { hasFrame = false }
         onFrame?(nil)
         size = .zero
@@ -263,13 +269,16 @@ public final class SessionModel: ObservableObject {
             while !Task.isCancelled {
                 guard let self else { return }
                 do {
+                    let startedAt = DispatchTime.now().uptimeNanoseconds
                     let data = try await engine.nextVideo(session: session, compressed: decoder != nil)
                     if Task.isCancelled { return }
                     if data.isEmpty {
-                        // R-5 / Q-4: Adaptive idle backoff avoids 500 Hz FFI spinning on still screens
-                        // while snapping back to 4 ms latency on the first motion frame.
+                        // Engine `next_video` blocks on tokio::sync::Notify for up to 50 ms and wakes
+                        // in <0.05 ms on frame arrival — zero client polling sleep needed on live sessions.
+                        // Only sleep briefly if the call returned immediately (e.g. MockEngine in tests).
+                        let elapsedNs = DispatchTime.now().uptimeNanoseconds - startedAt
                         emptyPolls = min(emptyPolls + 1, 100)
-                        if emptyPolls == 35 {
+                        if emptyPolls == 30 {
                             await MainActor.run {
                                 guard self.viewingSession == session, let last = self.lastFrameAt else { return }
                                 if Date().timeIntervalSince(last) >= 1.5, self.fps != 0 {
@@ -277,55 +286,22 @@ public final class SessionModel: ObservableObject {
                                 }
                             }
                         }
-                        let delayNs: UInt64 = emptyPolls <= 5 ? 4_000_000 : emptyPolls <= 20 ? 12_000_000 : 33_000_000
-                        try? await Task.sleep(nanoseconds: delayNs)
+                        if elapsedNs < 5_000_000 {
+                            try? await Task.sleep(nanoseconds: 16_000_000)
+                        }
                         continue
                     }
                     emptyPolls = 0
                     if VideoFrame.isCompressed(data) {
                         guard let active = decoder else { continue }
                         do {
-                            var latest = try active.decode(data)
-                            var decodedCount = 1
-                            var fallbackRaw: Data?
-                            // Drain up to 3 already-queued compressed frames if the queue had a burst.
-                            for _ in 0..<3 {
-                                let nextData = (try? await engine.nextVideo(session: session, compressed: true)) ?? Data()
-                                if nextData.isEmpty || Task.isCancelled { break }
-                                if VideoFrame.isCompressed(nextData) {
-                                    do {
-                                        latest = try active.decode(nextData)
-                                        decodedCount += 1
-                                    } catch H264Decoder.Problem.waitingForKeyframe {
-                                        continue
-                                    } catch {
-                                        // Surface decoder failure after showing the last good frame so we fall back cleanly.
-                                        decoder = nil
-                                        await MainActor.run {
-                                            if self.viewingSession == session { self.decoding = .engine }
-                                        }
-                                        break
-                                    }
-                                } else {
-                                    fallbackRaw = nextData
-                                    break
-                                }
-                            }
+                            let latest = try active.decode(data)
                             sequence = 0
-                            let frameToShow = latest
-                            let frameCount = decodedCount
                             let deviceDecoding = decoder != nil
                             await MainActor.run {
                                 guard self.viewingSession == session else { return }
                                 if deviceDecoding, self.decoding != .device { self.decoding = .device }
-                                self.show(frameToShow, count: frameCount)
-                            }
-                            if let raw = fallbackRaw, let decodedRaw = try? VideoFrame.decode(raw, after: sequence) {
-                                sequence = decodedRaw.sequence
-                                await MainActor.run {
-                                    guard self.viewingSession == session else { return }
-                                    self.show(decodedRaw, count: 1)
-                                }
+                                self.show(latest, count: 1)
                             }
                         } catch H264Decoder.Problem.waitingForKeyframe {
                             continue
@@ -364,9 +340,15 @@ public final class SessionModel: ObservableObject {
     }
 
     private func show(_ decoded: VideoFrame, count: Int = 1) {
+        #if os(macOS)
+        let first = currentFrame == nil
+        currentFrame = decoded
+        onFrame?(decoded.layerContents)
+        #else
         let first = frame == nil
         frame = decoded.image
         onFrame?(decoded.image)
+        #endif
         if first {
             hasFrame = true
             app.workspace.refresh()
