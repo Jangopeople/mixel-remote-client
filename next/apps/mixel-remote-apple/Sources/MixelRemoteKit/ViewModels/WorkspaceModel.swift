@@ -88,15 +88,35 @@ public final class WorkspaceModel: ObservableObject {
     @Published public private(set) var readyNotices: [UInt32] = []
     @Published public private(set) var endedNotices: [EndedNotice] = []
     private var lastMessages: [UInt32: String] = [:]
+    private var lastEndedReasons: [UInt32: String] = [:]
+    private var endedDismissTasks: [UInt32: Task<Void, Never>] = [:]
     private var locallyEnded: Set<UInt32> = []
 
-    public func dismissEndedNotice(_ peer: UInt32) { endedNotices.removeAll { $0.peer == peer } }
+    public func lastEndedReason(for peer: UInt32) -> String { lastEndedReasons[peer] ?? "" }
+
+    public func dismissEndedNotice(_ peer: UInt32) {
+        endedDismissTasks.removeValue(forKey: peer)?.cancel()
+        endedNotices.removeAll { $0.peer == peer }
+    }
+
+    private func scheduleEndedDismiss(for peer: UInt32) {
+        endedDismissTasks.removeValue(forKey: peer)?.cancel()
+        endedDismissTasks[peer] = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.endedNotices.removeAll { $0.peer == peer }
+            self?.endedDismissTasks.removeValue(forKey: peer)
+        }
+    }
 
     func reset() {
         attempt = nil
         readyNotices.removeAll()
         endedNotices.removeAll()
+        endedDismissTasks.values.forEach { $0.cancel() }
+        endedDismissTasks.removeAll()
         lastMessages.removeAll()
+        lastEndedReasons.removeAll()
         locallyEnded.removeAll()
         selected = .console
         windows.removeAll()
@@ -182,7 +202,10 @@ public final class WorkspaceModel: ObservableObject {
         if next != tabs { tabs = next }
         let open = Set(next.map(\.peer))
         for item in status.viewerSessions {
-            if let p = item.peer, !item.message.isEmpty { lastMessages[p] = item.message }
+            if let p = item.peer {
+                if !item.message.isEmpty { lastMessages[p] = item.message }
+                dismissEndedNotice(p)
+            }
         }
         // Ended sessions: their tab, window and notice go away; the Devices list comes back.
         for (peer, prior) in before where !open.contains(peer) {
@@ -192,11 +215,18 @@ public final class WorkspaceModel: ObservableObject {
             if selected == .session(peer) { selected = .console }
             let wasLocal = locallyEnded.remove(peer) != nil
             let lastMsg = lastMessages.removeValue(forKey: peer) ?? ""
-            if !wasLocal {
-                let rawReason = !lastMsg.isEmpty ? lastMsg : (!status.message.isEmpty ? status.message : "")
+            let rawReason = !lastMsg.isEmpty ? lastMsg : (!status.message.isEmpty ? status.message : "")
+            let cancelledByUser = wasLocal
+                || rawReason.hasPrefix("Stopping the session")
+                || rawReason.hasPrefix("Invitation stopped locally")
+            if !cancelledByUser {
                 let reason = rawReason.isEmpty ? L("The remote session ended.") : Translator.shared.translate(rawReason)
+                lastEndedReasons[peer] = reason
                 endedNotices.removeAll { $0.peer == peer }
                 endedNotices.append(EndedNotice(peer: peer, name: prior.name, os: prior.os, reason: reason))
+                scheduleEndedDismiss(for: peer)
+            } else {
+                lastEndedReasons[peer] = L("You ended this session.")
             }
         }
         updateAttempt(status)
@@ -298,6 +328,7 @@ public final class WorkspaceModel: ObservableObject {
     /// Connect from the Devices list or by ID; the person stays in Devices.
     public func connect(peer: UInt32, name: String? = nil, os: String = "", unattended: Bool, password: String? = nil, checkPhone: Bool) {
         attemptWindow.remove(peer)
+        dismissEndedNotice(peer)
         var next = Attempt(peer: peer, name: name ?? app.devices.name(of: peer), os: os.isEmpty ? app.devices.os(of: peer) : os,
                            started: Date(), step: 0, unattended: unattended, failure: "", inWindow: false)
         if app.busy {
@@ -307,6 +338,18 @@ public final class WorkspaceModel: ObservableObject {
         }
         attempt = next
         app.connect(to: peer, password: password, unattended: unattended, checkPhone: checkPhone)
+    }
+
+    /// Ends an existing session with `peer` and immediately starts a fresh connection (N-5).
+    public func endAndReconnect(_ peer: UInt32, name: String? = nil, os: String = "", unattended: Bool = true) {
+        let resolvedName = name ?? app.devices.name(of: peer)
+        let resolvedOs = os.isEmpty ? app.devices.os(of: peer) : os
+        cancelAttempt()
+        end(peer)
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            self?.connect(peer: peer, name: resolvedName, os: resolvedOs, unattended: unattended, checkPhone: false)
+        }
     }
 
     /// "Open in window instead" while connecting.
@@ -323,6 +366,8 @@ public final class WorkspaceModel: ObservableObject {
         attempt = nil
         attemptWindow.remove(current.peer)
         filesWanted.remove(current.peer)
+        locallyEnded.insert(current.peer)
+        dismissEndedNotice(current.peer)
         if let item = app.remote.viewerSessions.first(where: { $0.peer == current.peer }) { app.closeSession(item.id) }
     }
 
