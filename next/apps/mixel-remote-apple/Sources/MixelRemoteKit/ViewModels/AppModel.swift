@@ -144,7 +144,9 @@ public final class AppModel: ObservableObject {
                 let connecting = ["connecting", "outgoing", "negotiating", "deciding"].contains(self.remote.phase)
                     || self.remote.viewerSessions.contains { ["connecting", "outgoing", "negotiating", "deciding"].contains($0.phase) }
                 let fast = self.remote.inSession || connecting || self.account.signingIn
-                try? await Task.sleep(nanoseconds: connecting ? 25_000_000 : (fast ? 80_000_000 : 1_000_000_000))
+                // Q-4: Poll at 40 ms while connecting for fast handshake, 350 ms during steady active
+                // sessions (down from 80 ms / 12.5 Hz) to eliminate main-thread SwiftUI layout churn.
+                try? await Task.sleep(nanoseconds: connecting ? 40_000_000 : (fast ? 350_000_000 : 1_000_000_000))
             }
         }
     }
@@ -179,7 +181,7 @@ public final class AppModel: ObservableObject {
         guard let next: RemoteStatus = try? await engine.run("remote_status") else { return }
         let previous = remote
         let now = Date()
-        if next.withoutVolatileCounters != previous.withoutVolatileCounters || now.timeIntervalSince(lastRemotePublish) >= 1.0 {
+        if next.withoutVolatileCounters != previous.withoutVolatileCounters || now.timeIntervalSince(lastRemotePublish) >= 2.0 {
             lastRemotePublish = now
             if next != previous { remote = next }
         }

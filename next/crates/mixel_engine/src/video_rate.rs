@@ -49,8 +49,8 @@ const HOLD_FACTOR: f64 = 1.5;
 /// ...and is allowed a quarter more after this long without a queue.
 pub const PROBE_EVERY: Duration = Duration::from_secs(8);
 pub const MIN_LIMIT: f64 = 75_000.0;
-pub const START_LIMIT: f64 = 500_000.0;
-pub const MAX_LIMIT: f64 = 12_000_000.0;
+pub const START_LIMIT: f64 = 800_000.0;
+pub const MAX_LIMIT: f64 = 20_000_000.0;
 const HISTORY: usize = 8192;
 const BASE_WINDOW: Duration = Duration::from_secs(30);
 
@@ -102,6 +102,7 @@ impl Report {
 /// Technician side: what arrived, turned into [`Report`]s.
 pub struct Receiver {
     newest: Option<(u16, Instant)>,
+    last_reported_seq: Option<u16>,
     bytes: u32,
     since: Instant,
     epoch: Instant,
@@ -110,7 +111,7 @@ pub struct Receiver {
 
 impl Receiver {
     pub fn new(now: Instant) -> Self {
-        Self { newest: None, bytes: 0, since: now, epoch: now, clocked: false }
+        Self { newest: None, last_reported_seq: None, bytes: 0, since: now, epoch: now, clocked: false }
     }
     /// Add the own clock to the reports (the host announced [`FEATURE_CLOCK`]).
     pub fn clocked(&mut self, on: bool) {
@@ -124,15 +125,23 @@ impl Receiver {
         }
     }
     /// The next report, when one is due (not before the first packet).
+    /// Q-6: When no video packets arrived since the last report (still screen), throttle
+    /// feedback reports from 10 Hz to 1 Hz so an idle viewer does not send 20-34 kbit/s upstream.
     pub fn due(&mut self, now: Instant) -> Option<Report> {
         let (seq, at) = self.newest?;
         let interval = now.saturating_duration_since(self.since);
-        if interval < REPORT_EVERY {
+        let min_interval = if self.bytes == 0 && self.last_reported_seq == Some(seq) {
+            Duration::from_secs(1)
+        } else {
+            REPORT_EVERY
+        };
+        if interval < min_interval {
             return None;
         }
         let clock = self.clocked.then(|| now.saturating_duration_since(self.epoch).as_millis() as u32);
         let report = Report { seq, age: now.saturating_duration_since(at), interval, bytes: self.bytes, clock };
         self.bytes = 0;
+        self.last_reported_seq = Some(seq);
         self.since = now;
         Some(report)
     }
