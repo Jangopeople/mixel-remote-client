@@ -210,9 +210,12 @@ public final class WorkspaceModel: ObservableObject {
         // Ended sessions: their tab, window and notice go away; the Devices list comes back.
         for (peer, prior) in before where !open.contains(peer) {
             if windows.contains(peer) { windows.remove(peer); closeWindow(peer) }
+            else { closeWindow(peer) }
             if windowFocus == peer { windowFocus = nil }
             readyNotices.removeAll { $0 == peer }
             if selected == .session(peer) { selected = .console }
+            // N-6: Clear stale "already connected" error once a session ends.
+            if !app.error.isEmpty { app.error = "" }
             let wasLocal = locallyEnded.remove(peer) != nil
             let lastMsg = lastMessages.removeValue(forKey: peer) ?? ""
             let rawReason = !lastMsg.isEmpty ? lastMsg : (!status.message.isEmpty ? status.message : "")

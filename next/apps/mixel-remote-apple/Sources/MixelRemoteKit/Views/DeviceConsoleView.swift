@@ -223,7 +223,28 @@ public struct DeviceConsoleView: View {
             }
             if app.signedIn, !app.remote.connected, app.remote.phase != "closing", !app.enrollment.needsSetup { connectionBanner }
             MessageLine(model.error)
-            if workspace.attempt == nil { MessageLine(app.error) }
+            if workspace.attempt == nil, !app.error.isEmpty {
+                HStack(spacing: 8) {
+                    MessageLine(app.error)
+                    if let firstTab = workspace.tabs.first, app.error.localizedCaseInsensitiveContains("already connected") {
+                        Button(L("Show session")) {
+                            app.error = ""
+                            workspace.show(firstTab.peer)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                    Button { app.error = "" } label: { Image(systemName: "xmark").font(.system(size: 10, weight: .bold)) }
+                        .buttonStyle(.plain).foregroundStyle(.secondary)
+                        .help(L("Dismiss"))
+                }
+                .task(id: app.error) {
+                    // N-6: Auto-dismiss error banners within 8 seconds so no notice outlives its event.
+                    try? await Task.sleep(nanoseconds: 8_000_000_000)
+                    guard !Task.isCancelled else { return }
+                    app.error = ""
+                }
+            }
             MessageLine(model.notice, error: false)
         }
         .padding(.bottom, 6)
@@ -823,6 +844,9 @@ struct ConnectNotices: View {
 struct SessionsPage: View {
     @ObservedObject var app: AppModel
     @ObservedObject var workspace: WorkspaceModel
+    @State private var confirmEndTab: WorkspaceModel.SessionTab?
+    @State private var hoveringSessions = false
+    @State private var recentlyEndedIds: [UInt32] = []
     @State private var hoveringRecent = false
     @State private var frozenRecent: [UInt32]?
     @State private var unfreezeRecentTask: Task<Void, Never>?
@@ -836,36 +860,87 @@ struct SessionsPage: View {
         return kept + added
     }
 
+    private func freezeRecentBriefly(seconds: UInt64 = 3) {
+        if frozenRecent == nil { frozenRecent = app.devices.recentConnectionIds }
+        unfreezeRecentTask?.cancel()
+        unfreezeRecentTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+            guard !Task.isCancelled, !hoveringRecent else { return }
+            frozenRecent = nil
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(verbatim: L("Sessions")).font(.system(size: 26, weight: .bold)).accessibilityAddTraits(.isHeader)
                 Text(verbatim: workspace.tabs.isEmpty ? L("No session is running.") : L("%d sessions", workspace.tabs.count)).foregroundStyle(.secondary)
             }
-            if workspace.tabs.isEmpty {
+            if workspace.tabs.isEmpty && recentlyEndedIds.isEmpty {
                 Text(verbatim: L("Connect to a device under Devices; its session appears here and as a tab in the title bar.")).foregroundStyle(.secondary)
                 Button(L("Go to Devices")) { app.section = .devices }
             }
-            ForEach(workspace.tabs) { tab in
-                HStack(spacing: 12) {
-                    OSTile(os: tab.os, dot: tab.state == "ready" ? Theme.success : Theme.warning, size: 34)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(verbatim: tab.name).font(.system(size: 14, weight: .semibold))
-                        Text(verbatim: Format.remoteId(tab.peer) + " · " + (workspace.isInWindow(tab.peer) ? L("In its own window") : L("In a tab")))
-                            .font(.callout).foregroundStyle(.secondary)
+            VStack(spacing: 10) {
+                ForEach(workspace.tabs) { tab in
+                    HStack(spacing: 12) {
+                        OSTile(os: tab.os, dot: tab.state == "ready" ? Theme.success : Theme.warning, size: 34)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(verbatim: tab.name).font(.system(size: 14, weight: .semibold))
+                            Text(verbatim: Format.remoteId(tab.peer) + " · " + (workspace.isInWindow(tab.peer) ? L("In its own window") : L("In a tab")))
+                                .font(.callout).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button(L("Open")) { workspace.show(tab.peer) }.buttonStyle(PrimaryButtonStyle())
+                        if workspace.isInWindow(tab.peer) {
+                            Button(L("Move back into a tab")) { workspace.dock(tab.peer) }
+                        } else {
+                            Button(L("Open in its own window")) { workspace.popOut(tab.peer) }
+                        }
+                        Button(L("End session")) { confirmEndTab = tab }
                     }
-                    Spacer()
-                    Button(L("Open")) { workspace.show(tab.peer) }.buttonStyle(PrimaryButtonStyle())
-                    if workspace.isInWindow(tab.peer) {
-                        Button(L("Move back into a tab")) { workspace.dock(tab.peer) }
-                    } else {
-                        Button(L("Open in its own window")) { workspace.popOut(tab.peer) }
-                    }
-                    Button(L("End session")) { workspace.end(tab.peer) }
+                    .padding(14)
+                    .background(Theme.page, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.hairline))
                 }
-                .padding(14)
-                .background(Theme.page, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.hairline))
+                // N-4 / N-7: Keep a brief dimmed placeholder when ending a session under the pointer
+                // so the next session's End button never slides under the cursor.
+                ForEach(recentlyEndedIds.filter { id in !workspace.tabs.contains { $0.peer == id } }, id: \.self) { peer in
+                    HStack(spacing: 12) {
+                        OSTile(os: app.devices.os(of: peer), dot: Color.secondary, size: 34)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(verbatim: app.devices.name(of: peer)).font(.system(size: 14, weight: .semibold))
+                            Text(verbatim: L("Session ended")).font(.callout).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .padding(14)
+                    .opacity(0.45)
+                    .background(Theme.page, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.hairline))
+                }
+            }
+            .onHover { hoveringSessions = $0 }
+            .alert(
+                confirmEndTab.map { workspace.endQuestion($0.peer) } ?? L("End session?"),
+                isPresented: Binding(get: { confirmEndTab != nil }, set: { if !$0 { confirmEndTab = nil } })
+            ) {
+                Button(L("End session"), role: .destructive) {
+                    if let tab = confirmEndTab {
+                        let peer = tab.peer
+                        if hoveringSessions && !recentlyEndedIds.contains(peer) {
+                            recentlyEndedIds.append(peer)
+                            Task { @MainActor in
+                                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                                recentlyEndedIds.removeAll { $0 == peer }
+                            }
+                        }
+                        workspace.end(peer)
+                    }
+                    confirmEndTab = nil
+                }
+                Button(L("Cancel"), role: .cancel) { confirmEndTab = nil }
+            } message: {
+                Text(verbatim: L("The connection ends for both sides."))
             }
             if !app.devices.recentConnectionIds.isEmpty {
                 Divider().padding(.vertical, 6)
@@ -895,6 +970,7 @@ struct SessionsPage: View {
                                     Button(L("Save device…")) { app.devices.savePromptFor = connId }
                                 }
                                 Button(L("Connect")) {
+                                    freezeRecentBriefly(seconds: 4)
                                     workspace.connect(peer: connId, name: known?.name, os: known?.os ?? "", unattended: known != nil, checkPhone: known == nil)
                                 }
                                 .buttonStyle(PrimaryButtonStyle())
@@ -904,17 +980,14 @@ struct SessionsPage: View {
                             .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Theme.hairline))
                         }
                     }
+                    .onAppear { frozenRecent = app.devices.recentConnectionIds }
                     .onHover { inside in
                         hoveringRecent = inside
                         unfreezeRecentTask?.cancel()
                         if inside {
                             if frozenRecent == nil { frozenRecent = app.devices.recentConnectionIds }
                         } else {
-                            unfreezeRecentTask = Task { @MainActor in
-                                try? await Task.sleep(nanoseconds: 1_200_000_000)
-                                guard !Task.isCancelled, !hoveringRecent else { return }
-                                frozenRecent = nil
-                            }
+                            freezeRecentBriefly(seconds: 2)
                         }
                     }
                 }

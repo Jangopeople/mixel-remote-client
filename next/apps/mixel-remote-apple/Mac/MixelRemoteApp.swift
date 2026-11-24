@@ -79,6 +79,7 @@ struct MainWindow: View {
                 isFullScreen = NSApp?.windows.contains(where: { $0.styleMask.contains(.fullScreen) }) ?? false
                 app.workspace.openWindow = { peer in openWindow(id: "session", value: peer) }
                 app.workspace.focusWindow = { peer in NotificationCenter.default.post(name: .mixelFocusSessionWindow, object: peer) }
+                app.workspace.closeWindow = { peer in NotificationCenter.default.post(name: .mixelCloseSessionWindow, object: peer) }
                 app.start()
             }
     }
@@ -325,6 +326,7 @@ extension AppDelegate: ASWebAuthenticationPresentationContextProviding {
 
 /// The Open and Save panels for files and recordings.
 @MainActor
+@MainActor
 enum Panels {
     static func open() async -> String? {
         let panel = NSOpenPanel()
@@ -337,7 +339,7 @@ enum Panels {
 
     static func save(suggested: String) async -> String? {
         let panel = NSSavePanel()
-        panel.title = L("Choose where to save the received file")
+        panel.title = suggested.hasSuffix(".mp4") ? L("Save session recording") : L("Choose where to save the received file")
         panel.nameFieldStringValue = suggested
         panel.canCreateDirectories = true
         return await panel.begin() == .OK ? panel.url?.path : nil

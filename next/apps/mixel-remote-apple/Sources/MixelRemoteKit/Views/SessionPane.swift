@@ -185,7 +185,18 @@ struct SessionStage: View {
                     VStack(alignment: .leading, spacing: 4) {
                         if !session.notice.isEmpty { Text(verbatim: session.notice) }
                         if !session.meetingNotice.isEmpty { Text(verbatim: session.meetingNotice) }
-                        if !session.recordingText.isEmpty, remote.recording?.running != true { Text(verbatim: session.recordingText) }
+                        if !session.recordingText.isEmpty, remote.recording?.running != true {
+                            HStack(spacing: 10) {
+                                Text(verbatim: session.recordingText)
+                                if !session.lastRecordingPath.isEmpty {
+                                    Button(L("Show in Finder")) {
+                                        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: session.lastRecordingPath)])
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                }
+                            }
+                        }
                         if !session.recordingPartsText.isEmpty { Text(verbatim: session.recordingPartsText) }
                         if !session.error.isEmpty { Text(verbatim: session.error).foregroundStyle(Color(light: 0xFFB4BD, dark: 0xFFB4BD)) }
                     }
@@ -551,9 +562,13 @@ struct SessionBar: View {
     }
 
     private func record() {
+        if inWindow { workspace.windowFocusChanged(tab.peer, focused: true) }
         Task {
             guard await session.mayRecord() else { session.error = L("Start a permitted recording after the remote screen appears"); return }
-            if let path = await app.chooseSaveLocation("Mixel Remote recording.mp4") { session.startRecording(path: path) }
+            if let path = await app.chooseSaveLocation("Mixel Remote recording.mp4") {
+                if inWindow { workspace.windowFocusChanged(tab.peer, focused: true) }
+                session.startRecording(path: path)
+            }
         }
     }
 }
@@ -581,6 +596,19 @@ public struct SessionWindowView: View {
                 window = found
                 // A session window belongs to a running session: macOS does not bring it back after a restart.
                 found?.isRestorable = false
+                // N-10: Remember size and position per computer and avoid opening wider than 1280×820 by default.
+                if let found, found.frameAutosaveName.isEmpty {
+                    let autosaveKey = "MixelSessionWindow-\(peer)"
+                    if !found.setFrameUsingName(autosaveKey) {
+                        var frame = found.frame
+                        if frame.width > 1440 || frame.height > 920 {
+                            frame.size = NSSize(width: 1180, height: 760)
+                            found.setFrame(frame, display: true)
+                            found.center()
+                        }
+                    }
+                    found.setFrameAutosaveName(autosaveKey)
+                }
                 guard let found, closeGuard == nil else { return }
                 let guardian = WindowCloseGuard(window: found) { [weak found] in
                     // Closed by the person: no session left means close; else ask, and close only after "End".
@@ -590,10 +618,10 @@ public struct SessionWindowView: View {
                 }
                 closeGuard = guardian
             })
-            .navigationTitle(L("%@ — Mixel Remote", workspace.tab(peer)?.name ?? Format.remoteId(peer)))
+            .navigationTitle(L("%@ — Mixel Remote", workspace.tab(peer)?.name ?? app.devices.name(of: peer)))
             .tint(Theme.brand)
-            .onChange(of: workspace.tab(peer) == nil) { ended in if ended { window?.close() } }
-            .onChange(of: workspace.isInWindow(peer)) { inWindow in if !inWindow { window?.close() } }
+            .onChange(of: workspace.tab(peer) == nil) { ended in if ended { window?.orderOut(nil); window?.close() } }
+            .onChange(of: workspace.isInWindow(peer)) { inWindow in if !inWindow { window?.orderOut(nil); window?.close() } }
             .onDisappear {
                 if let window { closeGuard?.detach(from: window) }
                 closeGuard = nil
@@ -608,6 +636,9 @@ public struct SessionWindowView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .mixelFocusSessionWindow)) { note in
                 if (note.object as? UInt32) == peer { window?.makeKeyAndOrderFront(nil) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .mixelCloseSessionWindow)) { note in
+                if (note.object as? UInt32) == peer { window?.orderOut(nil); window?.close() }
             }
             .task {
                 // A window restored at launch without its session closes at once.
@@ -673,6 +704,7 @@ final class WindowCloseGuard: NSObject, NSWindowDelegate {
 
 public extension Notification.Name {
     static let mixelFocusSessionWindow = Notification.Name("mixel.remote.focusSessionWindow")
+    static let mixelCloseSessionWindow = Notification.Name("mixel.remote.closeSessionWindow")
 }
 
 /// Hands the hosting NSWindow to SwiftUI.

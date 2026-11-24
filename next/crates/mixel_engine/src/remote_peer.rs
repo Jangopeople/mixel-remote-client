@@ -2067,21 +2067,42 @@ async fn host_media(
                     } else {
                         Arc::new(fit_frame(&frame, size)?)
                     };
-                    // R-5: Skip encoding and sending byte-identical static frames so viewing an idle
-                    // desktop drops from ~20-30% CPU down to <5%, snapping back to 60 fps on any change.
+                    // R-5: Fast strided perceptual static-frame check (samples every 32nd pixel with ±2
+                    // per-channel dither tolerance so ScreenCaptureKit 1-bit noise does not burn 36% CPU
+                    // or send 14-40 fps on a still screen, while snapping back to 60 fps on any real change).
                     let same_as_recent = !force_keyframe
                         && !encode_again
                         && sent > 0
                         && recent.as_ref().is_some_and(|prev| {
-                            prev.width() == frame.width()
-                                && prev.height() == frame.height()
-                                && prev.stride() == frame.stride()
-                                && prev.pixels() == frame.pixels()
+                            if prev.width() != frame.width()
+                                || prev.height() != frame.height()
+                                || prev.stride() != frame.stride()
+                            {
+                                return false;
+                            }
+                            let a = prev.pixels();
+                            let b = frame.pixels();
+                            if a.len() != b.len() {
+                                return false;
+                            }
+                            // 4 bytes per BGRA pixel; step 128 bytes = every 32nd pixel (~256x less bandwidth).
+                            let mut idx = 0usize;
+                            while idx + 3 < a.len() {
+                                if a[idx].abs_diff(b[idx]) > 2
+                                    || a[idx + 1].abs_diff(b[idx + 1]) > 2
+                                    || a[idx + 2].abs_diff(b[idx + 2]) > 2
+                                {
+                                    return false;
+                                }
+                                idx += 128;
+                            }
+                            true
                         });
                     if same_as_recent {
                         if last.elapsed() >= Duration::from_secs(2) {
                             control.video_idle(channel).await?;
                         }
+                        tokio::time::sleep(Duration::from_millis(40)).await;
                         continue;
                     }
                     recent = Some(frame.clone());

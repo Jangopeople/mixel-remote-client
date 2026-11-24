@@ -4749,6 +4749,8 @@ async fn run(
                                 state.slot_end(generation,session,"The relay service is unavailable; screen sharing has not started".into()).await;
                             }else if pending_renewal.take().is_some(){
                                 return Err(Failure::network("Device authorization renewal was refused; reconnecting"));
+                            }else if code==ErrorCode::Busy{
+                                crate::app_log::info("signaling", "ignoring late Busy response from connection service");
                             }else{return Err(format!("Connection service rejected an operation: {code:?}").into());}
                         },
                         ServerMessage::SessionEnding{session,seconds,..}=>{
