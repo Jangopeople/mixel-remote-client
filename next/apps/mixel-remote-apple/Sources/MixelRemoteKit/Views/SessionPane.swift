@@ -355,6 +355,7 @@ struct SessionBar: View {
                 Label(L("End"), systemImage: "xmark").labelStyle(.titleAndIcon).font(.system(size: 13, weight: .semibold))
             }
             .buttonStyle(PrimaryButtonStyle())
+            .fixedSize()
             .keyboardShortcut(".", modifiers: .command)
             .disabled(session.stopping)
             .help(L("End session"))
@@ -486,12 +487,16 @@ struct SessionBar: View {
                     Text(verbatim: L("Optimize speed")).tag("speed")
                     Text(verbatim: L("Optimize quality")).tag("quality")
                 } label: { Text(verbatim: L("Mode")) }
+                    .labelsHidden()
                     .pickerStyle(.segmented)
+                    .frame(maxWidth: .infinity)
                 Toggle(isOn: $session.actualSize) { Text(verbatim: L("Actual size (1:1)")) }
                 Text(verbatim: L("The picture adapts to the line by itself.")).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(16)
-            .frame(width: 280)
+            .frame(minWidth: 350, idealWidth: 370)
+            .fixedSize()
         }
     }
 
