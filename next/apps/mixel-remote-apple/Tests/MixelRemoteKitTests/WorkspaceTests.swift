@@ -151,4 +151,22 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(b.whenReady, .open)
         XCTAssertEqual(b.openIn, .window)
     }
+
+    func testCancelledSessionNeverLeavesReconnectNotice() async throws {
+        let (app, engine) = try await viewingApp(whenReady: .open)
+        let ws = app.workspace
+        ws.end(731_204_118)
+        engine.reply("remote_status", RemoteStatus(phase: "ready", message: "Stopping the session; video delivery revoked", host: 482_913_557))
+        await app.refreshRemote()
+        XCTAssertTrue(ws.endedNotices.isEmpty, "User-ended or cancelled sessions must not show a Reconnect notice (N-6)")
+    }
+
+    func testUnexpectedEndRecordsReasonForWindowAndNotice() async throws {
+        let (app, engine) = try await viewingApp(whenReady: .open)
+        let ws = app.workspace
+        engine.reply("remote_status", RemoteStatus(phase: "ready", message: "The other side disconnected", host: 482_913_557))
+        await app.refreshRemote()
+        XCTAssertEqual(ws.endedNotices.count, 1)
+        XCTAssertFalse(ws.lastEndedReason(for: 731_204_118).isEmpty, "Ended window must have a reason to show (N-3)")
+    }
 }

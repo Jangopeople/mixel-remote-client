@@ -23,9 +23,27 @@ public struct SessionPane: View {
             SessionStage(app: app, session: session, drawing: session.drawing, workspace: workspace, tab: tab, inWindow: inWindow)
                 .id(peer)
         } else {
-            VStack(spacing: 10) {
+            let reason = workspace.lastEndedReason(for: peer)
+            VStack(spacing: 12) {
                 Image(systemName: "macwindow.badge.plus").font(.system(size: 34)).foregroundStyle(.secondary)
                 Text(verbatim: L("This session has ended.")).font(.title3.weight(.semibold))
+                if !reason.isEmpty {
+                    Text(verbatim: reason)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 420)
+                }
+                HStack(spacing: 10) {
+                    Button(L("Reconnect")) {
+                        workspace.connect(peer: peer, name: app.devices.name(of: peer), os: app.devices.os(of: peer), unattended: true, checkPhone: false)
+                    }
+                    .buttonStyle(PrimaryButtonStyle())
+                    if inWindow {
+                        Button(L("Close")) { workspace.closeWindow(peer) }
+                    }
+                }
+                .padding(.top, 4)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Theme.page)
@@ -97,6 +115,10 @@ struct SessionStage: View {
         ZStack {
             Theme.stage
             RemoteScreen(session: session)
+                .opacity(session.link == .live ? 1.0 : 0.32)
+            if session.link != .live {
+                Color.black.opacity(0.45).allowsHitTesting(false)
+            }
             if session.draggingFiles {
                 VStack(spacing: 10) {
                     Image(systemName: "arrow.down.doc.fill").font(.system(size: 38)).foregroundStyle(.white)
@@ -107,27 +129,36 @@ struct SessionStage: View {
                 .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.brand, lineWidth: 2))
                 .allowsHitTesting(false)
             }
-            if session.hasFrame, session.focused { DrawingOverlay(drawing: drawing, pictureSize: session.size) }
+            if session.hasFrame, session.focused, session.link == .live { DrawingOverlay(drawing: drawing, pictureSize: session.size) }
             switch session.link {
             case .reconnecting:
                 VStack(spacing: 12) {
                     ProgressView().controlSize(.large).tint(.white)
-                    Text(verbatim: L("Reconnecting…")).font(.title3.weight(.semibold)).foregroundStyle(.white)
-                    Text(verbatim: L("The session stays open while Mixel Remote asks that computer again.")).font(.callout).foregroundStyle(.white.opacity(0.75))
+                    Text(verbatim: L("Connection lost. Reconnecting…")).font(.title3.weight(.semibold)).foregroundStyle(.white)
+                    Text(verbatim: L("The session stays open while Mixel Remote reconnects to this computer.")).font(.callout).foregroundStyle(.white.opacity(0.80))
                 }
+                .padding(22)
+                .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .accessibilityElement(children: .combine)
             case .failed:
                 VStack(spacing: 12) {
                     Image(systemName: "wifi.exclamationmark").font(.system(size: 34)).foregroundStyle(.white.opacity(0.85))
                     Text(verbatim: L("Could not reconnect")).font(.title3.weight(.semibold)).foregroundStyle(.white)
+                    if !remote.message.isEmpty {
+                        Text(verbatim: Translator.shared.translate(remote.message))
+                            .font(.callout).foregroundStyle(.white.opacity(0.78))
+                            .multilineTextAlignment(.center).frame(maxWidth: 380)
+                    }
                     HStack(spacing: 10) {
-                        Button(L("Retry")) { session.retryReconnect() }
+                        Button(L("Reconnect")) { session.retryReconnect() }
                             .buttonStyle(PrimaryButtonStyle())
-                            .accessibilityLabel(Text(verbatim: L("Retry")))
-                        Button(L("End session")) { session.end() }
+                            .accessibilityLabel(Text(verbatim: L("Reconnect")))
+                        Button(L("End session")) { workspace.end(tab.peer) }
                             .disabled(session.stopping)
                     }
                 }
+                .padding(22)
+                .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             case .live:
                 if !session.hasFrame {
                     VStack(spacing: 12) {
@@ -267,6 +298,7 @@ struct SessionBar: View {
     @Binding var tool: SessionWorkspaceView.Tool?
     @Binding var inviting: Bool
     @State private var quality = false
+    @State private var confirmUnattendedEnd = false
 
     var remote: RemoteStatus { session.remote }
 
@@ -304,9 +336,7 @@ struct SessionBar: View {
             divider.padding(.horizontal, 4)
             Button(role: .destructive) {
                 if remote.unattendedSession {
-                    Task {
-                        if await workspace.confirmEnd(tab) { workspace.end(tab.peer) }
-                    }
+                    confirmUnattendedEnd = true
                 } else {
                     workspace.end(tab.peer)
                 }
@@ -318,6 +348,12 @@ struct SessionBar: View {
             .disabled(session.stopping)
             .help(L("End session"))
             .accessibilityLabel(Text(verbatim: L("End session")))
+            .alert(workspace.endQuestion(tab.peer), isPresented: $confirmUnattendedEnd) {
+                Button(L("End session"), role: .destructive) { workspace.end(tab.peer) }
+                Button(L("Cancel"), role: .cancel) {}
+            } message: {
+                Text(verbatim: L("The connection ends for both sides."))
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -376,23 +412,30 @@ struct SessionBar: View {
     private var qualityIndicator: some View {
         Button { quality.toggle() } label: {
             HStack(spacing: 6) {
-                HStack(alignment: .bottom, spacing: 2) {
-                    ForEach(1...3, id: \.self) { level in
-                        RoundedRectangle(cornerRadius: 1)
-                            .fill(level <= bars ? (bars == 3 ? Theme.success : bars == 2 ? Theme.warning : Theme.brand) : Color.secondary.opacity(0.35))
-                            .frame(width: 3, height: CGFloat(4 + level * 3))
+                if session.link != .live {
+                    Circle().fill(Theme.warning).frame(width: 7, height: 7)
+                    Text(verbatim: session.link == .reconnecting ? L("Reconnecting…") : L("Disconnected"))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.warning)
+                } else {
+                    HStack(alignment: .bottom, spacing: 2) {
+                        ForEach(1...3, id: \.self) { level in
+                            RoundedRectangle(cornerRadius: 1)
+                                .fill(level <= bars ? (bars == 3 ? Theme.success : bars == 2 ? Theme.warning : Theme.brand) : Color.secondary.opacity(0.35))
+                                .frame(width: 3, height: CGFloat(4 + level * 3))
+                        }
                     }
-                }
-                Text(verbatim: L("%d fps", session.fps)).font(.system(size: 12, weight: .semibold)).monospacedDigit()
-                if let path = remote.connectionPath {
-                    let proto = (remote.connectionProtocol ?? "udp").uppercased()
-                    let isTcpRelay = path == "relay" && proto != "UDP"
-                    Text(verbatim: "\(path == "relay" ? L("Relay") : L("Direct")) · \(proto)")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(isTcpRelay ? Theme.warning : .secondary)
-                }
-                if !compact, session.size.width > 0 {
-                    Text(verbatim: "\(Int(session.size.width)) × \(Int(session.size.height))").font(.system(size: 12)).foregroundStyle(.secondary).monospacedDigit()
+                    Text(verbatim: L("%d fps", session.fps)).font(.system(size: 12, weight: .semibold)).monospacedDigit()
+                    if let path = remote.connectionPath {
+                        let proto = (remote.connectionProtocol ?? "udp").uppercased()
+                        let isTcpRelay = path == "relay" && proto != "UDP"
+                        Text(verbatim: "\(path == "relay" ? L("Relay") : L("Direct")) · \(proto)")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(isTcpRelay ? Theme.warning : .secondary)
+                    }
+                    if !compact, session.size.width > 0 {
+                        Text(verbatim: "\(Int(session.size.width)) × \(Int(session.size.height))").font(.system(size: 12)).foregroundStyle(.secondary).monospacedDigit()
+                    }
                 }
                 Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
             }

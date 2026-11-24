@@ -456,21 +456,21 @@ async fn run(config: &mut Config, parts: Option<WarmParts>) -> Result<(), String
         None => {
             let servers = std::mem::take(&mut config.ice_servers);
             let transport = create_transport(servers, config.relay_only).await?;
-            let path_label = if strict_relay { "relay" } else { "direct" };
-            crate::app_log::info(
-                "peer",
-                &format!(
-                    "session={} role={} transport={} protocol={}",
-                    config.session,
-                    if config.host { "host" } else { "viewer" },
-                    path_label,
-                    transport.active_protocol()
-                ),
-            );
             crate::qa_timeline::mark(if strict_relay { "transport created (relay only)" } else { "transport created (direct and relay)" });
             (transport, None)
         }
     };
+    let path_label = if strict_relay { "relay" } else { "direct" };
+    crate::app_log::info(
+        "peer",
+        &format!(
+            "session={} role={} transport={} protocol={}",
+            config.session,
+            if config.host { "host" } else { "viewer" },
+            path_label,
+            transport.active_protocol()
+        ),
+    );
     let result = async {
         let (mut consent, channel, sender, size, limit, mut control, mut early_track, mut early_prep) =
             negotiate(config, &mut transport, warm).await?;
@@ -790,6 +790,7 @@ async fn negotiate(
         config.signal(Signal::Offer(offer)).await?;
         handshake = Some(proof);
     }
+    let mut signals_closed = false;
     loop {
         if config.stopped() {
             return Err("Session stopped during negotiation".into());
@@ -798,11 +799,13 @@ async fn negotiate(
             return Err("The remote transport negotiation expired".into());
         }
         while let Ok(candidate) = transport.ice_candidates.try_recv() {
-            config
-                .signal(Signal::Ice(
-                    serde_json::to_string(&candidate).map_err(|_| "Cannot encode ICE candidate")?,
-                ))
-                .await?;
+            if !signals_closed {
+                let _ = config
+                    .signal(Signal::Ice(
+                        serde_json::to_string(&candidate).map_err(|_| "Cannot encode ICE candidate")?,
+                    ))
+                    .await;
+            }
         }
         if channel.is_none()
             && let Some(value) = take_control_channel(transport).await?
@@ -812,10 +815,26 @@ async fn negotiate(
         if remote_description && hello.is_some() && (channel.is_some() || early) {
             break;
         }
+        if signals_closed {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            continue;
+        }
         let signal =
             match tokio::time::timeout(Duration::from_millis(5), config.signals.recv()).await {
                 Ok(Some(signal)) => signal,
-                Ok(None) => return Err("Peer signaling closed".into()),
+                Ok(None) => {
+                    // Once we already have the peer's SDP and signed identity, let the direct ICE/DTLS
+                    // handshake finish without aborting if the signaling socket briefly closes (N-1).
+                    if remote_description && hello.is_some() {
+                        crate::app_log::info(
+                            "peer",
+                            &format!("session={} signaling closed after SDP/identity exchange — continuing direct handshake", config.session),
+                        );
+                        signals_closed = true;
+                        continue;
+                    }
+                    return Err("Peer signaling closed".into());
+                }
                 Err(_) => continue,
             };
         match signal {

@@ -3695,6 +3695,7 @@ async fn run(
         send(&mut socket,ClientMessage::ProveDevice{signature:identity.prove(challenge)?}).await?;
         let ready=tokio::time::timeout(Duration::from_secs(6),event(&mut socket)).await.map_err(|_|Failure::network("Device registration timed out"))??;
         if !matches!(ready,Some(ServerMessage::Ready{host,protocol:core_protocol::PROTOCOL_VERSION}) if host==enrolled.connection_id) {return Err(Failure::network("The connection service did not verify this device ID"));}
+        crate::app_log::info("signaling", &format!("registered device_id={}", enrolled.connection_id));
         ready_at=Some(std::time::Instant::now());
         crate::qa_timeline::mark("registration: READY (reachable)");
         match &auth {
@@ -4170,7 +4171,8 @@ async fn run(
                     }
                     if let Some(index)=ctrl.iter().position(|active|media_end_ends_session(active.id,session) && !active.close_sent){
                         // This technician session's media ended (the peer left or failed): only this one ends.
-                        let again=result.is_err() && !ctrl[index].joined && ctrl[index].signals.is_some() && !retries.iter().any(|active|active.host==ctrl[index].remote) && last_access.get(&ctrl[index].remote).is_some_and(crate::reconnect::Access::repeatable);
+                        let was_active = state.slot_active(ctrl[index].ui).await;
+                        let again=result.is_err() && !ctrl[index].joined && (ctrl[index].signals.is_some() || was_active) && !retries.iter().any(|active|active.host==ctrl[index].remote) && last_access.get(&ctrl[index].remote).is_some_and(crate::reconnect::Access::repeatable);
                         let mut over=ctrl.remove(index);over.take_close();remember_gone(&mut recent,over.id);remember_gone(&mut recent,session);
                         send(&mut socket,ClientMessage::Close{session:over.id}).await?;
                         let asking_again=again && begin_reconnect(state,generation,&mut retries,&last_access,&mut lost_at,over.ui).await;
@@ -4571,8 +4573,8 @@ async fn run(
                             // A renewal: the session stays active (the transport before still shares), so the
                             // window keeps its picture and tools and input goes on.
                             if !active.renewing(){
-                                if host_role{state.change(generation,|status|{status.phase="negotiating".into();status.message="Accepted; obtaining authenticated short-lived relay configuration".into();}).await;}
-                                else{state.slot_change(generation,active_ui,|view|{view.phase="negotiating".into();view.message="Accepted; obtaining authenticated short-lived relay configuration".into();}).await;}
+                                if host_role{state.change(generation,|status|{status.phase="negotiating".into();status.message="Connection accepted; setting up secure channel…".into();}).await;}
+                                else{state.slot_change(generation,active_ui,|view|{view.phase="negotiating".into();view.message="Connection accepted; setting up secure channel…".into();}).await;}
                             }
                             if let Some(ready)=pending_warm.as_ref().filter(|ready|!host_role && ready.usable()){
                                 // The relay allocation and the offer are ready: the session starts with them at once.
@@ -4599,8 +4601,9 @@ async fn run(
                                 if server.urls.is_empty() || server.urls.len()>8 || server.urls.iter().any(|url|url.len()>1024) || server.username.len()>256 || server.credential.len()>1024{return Err("Invalid relay configuration bounds".into());}
                                 ice_servers.push(core_protocol::transport::NativeIceServer{urls:server.urls.clone(),username:server.username.clone(),credential:server.credential.clone()});
                             }
-                            // The person may have left the Devices list while the lease was on its way: then it is not used.
-                            if prewarm_ok && peer.is_none() && !cancel.load(Ordering::Acquire) && still_wanted{
+                            // Idle pre-warming holds a UDP socket open after sessions end (R-6) and can hand stale
+                            // ICE candidates to the first attempt against Windows hosts (N-1). Keep it opt-in only.
+                            if prewarm_ok && std::env::var_os("MIXEL_PREWARM").is_some() && peer.is_none() && !cancel.load(Ordering::Acquire) && still_wanted{
                                 warm=remote_peer::start_warm(state,&cancel,ice_servers,service.relay_only,lease).ok();
                             }
                         },
@@ -4653,6 +4656,19 @@ async fn run(
                         ServerMessage::Closed{session,..} if can_go_back_to_transport_before(&peer,&ctrl,session)=>{
                             // The other side gave up the renewed transport before it took over.
                             if let Some(failed)=go_back_to_transport_before(&mut peer,&mut ctrl,session,renew_again_ok){remember_gone(&mut recent,failed);eprintln!("QA renewal attempt closed by the other side; the transport before carries on");}
+                        },
+                        ServerMessage::Closed{session,reason:signaling_server::protocol::CloseReason::Disconnected} if ctrl.iter().any(|active|(active.id==session || active.ui==session) && !active.close_sent && !active.link.lost.load(std::sync::atomic::Ordering::Acquire)) && state.slot_active(ctrl.iter().find(|a| a.id==session || a.ui==session).map(|a| a.ui).unwrap_or(session)).await => {
+                            // N-1: A session that already has a healthy direct media path must not end just because
+                            // the peer's signaling socket dropped. Keep the live media running; if media later fails,
+                            // Command::Finished triggers reconnect.
+                            if let Some(active)=ctrl.iter().find(|a| a.id==session || a.ui==session){
+                                crate::app_log::info("signaling", &format!("session={} peer signaling disconnected while media is live — keeping session alive", active.ui));
+                            }
+                        },
+                        ServerMessage::Closed{session,reason:signaling_server::protocol::CloseReason::Disconnected} if peer.as_ref().is_some_and(|active| active.id==session && !active.close_sent && !active.link.lost.load(std::sync::atomic::Ordering::Acquire)) && state.status().await.phase == "active" => {
+                            if let Some(active)=peer.as_ref(){
+                                crate::app_log::info("signaling", &format!("session={} controller signaling disconnected while host media is live — keeping session alive", active.ui));
+                            }
                         },
                         ServerMessage::Closed{session,reason} if matches!(reason,signaling_server::protocol::CloseReason::Disconnected|signaling_server::protocol::CloseReason::Requested) && ctrl.iter().any(|active|(active.id==session || active.ui==session) && !active.joined && !active.host && !active.close_sent && active.signals.is_some() && close_means_lost(reason,active.link.lost.load(std::sync::atomic::Ordering::Acquire)) && !retries.iter().any(|again|again.host==active.remote) && last_access.get(&active.remote).is_some_and(crate::reconnect::Access::repeatable))=>{
                             // The computer this session views went away: only this session asks again.

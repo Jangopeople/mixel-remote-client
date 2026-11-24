@@ -17,6 +17,9 @@ public struct DeviceConsoleView: View {
     @State private var addingOthers = false
     @State private var addingThis = false
     @State private var byId = ""
+    @State private var hoveringTable = false
+    @State private var frozenOrder: [String: [String]]?
+    @State private var unfreezeTask: Task<Void, Never>?
     @FocusState private var focus: Field?
 
     enum Field { case search, byId }
@@ -30,9 +33,20 @@ public struct DeviceConsoleView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header.padding(.horizontal, 28).padding(.top, 22).padding(.bottom, 14)
-            notices.padding(.horizontal, 28)
             table
         }
+        // N-4: Notices float in an overlay so appearing/disappearing banners never shift device rows under the pointer.
+        .overlay(alignment: .top) {
+            notices
+                .padding(.horizontal, 28)
+                .padding(.top, 8)
+                .frame(maxWidth: 720)
+        }
+        .onChange(of: model.filterText) { _ in clearFreeze() }
+        .onChange(of: model.onlineOnly) { _ in clearFreeze() }
+        .onChange(of: model.updateOnly) { _ in clearFreeze() }
+        .onChange(of: model.systems) { _ in clearFreeze() }
+        .onChange(of: model.listView) { _ in clearFreeze() }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Theme.page)
         .onReceive(NotificationCenter.default.publisher(for: .mixelFocusConnectById)) { _ in focus = .byId }
@@ -140,7 +154,7 @@ public struct DeviceConsoleView: View {
                         Button(L("Add other computers")) { addingOthers = true }.disabled(!model.addBlocked.isEmpty).help(model.addBlocked)
                     }
                 }
-                Button { Task { await model.load() } } label: { Image(systemName: "arrow.clockwise") }
+                Button { clearFreeze(); Task { await model.load() } } label: { Image(systemName: "arrow.clockwise") }
                     .help(L("Refresh devices"))
                     .accessibilityLabel(Text(verbatim: L("Refresh devices")))
                     .disabled(!app.signedIn || model.loading)
@@ -233,8 +247,30 @@ public struct DeviceConsoleView: View {
 
     // MARK: Table
 
+    private func clearFreeze() {
+        unfreezeTask?.cancel()
+        unfreezeTask = nil
+        frozenOrder = nil
+    }
+
+    private func orderedGroups(from live: [DevicesModel.RowGroup]) -> [DevicesModel.RowGroup] {
+        guard let frozenOrder else { return live }
+        return live.map { group in
+            guard let ids = frozenOrder[group.id] else { return group }
+            let rank = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($0.element, $0.offset) })
+            let kept = group.devices.sorted { a, b in
+                let ra = rank[a.id] ?? Int.max
+                let rb = rank[b.id] ?? Int.max
+                if ra != rb { return ra < rb }
+                return a.name.localizedStandardCompare(b.name) == .orderedAscending
+            }
+            return DevicesModel.RowGroup(id: group.id, name: group.name, devices: kept, online: group.online)
+        }
+    }
+
     @ViewBuilder private var table: some View {
-        let groups = model.rowGroups
+        let liveGroups = model.rowGroups
+        let groups = orderedGroups(from: liveGroups)
         if groups.isEmpty {
             VStack(spacing: 10) {
                 Spacer()
@@ -292,6 +328,22 @@ public struct DeviceConsoleView: View {
                 }
             }
             .padding(.horizontal, 18)
+            .onHover { inside in
+                hoveringTable = inside
+                unfreezeTask?.cancel()
+                if inside {
+                    if frozenOrder == nil {
+                        frozenOrder = Dictionary(uniqueKeysWithValues: liveGroups.map { ($0.id, $0.devices.map(\.id)) })
+                    }
+                } else {
+                    // Hold row order for 1.2s after pointer leaves so a late click never hits a shifted row (N-4).
+                    unfreezeTask = Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 1_200_000_000)
+                        guard !Task.isCancelled, !hoveringTable else { return }
+                        frozenOrder = nil
+                    }
+                }
+            }
         }
     }
 
@@ -731,6 +783,19 @@ struct ConnectNotices: View {
                 }
             } else {
                 MessageLine(attempt.failure)
+                if workspace.tab(attempt.peer) != nil {
+                    HStack(spacing: 8) {
+                        Button(L("Show session")) {
+                            let peer = attempt.peer
+                            workspace.cancelAttempt()
+                            workspace.show(peer)
+                        }
+                        .buttonStyle(PrimaryButtonStyle())
+                        Button(L("End and reconnect")) {
+                            workspace.endAndReconnect(attempt.peer, name: attempt.name, os: attempt.os, unattended: attempt.unattended)
+                        }
+                    }
+                }
                 if app.setupOffer {
                     Button(L("Add this computer")) { workspace.cancelAttempt(); app.setupOffer = false; app.addThisRequested = true }.buttonStyle(PrimaryButtonStyle())
                 }
@@ -758,6 +823,18 @@ struct ConnectNotices: View {
 struct SessionsPage: View {
     @ObservedObject var app: AppModel
     @ObservedObject var workspace: WorkspaceModel
+    @State private var hoveringRecent = false
+    @State private var frozenRecent: [UInt32]?
+    @State private var unfreezeRecentTask: Task<Void, Never>?
+
+    private var displayedRecentIds: [UInt32] {
+        let live = app.devices.recentConnectionIds
+        guard let frozenRecent else { return live }
+        let liveSet = Set(live)
+        let kept = frozenRecent.filter { liveSet.contains($0) }
+        let added = live.filter { !frozenRecent.contains($0) }
+        return kept + added
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -795,7 +872,7 @@ struct SessionsPage: View {
                 Text(verbatim: L("Recent connections")).font(.system(size: 16, weight: .semibold))
                 ScrollView {
                     VStack(spacing: 8) {
-                        ForEach(app.devices.recentConnectionIds, id: \.self) { connId in
+                        ForEach(displayedRecentIds, id: \.self) { connId in
                             let known = app.devices.allDevices.first { $0.connectionId == connId }
                             let admin = known.flatMap { app.devices.adminRow($0) }
                             HStack(spacing: 12) {
@@ -825,6 +902,19 @@ struct SessionsPage: View {
                             .padding(12)
                             .background(Theme.page, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                             .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Theme.hairline))
+                        }
+                    }
+                    .onHover { inside in
+                        hoveringRecent = inside
+                        unfreezeRecentTask?.cancel()
+                        if inside {
+                            if frozenRecent == nil { frozenRecent = app.devices.recentConnectionIds }
+                        } else {
+                            unfreezeRecentTask = Task { @MainActor in
+                                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                                guard !Task.isCancelled, !hoveringRecent else { return }
+                                frozenRecent = nil
+                            }
                         }
                     }
                 }
