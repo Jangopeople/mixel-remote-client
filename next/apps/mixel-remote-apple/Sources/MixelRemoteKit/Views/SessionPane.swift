@@ -301,7 +301,16 @@ struct SessionBar: View {
             } else {
                 button(L("Window"), "arrow.up.forward.square") { workspace.popOut(tab.peer) }
             }
-            Button(role: .destructive) { session.end() } label: {
+            divider.padding(.horizontal, 4)
+            Button(role: .destructive) {
+                if remote.unattendedSession {
+                    Task {
+                        if await workspace.confirmEnd(tab) { workspace.end(tab.peer) }
+                    }
+                } else {
+                    workspace.end(tab.peer)
+                }
+            } label: {
                 Label(L("End"), systemImage: "xmark").labelStyle(.titleAndIcon).font(.system(size: 13, weight: .semibold))
             }
             .buttonStyle(PrimaryButtonStyle())

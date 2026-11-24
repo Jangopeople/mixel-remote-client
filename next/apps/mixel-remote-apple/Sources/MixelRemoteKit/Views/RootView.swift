@@ -282,7 +282,7 @@ struct Sidebar: View {
                 VStack(alignment: .leading, spacing: 2) {
                     brand.padding(.horizontal, 10).padding(.top, 14).padding(.bottom, 14)
                     item(.devices, count: app.signedIn ? devices.allDevices.count : nil)
-                    item(.sessions, badge: workspace.tabs.count)
+                    item(.sessions, badge: workspace.tabs.filter { $0.state == "ready" || $0.state == "starting" }.count)
                     if app.company.tenant != nil { item(.reports) }
                     item(.settings)
                     if app.signedIn, !devices.allDevices.isEmpty || !devices.recentConnectionIds.isEmpty {
