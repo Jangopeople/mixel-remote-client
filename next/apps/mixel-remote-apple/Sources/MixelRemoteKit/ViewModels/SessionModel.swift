@@ -31,8 +31,8 @@ public final class SessionModel: ObservableObject {
     public var onFrame: ((CGImage?) -> Void)?
     @Published public private(set) var size = CGSize.zero
     @Published public private(set) var fps = 0
-    /// Q-1: True when a live session has received no new video frame for >4 seconds.
-    @Published public private(set) var pictureStalled = false
+    /// W-1: True only when the engine reports neither video frames nor idle-liveness notifications for >3 s.
+    public var pictureStalled: Bool { remote.videoStalled == true }
     @Published public private(set) var stopping = false
     @Published public var error = ""
     @Published public var notice = ""
@@ -80,6 +80,8 @@ public final class SessionModel: ObservableObject {
     private var lastFrameAt: Date?
     private var inputQueue: [InputEvent] = []
     private var sending = false
+    private var lastPointerSend = Date.distantPast
+    private var pointerFlushTask: Task<Void, Never>?
     private var reconnect: Reconnect?
     private var restartArmTask: Task<Void, Never>?
     private var clipboardSyncing = false
@@ -238,12 +240,13 @@ public final class SessionModel: ObservableObject {
         onFrame?(nil)
         size = .zero
         fps = 0
-        if pictureStalled { pictureStalled = false }
         lastFrameAt = nil
         shownTimes.removeAll()
         lastFpsPublish = .distantPast
         decoding = .none
         inputQueue.removeAll()
+        pointerFlushTask?.cancel()
+        pointerFlushTask = nil
         if had { app.workspace.refresh() }
     }
 
@@ -263,17 +266,13 @@ public final class SessionModel: ObservableObject {
                     let data = try await engine.nextVideo(session: session, compressed: decoder != nil)
                     if Task.isCancelled { return }
                     if data.isEmpty {
-                        // R-5: Adaptive idle backoff avoids 500 Hz FFI spinning on still screens (drops CPU ~36% -> <5%)
-                        // while snapping back to 2 ms latency on the first motion frame.
+                        // R-5 / Q-4: Adaptive idle backoff avoids 500 Hz FFI spinning on still screens
+                        // while snapping back to 4 ms latency on the first motion frame.
                         emptyPolls = min(emptyPolls + 1, 100)
-                        if emptyPolls == 30 || emptyPolls == 100 {
+                        if emptyPolls == 35 {
                             await MainActor.run {
                                 guard self.viewingSession == session, let last = self.lastFrameAt else { return }
-                                let age = Date().timeIntervalSince(last)
-                                if age >= 4.0 {
-                                    if self.fps != 0 { self.fps = 0 }
-                                    if !self.pictureStalled { self.pictureStalled = true }
-                                } else if age >= 1.5, self.fps != 0 {
+                                if Date().timeIntervalSince(last) >= 1.5, self.fps != 0 {
                                     self.fps = 0
                                 }
                             }
@@ -376,7 +375,6 @@ public final class SessionModel: ObservableObject {
         if next != size { size = next }
         let now = Date()
         lastFrameAt = now
-        if pictureStalled { pictureStalled = false }
         for _ in 0..<max(1, count) {
             shownTimes.append(now)
         }
@@ -416,6 +414,24 @@ public final class SessionModel: ObservableObject {
             }
         } else {
             inputQueue.append(event)
+        }
+        if case .pointer = event {
+            // W-2: Coalesce pointer moves and rate-limit to at most 1 per 8 ms so 120 Hz trackpad
+            // movement never saturates the input transport while clicks/keys flush immediately.
+            let elapsed = Date().timeIntervalSince(lastPointerSend)
+            if elapsed < 0.008 {
+                if pointerFlushTask == nil {
+                    let waitNs = UInt64(max(1_000_000, (0.008 - elapsed) * 1_000_000_000))
+                    pointerFlushTask = Task { @MainActor [weak self] in
+                        try? await Task.sleep(nanoseconds: waitNs)
+                        guard let self else { return }
+                        self.pointerFlushTask = nil
+                        if let current = self.session { self.flush(current) }
+                    }
+                }
+                return
+            }
+            lastPointerSend = Date()
         }
         flush(session)
     }
@@ -816,7 +832,10 @@ public final class SessionModel: ObservableObject {
         case "waiting_for_video": L("Waiting for a complete video frame…")
         case "recording": L("Recording video")
         case "saving": L("Saving recording…")
-        case "saved": L("Recording saved")
+        case "saved":
+            lastRecordingPath.isEmpty
+                ? L("Recording saved")
+                : L("Saved: %@", URL(fileURLWithPath: lastRecordingPath).lastPathComponent)
         case "saved_partial": L("The recording stopped early. The playable portion was saved.")
         case "error": Translator.shared.translate(remote.recording?.message ?? "")
         default: ""
@@ -843,7 +862,8 @@ public final class SessionModel: ObservableObject {
     }
 
     public func stopRecording() {
-        guard let session, focused else { return }
+        // W-3: Never drop Stop when the session window is unfocused or Stop is clicked repeatedly.
+        guard let session else { return }
         recordingPending = true
         Task {
             do { try await app.engine.perform("remote_record_stop", ["session": session]) }

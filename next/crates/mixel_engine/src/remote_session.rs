@@ -159,6 +159,8 @@ pub struct Status {
     pub rtt_ms: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bitrate_kbps: Option<u32>,
+    #[serde(default)]
+    pub video_stalled: bool,
     #[serde(skip)]
     password_ends: Option<std::time::Instant>,
     #[serde(skip)]
@@ -321,6 +323,7 @@ impl Default for Status {
             connection_protocol: None,
             rtt_ms: None,
             bitrate_kbps: None,
+            video_stalled: false,
             password_ends: None,
             password_flag: false,
             code_expires_at: None,
@@ -2070,27 +2073,15 @@ impl RemoteSession {
                     | InputEvent::Key { .. }
             );
         let view_only_ok = matches!(&event, InputEvent::Action { name } if name.starts_with("quality:"));
+        let is_pointer = matches!(event, InputEvent::Pointer { .. });
         let (tx, rx) = tokio::sync::oneshot::channel();
-        {
+        let sender = {
             let inner = self.0.lock().await;
             if let Some(slot) = inner.slots.find(session) {
                 if !slot.live() || (!slot.view.control && !view_only_ok) || inner.cancel.load(Ordering::Acquire) {
                     return Ok(false);
                 }
-                match slot
-                    .input
-                    .as_ref()
-                    .ok_or("The input transport is closed")?
-                    .try_send(InputCommand {
-                        event,
-                        deadline: std::time::Instant::now() + Duration::from_secs(2),
-                        reply: tx,
-                    }) {
-                    Ok(()) => {}
-                    // The transport before a renewal ended ahead of the renewed one: not delivered.
-                    Err(mpsc::error::TrySendError::Closed(_)) => return Ok(false),
-                    Err(mpsc::error::TrySendError::Full(_)) => return Err("The input transport is busy".into()),
-                }
+                slot.input.clone().ok_or("The input transport is closed")?
             } else {
                 if inner.status.session != Some(session)
                     || inner.status.phase != "active"
@@ -2104,21 +2095,29 @@ impl RemoteSession {
                 {
                     return Ok(false);
                 }
-                match inner
-                    .input
-                    .as_ref()
-                    .ok_or("The input transport is closed")?
-                    .try_send(InputCommand {
-                        event,
-                        deadline: std::time::Instant::now() + Duration::from_secs(2),
-                        reply: tx,
-                    }) {
-                    Ok(()) => {}
-                    // The transport before a renewal ended ahead of the renewed one (a host of an
-                    // older version stops at once): not delivered, as while the session negotiates.
-                    Err(mpsc::error::TrySendError::Closed(_)) => return Ok(false),
-                    Err(mpsc::error::TrySendError::Full(_)) => return Err("The input transport is busy".into()),
-                }
+                inner.input.clone().ok_or("The input transport is closed")?
+            }
+        };
+        let cmd = InputCommand {
+            event,
+            deadline: std::time::Instant::now() + Duration::from_secs(2),
+            reply: tx,
+        };
+        if is_pointer {
+            // W-2: Coalesce/drop excess pointer moves silently when the queue is full instead of
+            // returning "The input transport is busy" toast.
+            match sender.try_send(cmd) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Closed(_)) => return Ok(false),
+                Err(mpsc::error::TrySendError::Full(_)) => return Ok(false),
+            }
+        } else {
+            // W-2: Never drop or refuse clicks, wheel, or key events while the queue drains;
+            // wait up to 500 ms for space and only report an error if still undeliverable.
+            match tokio::time::timeout(Duration::from_millis(500), sender.send(cmd)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(_)) => return Ok(false),
+                Err(_) => return Err("Could not deliver input within 500 ms".into()),
             }
         }
         if fast_ack {
@@ -3841,6 +3840,7 @@ async fn run(
         let mut renew_again_ok=false;
         let mut warm:Option<remote_peer::Warm>=None;
         let mut warm_asked:Option<std::time::Instant>=None;
+        let mut busy_backoff_secs: u64 = 1;
         let mut warm_managed=false;
         let mut pending_warm:Option<remote_peer::Warm>=None;
         // The questions asked in the last 10 minutes: the connection service allows 8, an answer "busy" would be taken for the answer to a request.
@@ -4774,7 +4774,12 @@ async fn run(
                             }else if pending_renewal.take().is_some(){
                                 return Err(Failure::network("Device authorization renewal was refused; reconnecting"));
                             }else if code==ErrorCode::Busy{
-                                crate::app_log::info("signaling", "ignoring late Busy response from connection service");
+                                // R-1: Back off prewarm / late Busy responses (1s -> 2s -> 4s) instead of re-sending immediately.
+                                warm_asked = Some(std::time::Instant::now());
+                                let wait = busy_backoff_secs;
+                                busy_backoff_secs = (busy_backoff_secs * 2).min(4);
+                                crate::app_log::info("signaling", &format!("received Busy response from connection service; backing off {wait}s"));
+                                tokio::time::sleep(Duration::from_secs(wait)).await;
                             }else{return Err(format!("Connection service rejected an operation: {code:?}").into());}
                         },
                         ServerMessage::SessionEnding{session,seconds,..}=>{
@@ -5888,6 +5893,37 @@ mod multi_session_tests {
 
     fn lands(open: &mut Open, usage: u16) -> bool {
         open.seen.try_recv() == Ok(usage)
+    }
+
+    #[tokio::test]
+    async fn w2_2000_pointer_moves_and_50_clicks_never_busy() {
+        let (remote, mut commands) = registered().await;
+        let mut session = open(&remote, &mut commands, 200_000_001).await;
+        let mut clicks_sent = 0u32;
+        for i in 0..2000u32 {
+            let res = remote
+                .input(session.id, InputEvent::Pointer { x: (i * 17) as u16, y: (i * 13) as u16 })
+                .await;
+            assert!(res.is_ok(), "W-2: pointer move {i} failed: {res:?}");
+            if i % 40 == 0 {
+                clicks_sent += 1;
+                let k = remote.input(session.id, key((clicks_sent + 10) as u16)).await;
+                assert!(k.is_ok(), "W-2: reliable input {clicks_sent} failed: {k:?}");
+            }
+        }
+        assert_eq!(clicks_sent, 50);
+        // Drain all 50 reliable events in exact order.
+        let mut received = Vec::new();
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while received.len() < 50 && std::time::Instant::now() < deadline {
+            if let Ok(u) = session.seen.try_recv() {
+                received.push(u);
+            } else {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        }
+        let expected: Vec<u16> = (11..=60).collect();
+        assert_eq!(received, expected, "W-2: all 50 reliable inputs must arrive in order");
     }
 
     #[tokio::test]

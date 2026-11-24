@@ -179,6 +179,7 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
     public var connectionProtocol: String?
     public var rttMs: UInt32?
     public var bitrateKbps: UInt32?
+    public var videoStalled: Bool?
     public var isReconnecting: Bool { reconnecting == true }
 
     /// A copy with rapidly incrementing counters (`received`, `sessions[].received`, `sessions[].quality`)
@@ -320,6 +321,7 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
         copy.connectionProtocol = item.connectionProtocol ?? copy.connectionProtocol
         copy.rttMs = item.rttMs ?? copy.rttMs
         copy.bitrateKbps = item.bitrateKbps ?? copy.bitrateKbps
+        copy.videoStalled = item.videoStalled ?? copy.videoStalled
         // The one-time-password and unattended flags belong to the session itself (engine 2.1.0 reports them per
         // `sessions[]` item; an older engine's single session carries the status's own, see `viewerSessions`).
         copy.passwordSession = item.passwordSession
@@ -375,6 +377,7 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
     public var connectionProtocol: String?
     public var rttMs: UInt32?
     public var bitrateKbps: UInt32?
+    public var videoStalled: Bool?
 
     /// A request still waiting for Accept or negotiating (not a session asking its computer again).
     public var isNewRequest: Bool { ["outgoing", "negotiating"].contains(phase) && !reconnecting && !reconnectFailed }
@@ -399,7 +402,7 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
         case id, session, peer, device, phase, message, consent, received, control, controlPending, clipboard, files, recordingPermitted, recording, recordingParts, displays, display
         case displayAll, printJobs, hostActions, signinId, hostMacs, meetingOffer, cursorShape, peerFeatures, joinedSession, switched, quality, startedAt
         case reconnecting, reconnectFailed, passwordSession, unattendedSession, unattendedRefused
-        case connectionPath, connectionProtocol, rttMs, bitrateKbps
+        case connectionPath, connectionProtocol, rttMs, bitrateKbps, videoStalled
     }
 
     public init(from decoder: Decoder) throws {
@@ -441,6 +444,7 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
         connectionProtocol = try? c.decodeIfPresent(String.self, forKey: .connectionProtocol)
         rttMs = try? c.decodeIfPresent(UInt32.self, forKey: .rttMs)
         bitrateKbps = try? c.decodeIfPresent(UInt32.self, forKey: .bitrateKbps)
+        videoStalled = try? c.decodeIfPresent(Bool.self, forKey: .videoStalled)
     }
 
     public func encode(to encoder: Encoder) throws {

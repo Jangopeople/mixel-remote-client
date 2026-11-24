@@ -21,10 +21,13 @@ public struct RemoteScreen: NSViewRepresentable {
             view.releaseAll()
             view.attach(to: session)
         }
-        view.pointerMode = session.pointerMode
-        view.controllable = session.controllable
-        view.actualSize = session.actualSize
-        view.cursorShape = session.remote.cursorShape ?? "arrow"
+        // Q-4: Skip redundant AppKit property mutations when only toolbar statistics changed.
+        if view.pointerMode != session.pointerMode { view.pointerMode = session.pointerMode }
+        let ctrl = session.controllable
+        if view.controllable != ctrl { view.controllable = ctrl }
+        if view.actualSize != session.actualSize { view.actualSize = session.actualSize }
+        let shape = session.remote.cursorShape ?? "arrow"
+        if view.cursorShape != shape { view.cursorShape = shape }
     }
 
     public static func dismantleNSView(_ view: RemoteScreenView, coordinator: ()) {
