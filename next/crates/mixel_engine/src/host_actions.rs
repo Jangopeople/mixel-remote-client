@@ -12,6 +12,8 @@ pub const WOL: &str = "wol";
 pub const SOUND: &str = "sound";
 /// Picture quality preference (`quality:auto`, `quality:speed`, `quality:quality`).
 pub const QUALITY: &str = "quality";
+/// Two-way voice call in session (`voice:on` / `voice:off`).
+pub const VOICE: &str = "voice";
 
 fn mac_bytes(text: &str) -> Option<[u8; 6]> {
     let hex: String = text.chars().filter(char::is_ascii_hexdigit).collect();
@@ -112,6 +114,7 @@ pub fn available() -> Vec<String> {
     }
     actions.push(WOL.to_owned());
     actions.push(QUALITY.to_owned());
+    actions.push(VOICE.to_owned());
     actions.extend(crate::session_guard::available().into_iter().map(str::to_owned));
     actions
 }
@@ -161,7 +164,7 @@ pub fn run(name: &str) -> Result<(), String> {
 pub fn parse(list: &str) -> Vec<String> {
     list.split(',')
         .map(str::trim)
-        .filter(|name| matches!(*name, SAS | RESTART | WOL | SOUND | QUALITY) || [crate::session_guard::MEET, crate::session_guard::POINTER, crate::session_guard::PRIVACY, crate::session_guard::BLOCK, crate::session_guard::LOCK, crate::session_guard::LOCK_AT_END, crate::session_guard::WAYLAND].contains(name))
+        .filter(|name| matches!(*name, SAS | RESTART | WOL | SOUND | QUALITY | VOICE) || [crate::session_guard::MEET, crate::session_guard::POINTER, crate::session_guard::PRIVACY, crate::session_guard::BLOCK, crate::session_guard::LOCK, crate::session_guard::LOCK_AT_END, crate::session_guard::WAYLAND].contains(name))
         .map(str::to_owned)
         .take(16)
         .collect()

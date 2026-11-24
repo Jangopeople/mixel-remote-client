@@ -644,6 +644,12 @@ struct ConnectNotices: View {
                 Text(verbatim: notice.reason).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 12)
+            Button(L("Reconnect")) {
+                workspace.dismissEndedNotice(notice.peer)
+                workspace.connect(peer: notice.peer, name: notice.name, os: notice.os, unattended: true, checkPhone: false)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
             Button { workspace.dismissEndedNotice(notice.peer) } label: { Image(systemName: "xmark").font(.system(size: 10, weight: .bold)) }
                 .buttonStyle(.plain).foregroundStyle(.secondary)
                 .help(L("Dismiss"))

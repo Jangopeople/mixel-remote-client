@@ -10,6 +10,8 @@ pub mod qa_live;
 pub mod qa_timeline;
 pub mod app_log;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub mod approved_scripts;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod session_platform;
 /// iPhone, iPad and Android phones and tablets: controller only.
 #[cfg(any(target_os = "ios", target_os = "android"))]

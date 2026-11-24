@@ -26,6 +26,10 @@ public final class SettingsModel: ObservableObject {
     @Published public var relayOnly = false
     @Published public var idleTimeoutMinutes: UInt32 = 0
     @Published public var diagnosticsPath = ""
+    @Published public private(set) var deviceHealth: DeviceHealth?
+    @Published public private(set) var approvedScripts: [ApprovedScriptMeta] = []
+    @Published public private(set) var scriptOutput: ScriptRunResult?
+    @Published public private(set) var runningScriptId: String?
     @Published public var error = ""
     @Published public var notice = ""
     /// "Stay signed in" chosen on the sign-in screen, before there is an account to remember. Applied
@@ -83,6 +87,13 @@ public final class SettingsModel: ObservableObject {
             relayOnly = prefs.relayOnly
             idleTimeoutMinutes = prefs.idleTimeoutMinutes
         }
+        if !app.isPhone {
+            #if os(macOS)
+            Self.cleanupLegacyLaunchAgentsOnce()
+            #endif
+            approvedScripts = (try? await app.engine.run("list_approved_scripts")) ?? []
+            deviceHealth = try? await app.engine.run("device_health")
+        }
         removalPending = (try? await app.engine.run("device_removal_pending", as: Bool.self)) ?? false
         if !app.isPhone {
             printing = try? await app.engine.run("remote_printing_status")
@@ -120,6 +131,39 @@ public final class SettingsModel: ObservableObject {
         Task {
             do {
                 try await app.engine.perform("set_idle_timeout", ["minutes": Int(minutes)])
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    #if os(macOS)
+    private static var legacyCleaned = false
+    /// B-3: Unload and remove stale user LaunchAgents left over from legacy RustDesk-based builds
+    /// (`ch.mixel.remote_service`, `ch.mixel.remote_server`) when their target binary no longer exists.
+    private static func cleanupLegacyLaunchAgentsOnce() {
+        guard !legacyCleaned else { return }
+        legacyCleaned = true
+        let agentsDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents")
+        for label in ["ch.mixel.remote_service", "ch.mixel.remote_server"] {
+            let plist = agentsDir.appendingPathComponent("\(label).plist")
+            guard FileManager.default.fileExists(atPath: plist.path) else { continue }
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+            proc.arguments = ["bootout", "gui/\(getuid())", plist.path]
+            try? proc.run()
+            proc.waitUntilExit()
+            try? FileManager.default.removeItem(at: plist)
+        }
+    }
+    #endif
+
+    public func runApprovedScript(_ id: String) {
+        runningScriptId = id
+        Task {
+            defer { runningScriptId = nil }
+            do {
+                scriptOutput = try await app.engine.run("run_approved_script", ["id": id])
             } catch {
                 self.error = error.localizedDescription
             }

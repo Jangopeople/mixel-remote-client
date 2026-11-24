@@ -83,6 +83,34 @@ public struct DiagnosticsExport: Codable, Equatable, Sendable {
     public var logDir: String?
 }
 
+public struct DeviceHealth: Codable, Equatable, Sendable {
+    public var name: String
+    public var os: String
+    public var model: String
+    public var cpu: String
+    public var ramGb: UInt64
+    public var diskFreeGb: UInt64
+    public var diskTotalGb: UInt64
+    public var user: String
+    public var lastBoot: String
+    public var pendingReboot: Bool
+}
+
+public struct ApprovedScriptMeta: Codable, Equatable, Identifiable, Sendable {
+    public var id: String
+    public var name: String
+    public var description: String
+    public var category: String
+}
+
+public struct ScriptRunResult: Codable, Equatable, Sendable {
+    public var id: String
+    public var name: String
+    public var exitCode: Int
+    public var output: String
+    public var durationMs: UInt64
+}
+
 public struct RemoteStatus: Codable, Equatable, Sendable {
     public var controllerOnly: Bool
     public var platform: String

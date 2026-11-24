@@ -355,7 +355,9 @@ public final class DevicesModel: ObservableObject {
 
     /// Rank for "sorted by status": in session, online, checking, unknown, offline.
     func statusRank(_ device: Device) -> Int {
-        if app.workspace.state(of: device.connectionId) != nil { return 0 }
+        // Keep active/connecting sessions at the same rank as online devices so clicking Connect
+        // never reorders the table under the pointer (X-1).
+        if app.workspace.state(of: device.connectionId) != nil { return 1 }
         switch presence(of: device) {
         case .online: return 1
         case .this: return 2

@@ -530,6 +530,7 @@ internal sealed class SessionView : Grid
         Toggle("block", L("Block input"), session.BlockInput, session.ToggleBlockInput);
         Toggle("pointer", L("Show pointer"), session.PointerMode, session.TogglePointer);
         Toggle("sound", L("Sound"), session.Sound, session.ToggleSound);
+        Toggle("voice", L("Voice call"), session.Voice, session.ToggleVoice);
         if (remote.Offers("lock")) Item(L("Lock computer"), session.LockNow, !app.Busy);
         Toggle("lockend", L("Lock when done"), session.LockWhenDone, session.ToggleLockWhenDone);
         if (remote.Offers("restart")) Item(session.RestartArmed ? L("Click again to restart") : L("Restart computer"), session.RestartComputer, !app.Busy);

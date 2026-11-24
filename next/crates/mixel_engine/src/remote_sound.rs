@@ -35,6 +35,64 @@ impl Capture {
             if cfg!(target_os = "windows") { Self::loopback() } else { None }
         }
     }
+    /// Starts recording the default microphone for two-way voice in a session (macOS, Windows, Linux).
+    pub fn start_microphone() -> Option<Self> {
+        let (sender, frames) = mpsc::sync_channel::<Vec<u8>>(32);
+        let (ready_tx, ready_rx) = mpsc::channel::<bool>();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopped = stop.clone();
+        std::thread::spawn(move || {
+            let stream = (|| {
+                let device = cpal::default_host().default_input_device()?;
+                let config = device.default_input_config().ok()?;
+                let mut resampler = Resampler::new(config.channels(), config.sample_rate().0)?;
+                let mut pending: Vec<i16> = Vec::with_capacity(FRAME_SAMPLES * 4);
+                let mut state = State::default();
+                let mut consume = move |input: &[f32]| {
+                    resampler.push(input, &mut pending);
+                    while pending.len() >= FRAME_SAMPLES {
+                        let samples: Vec<i16> = pending.drain(..FRAME_SAMPLES).collect();
+                        if !sound::silent(&samples)
+                            && let Some(frame) = sound::encode(&mut state, &samples)
+                        {
+                            let _ = sender.try_send(frame);
+                        }
+                    }
+                };
+                let failed = |_| {};
+                let stream = match config.sample_format() {
+                    cpal::SampleFormat::F32 => device.build_input_stream(
+                        &config.into(),
+                        move |data: &[f32], _: &cpal::InputCallbackInfo| consume(data),
+                        failed,
+                        None,
+                    ),
+                    cpal::SampleFormat::I16 => device.build_input_stream(
+                        &config.into(),
+                        move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                            let converted: Vec<f32> = data.iter().map(|s| f32::from(*s) / 32768.0).collect();
+                            consume(&converted);
+                        },
+                        failed,
+                        None,
+                    ),
+                    _ => return None,
+                }
+                .ok()?;
+                stream.play().ok()?;
+                Some(stream)
+            })();
+            let _ = ready_tx.send(stream.is_some());
+            while stream.is_some() && !stopped.load(Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+        ready_rx
+            .recv_timeout(Duration::from_secs(3))
+            .ok()
+            .filter(|ready| *ready)
+            .map(|_| Self { frames, stop })
+    }
     /// Windows: recording from an output device records what it plays.
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     fn loopback() -> Option<Self> {

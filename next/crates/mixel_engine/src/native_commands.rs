@@ -483,8 +483,25 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
             out(json!({ "idle_timeout_minutes": crate::app_log::idle_timeout_minutes() }))
         }
         "export_diagnostics" => {
-            let version = option_env!("MIXEL_ENGINE_APP_VERSION").unwrap_or("2.1.27");
+            let version = option_env!("MIXEL_ENGINE_APP_VERSION").unwrap_or("2.2.0");
             out(crate::app_log::export_diagnostics(version)?)
+        }
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+        "list_approved_scripts" => out(crate::approved_scripts::list_scripts()),
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+        "run_approved_script" => {
+            let id: String = args.get("id")?;
+            let result = tokio::task::spawn_blocking(move || crate::approved_scripts::run_approved_script(&id))
+                .await
+                .map_err(|_| "Script execution task failed")??;
+            out(result)
+        }
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+        "device_health" => {
+            let result = tokio::task::spawn_blocking(crate::approved_scripts::collect_local_health)
+                .await
+                .map_err(|_| "Device health task failed")??;
+            out(result)
         }
         // LAB builds only: one live session as technician, the same on every system (`qa_live.rs`).
         #[cfg(feature = "qa-session")]

@@ -44,6 +44,7 @@ const CURSOR_SHAPE: &[u8] = b"mixel-cursor-v1:";
 const INPUT_POSTED: &[u8] = b"mixel-input-posted-v1";
 const INPUT_UNSUPPORTED: &[u8] = b"mixel-input-unsupported-v1";
 const VIDEO_IDLE: &[u8] = b"mixel-video-idle-v1";
+const VOICE_RECORD: &[u8] = b"mixel-voice-v1:";
 /// Controller: how long a caller waits for the host to acknowledge an input. After that it hears
 /// "not confirmed"; the record is still on its way (the channel is reliable and ordered) and its
 /// late acknowledgment is matched to it and dropped. A late answer never ends the session.
@@ -276,6 +277,9 @@ pub struct ControlPipe {
     /// The other app understands sound frames; host: the technician wants to hear them.
     sound_peer: bool,
     sound_on: bool,
+    voice_on: bool,
+    voice_mic: Option<crate::remote_sound::Capture>,
+    voice_player: Option<crate::remote_sound::Player>,
     quality_mode: QualityMode,
     cursor_peer: bool,
     cursor_shape: Option<String>,
@@ -466,6 +470,9 @@ impl ControlPipe {
             print_peer: features.iter().any(|name| name == crate::host_print::FEATURE),
             sound_peer: features.iter().any(|name| name == core_protocol::sound::FEATURE),
             sound_on: true,
+            voice_on: false,
+            voice_mic: None,
+            voice_player: None,
             quality_mode: QualityMode::Auto,
             cursor_peer: features.iter().any(|name| name == CURSOR_FEATURE),
             cursor_shape: None,
@@ -516,6 +523,9 @@ impl ControlPipe {
             print_peer: false,
             sound_peer: true,
             sound_on: true,
+            voice_on: false,
+            voice_mic: None,
+            voice_player: None,
             quality_mode: QualityMode::Auto,
             cursor_peer: false,
             cursor_shape: None,
@@ -622,7 +632,41 @@ impl ControlPipe {
     pub fn receiving_clipboard(&self) -> bool {
         self.clipboard.receiving()
     }
+    fn set_voice(&mut self, on: bool) {
+        if on == self.voice_on {
+            return;
+        }
+        self.voice_on = on;
+        if on {
+            self.voice_mic = crate::remote_sound::Capture::start_microphone();
+            self.voice_player = crate::remote_sound::Player::start();
+            crate::app_log::info("voice", &format!("two-way voice enabled (mic={})", self.voice_mic.is_some()));
+        } else {
+            self.voice_mic = None;
+            self.voice_player = None;
+            crate::app_log::info("voice", "two-way voice disabled");
+        }
+    }
+    async fn flush_voice(&mut self, channel: &Arc<dyn NativeDataChannel>) -> Result<(), String> {
+        let Some(mic) = &self.voice_mic else {
+            return Ok(());
+        };
+        for _ in 0..6 {
+            let Some(frame) = mic.next() else {
+                break;
+            };
+            let mut plain = Vec::with_capacity(VOICE_RECORD.len() + frame.len());
+            plain.extend_from_slice(VOICE_RECORD);
+            plain.extend_from_slice(&frame);
+            let record = self.crypto.seal(&plain).map_err(|error| error.to_string())?;
+            let _ = tokio::time::timeout(Duration::from_millis(500), channel.send(record.as_slice().into())).await;
+        }
+        Ok(())
+    }
     pub fn release(&mut self) -> Result<(), String> {
+        self.voice_mic = None;
+        self.voice_player = None;
+        self.voice_on = false;
         if let Some((router, token)) = &mut self.router {
             router.close(token).map_err(|error| error.to_string())?;
         }
@@ -737,6 +781,11 @@ impl ControlPipe {
             match &command.event {
                 crate::remote_session::InputEvent::Action { name } => {
                     let name = name.clone();
+                    if name == "voice:on" {
+                        self.set_voice(true);
+                    } else if name == "voice:off" {
+                        self.set_voice(false);
+                    }
                     let result = self.send_action(&name, channel).await?;
                     let _ = command.reply.send(result.map(|()| true));
                 }
@@ -784,6 +833,10 @@ impl ControlPipe {
                 let _ = self.sound_in.pop_front();
             }
             self.sound_in.push_back(frame.to_vec());
+        } else if let Some(frame) = plain.strip_prefix(VOICE_RECORD) {
+            if let Some(player) = &self.voice_player {
+                player.push(frame);
+            }
         } else if let Some(rest) = plain.strip_prefix(CURSOR_SHAPE) {
             if let Ok(name) = std::str::from_utf8(rest)
                 && let Some(clean) = native_os_capture::cursor_shape::normalize(name)
@@ -1001,10 +1054,12 @@ impl ControlPipe {
                     }
                 }
             }
+            self.flush_voice(channel).await?;
             return self
                 .receive_host_records(channel, Duration::ZERO, config.stopped())
                 .await;
         }
+        self.flush_voice(channel).await?;
         for _ in 0..32 {
             let mut record = match try_received_record(channel).await? {
                 Some(value) => value,
@@ -1019,6 +1074,12 @@ impl ControlPipe {
                     .map_err(|error| error.to_string())?,
             );
             self.last_controller_activity = Instant::now();
+            if let Some(frame) = plain.strip_prefix(VOICE_RECORD) {
+                if let Some(player) = &self.voice_player {
+                    player.push(frame);
+                }
+                continue;
+            }
             // Drawings: in view-only sessions too, and many at a time (they arrive while the
             // technician draws, and a view-only host polls only between pictures).
             let mut drawn = 0;
@@ -1073,6 +1134,10 @@ impl ControlPipe {
                 }
                 if offered == crate::host_actions::SOUND {
                     self.sound_on = name != "sound:off";
+                    continue;
+                }
+                if offered == crate::host_actions::VOICE {
+                    self.set_voice(name == "voice:on");
                     continue;
                 }
                 // Run off the media loop; a restart takes the session down on its own.

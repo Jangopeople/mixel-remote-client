@@ -40,7 +40,7 @@ public enum LegacySettings {
     /// Applies the old settings to `defaults` (never overwriting a value this app already has).
     static func apply(_ items: [String: String], to defaults: UserDefaults) {
         func absent(_ key: String) -> Bool { defaults.object(forKey: key) == nil }
-        if let language = items["mixel.remote.language.v1"], ["en", "de", "fr", "it"].contains(language), absent("mixel.remote.language.v1") {
+        if let language = items["mixel.remote.language.v1"], ["en", "de", "fr", "it", "es", "pt", "nl"].contains(language), absent("mixel.remote.language.v1") {
             defaults.set(language, forKey: "mixel.remote.language.v1")
         }
         if let auto = items["mixel.remote.autoupdate.v1"], ["on", "off"].contains(auto), absent("mixel.remote.autoupdate.v1") {

@@ -375,6 +375,13 @@ struct SessionBar: View {
                     }
                 }
                 Text(verbatim: L("%d fps", session.fps)).font(.system(size: 12, weight: .semibold)).monospacedDigit()
+                if let path = remote.connectionPath {
+                    let proto = (remote.connectionProtocol ?? "udp").uppercased()
+                    let isTcpRelay = path == "relay" && proto != "UDP"
+                    Text(verbatim: "\(path == "relay" ? L("Relay") : L("Direct")) · \(proto)")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(isTcpRelay ? Theme.warning : .secondary)
+                }
                 if !compact, session.size.width > 0 {
                     Text(verbatim: "\(Int(session.size.width)) × \(Int(session.size.height))").font(.system(size: 12)).foregroundStyle(.secondary).monospacedDigit()
                 }
@@ -431,6 +438,7 @@ struct SessionBar: View {
             if remote.offers("block") { menuToggle(L("Block input"), session.blockInput) { session.toggleBlockInput() } }
             if remote.offers("pointer") { menuToggle(L("Show pointer"), session.pointerMode) { session.togglePointer() } }
             if remote.offers("sound") { menuToggle(L("Sound"), session.sound) { session.toggleSound() } }
+            if remote.offers("voice") { menuToggle(L("Voice call"), session.voice) { session.toggleVoice() } }
             menuToggle(L("Match my keyboard layout"), session.matchLocalKeyboard) { session.matchLocalKeyboard.toggle() }
             if remote.offers("lock") { Button(L("Lock computer")) { session.lockNow() } }
             if remote.offers("lockend") { menuToggle(L("Lock when done"), session.lockWhenDone) { session.toggleLockWhenDone() } }

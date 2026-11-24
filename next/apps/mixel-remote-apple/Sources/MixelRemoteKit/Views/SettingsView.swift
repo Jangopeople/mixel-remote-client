@@ -40,6 +40,9 @@ public struct SettingsView: View {
                     Text(verbatim: "Deutsch").tag("de")
                     Text(verbatim: "Français").tag("fr")
                     Text(verbatim: "Italiano").tag("it")
+                    Text(verbatim: "Español").tag("es")
+                    Text(verbatim: "Português").tag("pt")
+                    Text(verbatim: "Nederlands").tag("nl")
                 } label: { Text(verbatim: L("Language")) }
             } header: { Text(verbatim: L("General")) }
 

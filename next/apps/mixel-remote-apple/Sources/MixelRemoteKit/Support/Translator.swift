@@ -6,7 +6,7 @@ import Foundation
 /// bundled as `engine-texts.json`). Device names, chat messages and typed values are never translated.
 public final class Translator: @unchecked Sendable {
     public static let shared = Translator()
-    public static let supported = ["en", "de", "fr", "it"]
+    public static let supported = ["en", "de", "fr", "it", "es", "pt", "nl"]
     private static let key = "mixel.remote.language.v1"
 
     private struct Table: Decodable {

@@ -40,6 +40,7 @@ public final class SessionModel: ObservableObject {
     @Published public private(set) var lockWhenDone = false
     @Published public var pointerMode = false
     @Published public private(set) var sound = true
+    @Published public private(set) var voice = false
     @Published public private(set) var restartArmed = false
     /// When enabled, sends printable characters using the technician's local keyboard layout instead of raw HID scancodes.
     @Published public var matchLocalKeyboard = false
@@ -462,6 +463,7 @@ public final class SessionModel: ObservableObject {
         if !pointerMode { action("pointer:off", quiet: true) }
     }
     public func toggleSound() { sound.toggle(); action(sound ? "sound:on" : "sound:off", quiet: true) }
+    public func toggleVoice() { voice.toggle(); action(voice ? "voice:on" : "voice:off", quiet: true) }
     public func setQualityMode(_ mode: String) {
         guard ["auto", "speed", "quality"].contains(mode), mode != qualityMode else { return }
         qualityMode = mode

@@ -17,7 +17,7 @@ struct SettingsConsoleView: View {
     @State private var current = Section.sessions
 
     enum Section: String, CaseIterable, Identifiable {
-        case sessions, unattended, updates, general, account, about, team
+        case sessions, unattended, updates, general, account, diagnostics, about, team
         var id: String { rawValue }
         var title: String {
             switch self {
@@ -26,6 +26,7 @@ struct SettingsConsoleView: View {
             case .updates: L("Updates")
             case .general: L("General")
             case .account: L("Account & security")
+            case .diagnostics: L("Connection & diagnostics")
             case .about: L("About and legal")
             case .team: L("Mixel team")
             }
@@ -129,6 +130,7 @@ struct SettingsConsoleView: View {
             case .updates: updates
             case .general: general
             case .account: account
+            case .diagnostics: diagnostics
             case .about: about
             case .team: team
             }
@@ -305,6 +307,9 @@ struct SettingsConsoleView: View {
                         Text(verbatim: "Deutsch").tag("de")
                         Text(verbatim: "Français").tag("fr")
                         Text(verbatim: "Italiano").tag("it")
+                        Text(verbatim: "Español").tag("es")
+                        Text(verbatim: "Português").tag("pt")
+                        Text(verbatim: "Nederlands").tag("nl")
                     } label: { Text(verbatim: L("Language")) }.labelsHidden().fixedSize()
                 }
                 SettingRow(title: L("Start Mixel Remote when this computer starts")) {
@@ -393,9 +398,9 @@ struct SettingsConsoleView: View {
         return parts.joined(separator: " · ")
     }
 
-    // MARK: About and team
+    // MARK: Connection & diagnostics
 
-    private var about: some View {
+    private var diagnostics: some View {
         VStack(alignment: .leading, spacing: 10) {
             heading(L("Connection & diagnostics"))
             ConsoleCard {
@@ -427,6 +432,56 @@ struct SettingsConsoleView: View {
                     }
                 }
             }
+            if let h = settings.deviceHealth {
+                heading(L("Device inventory & health"))
+                ConsoleCard {
+                    VStack(alignment: .leading, spacing: 6) {
+                        LabeledContent(L("Operating system")) { Text(verbatim: h.os) }
+                        LabeledContent(L("Hardware")) { Text(verbatim: "\(h.model) · \(h.ramGb) GB RAM") }
+                        LabeledContent(L("Disk")) { Text(verbatim: "\(h.diskFreeGb) GB free / \(h.diskTotalGb) GB") }
+                        LabeledContent(L("Last boot & user")) { Text(verbatim: "\(h.lastBoot) · \(h.user)") }
+                    }
+                    .font(.system(size: 12))
+                    .padding(16)
+                }
+            }
+            if !settings.approvedScripts.isEmpty {
+                heading(L("Approved IT scripts"))
+                ConsoleCard {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(settings.approvedScripts) { script in
+                            SettingRow(title: script.name, help: script.description) {
+                                Button(settings.runningScriptId == script.id ? L("Running…") : L("Run")) {
+                                    settings.runApprovedScript(script.id)
+                                }
+                                .disabled(settings.runningScriptId != nil)
+                            }
+                        }
+                        if let res = settings.scriptOutput {
+                            Divider().padding(.horizontal, 16)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(verbatim: "\(res.name) (exit \(res.exitCode) · \(res.durationMs) ms)")
+                                    .font(.caption.weight(.semibold))
+                                ScrollView {
+                                    Text(verbatim: res.output)
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .textSelection(.enabled)
+                                }
+                                .frame(maxHeight: 140)
+                            }
+                            .padding(16)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: About and team
+
+    private var about: some View {
+        VStack(alignment: .leading, spacing: 10) {
             heading(L("About and legal"))
             ConsoleCard { AboutBlock(app: app).padding(16) }
         }

@@ -25,6 +25,7 @@ public sealed class SessionModel : Observable
     private string notice = "";
     private bool privacy, blockInput, lockWhenDone, pointerMode, restartArmed, recordingPending;
     private bool sound = true;
+    private bool voice;
     private List<ChatMessage> chat = [];
     private string chatDraft = "";
     private FileView? files;
@@ -91,6 +92,7 @@ public sealed class SessionModel : Observable
     public bool LockWhenDone { get => lockWhenDone; private set => Set(ref lockWhenDone, value); }
     public bool PointerMode { get => pointerMode; set => Set(ref pointerMode, value); }
     public bool Sound { get => sound; private set => Set(ref sound, value); }
+    public bool Voice { get => voice; private set => Set(ref voice, value); }
     public bool RestartArmed { get => restartArmed; private set => Set(ref restartArmed, value); }
     public List<ChatMessage> Chat { get => chat; private set => SetList(ref chat, value); }
     public string ChatDraft { get => chatDraft; set => Set(ref chatDraft, value); }
@@ -605,6 +607,13 @@ public sealed class SessionModel : Observable
         if (!MayAct) return;
         Sound = !Sound;
         Action(Sound ? "sound:on" : "sound:off", quiet: true);
+    }
+
+    public void ToggleVoice()
+    {
+        if (!MayAct) return;
+        Voice = !Voice;
+        Action(Voice ? "voice:on" : "voice:off", quiet: true);
     }
 
     private string qualityMode = "auto";
