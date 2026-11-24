@@ -326,7 +326,6 @@ extension AppDelegate: ASWebAuthenticationPresentationContextProviding {
 
 /// The Open and Save panels for files and recordings.
 @MainActor
-@MainActor
 enum Panels {
     static func open() async -> String? {
         let panel = NSOpenPanel()
