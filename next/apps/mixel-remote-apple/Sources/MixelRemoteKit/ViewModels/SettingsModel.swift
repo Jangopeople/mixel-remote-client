@@ -155,6 +155,19 @@ public final class SettingsModel: ObservableObject {
             proc.waitUntilExit()
             try? FileManager.default.removeItem(at: plist)
         }
+        // B-4: Remove leftover legacy com.carriez.* preferences and old RustDesk logs once.
+        let fm = FileManager.default
+        let lib = fm.homeDirectoryForCurrentUser.appendingPathComponent("Library")
+        let prefs = lib.appendingPathComponent("Preferences")
+        if let items = try? fm.contentsOfDirectory(at: prefs, includingPropertiesForKeys: nil) {
+            for item in items where item.lastPathComponent.hasPrefix("com.carriez.") {
+                try? fm.removeItem(at: item)
+            }
+        }
+        let legacyLogs = lib.appendingPathComponent("Logs/RustDesk")
+        if fm.fileExists(atPath: legacyLogs.path) {
+            try? fm.removeItem(at: legacyLogs)
+        }
     }
     #endif
 

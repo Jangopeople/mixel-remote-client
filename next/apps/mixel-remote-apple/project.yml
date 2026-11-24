@@ -8,8 +8,8 @@ options:
   createIntermediateGroups: true
 settings:
   base:
-    MARKETING_VERSION: "2.2.2"
-    CURRENT_PROJECT_VERSION: "230"
+    MARKETING_VERSION: "2.2.3"
+    CURRENT_PROJECT_VERSION: "231"
     DEVELOPMENT_TEAM: 5277F8NDH4
     SWIFT_VERSION: "5.0"
     ENABLE_HARDENED_RUNTIME: YES
@@ -41,7 +41,11 @@ targets:
         LSMinimumSystemVersion: "13.0"
         NSHumanReadableCopyright: © Mixel IT and Corporate Services
         CFBundleDevelopmentRegion: en
-        CFBundleLocalizations: [en, de, fr, it]
+        CFBundleLocalizations: [en, de, fr, it, es, pt, nl]
+        CFBundleURLTypes:
+          - CFBundleURLName: ch.mixel.remote.url
+            CFBundleURLSchemes:
+              - mixel-remote
         NSAppleEventsUsageDescription: Mixel Remote opens the Mixel Remote Support app for support connections.
     settings:
       base:

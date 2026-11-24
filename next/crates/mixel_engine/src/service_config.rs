@@ -12,6 +12,8 @@ pub struct ServiceConfig {
     pub identity_url: String,
     pub public_key: String,
     pub signaling_url: String,
+    #[serde(default)]
+    pub signaling_urls: Vec<String>,
     pub authority_url: String,
     pub authority_keys: Vec<String>,
     #[serde(default = "default_provider")]
@@ -75,6 +77,16 @@ impl ServiceConfig {
                     .map_err(|_| "The public service key is missing")?,
                 signaling_url: std::env::var("MIXEL_SIGNALING_URL")
                     .map_err(|_| "The connection-service configuration is missing")?,
+                signaling_urls: std::env::var("MIXEL_SIGNALING_URLS")
+                    .ok()
+                    .map(|raw| {
+                        raw.split(',')
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 authority_url: std::env::var("MIXEL_PEER_AUTHORITY_URL")
                     .map_err(|_| "The device identity authority is not configured")?,
                 authority_keys: std::env::var("MIXEL_PEER_AUTHORITY_PUBLIC_KEYS")
@@ -154,15 +166,38 @@ impl ServiceConfig {
         serde_json::from_slice(bytes)
             .map_err(|_| "The bundled service configuration is invalid".into())
     }
+    /// Ordered, deduplicated list of signaling WebSocket endpoints (primary first, followed by
+    /// backup hosts from `signaling_urls` for automatic R-1 failover).
+    pub fn signaling_endpoints(&self) -> Result<Vec<reqwest::Url>, String> {
+        let mut out = Vec::new();
+        for raw in std::iter::once(&self.signaling_url).chain(self.signaling_urls.iter()) {
+            let parsed: reqwest::Url = raw
+                .parse()
+                .map_err(|_| "Invalid connection-service configuration")?;
+            if !out.iter().any(|existing: &reqwest::Url| existing == &parsed) {
+                out.push(parsed);
+            }
+        }
+        if out.is_empty() {
+            return Err("The connection-service configuration is missing".into());
+        }
+        Ok(out)
+    }
+
     fn validate(&self) -> Result<(), String> {
         if self.schema != 2
             || self.identity_url.len() > 2048
             || self.signaling_url.len() > 2048
+            || self.signaling_urls.len() > 8
+            || self.signaling_urls.iter().any(|u| u.len() > 2048)
             || self.authority_url.len() > 2048
         {
             return Err("Unsupported service configuration".into());
         }
-        for raw in [&self.identity_url, &self.signaling_url, &self.authority_url] {
+        for raw in [&self.identity_url, &self.signaling_url, &self.authority_url]
+            .into_iter()
+            .chain(self.signaling_urls.iter())
+        {
             if raw
                 .chars()
                 .any(|value| value.is_ascii_control() || value.is_whitespace())
@@ -209,22 +244,23 @@ impl ServiceConfig {
             return Err("The device identity authority must use a public HTTPS origin".into());
         }
         self.roots()?;
-        let signaling: reqwest::Url = self
-            .signaling_url
-            .parse()
-            .map_err(|_| "Invalid connection-service URL")?;
-        // Lab builds only: a plain ws:// connection service on a private address (a second broker for speed checks).
-        let lab_plain = cfg!(feature = "qa-session")
-            && signaling.scheme() == "ws"
-            && signaling.host_str().is_some_and(|host| host.parse::<std::net::Ipv4Addr>().is_ok_and(|ip| ip.is_private() || ip.is_loopback()));
-        if (signaling.scheme() != "wss" && !lab_plain)
-            || signaling.host_str().is_none()
-            || !signaling.username().is_empty()
-            || signaling.password().is_some()
-            || signaling.query().is_some()
-            || signaling.fragment().is_some()
-        {
-            return Err("The Mixel connection service must use WSS without URL credentials".into());
+        for raw_sig in std::iter::once(&self.signaling_url).chain(self.signaling_urls.iter()) {
+            let signaling: reqwest::Url = raw_sig
+                .parse()
+                .map_err(|_| "Invalid connection-service URL")?;
+            // Lab builds only: a plain ws:// connection service on a private address (a second broker for speed checks).
+            let lab_plain = cfg!(feature = "qa-session")
+                && signaling.scheme() == "ws"
+                && signaling.host_str().is_some_and(|host| host.parse::<std::net::Ipv4Addr>().is_ok_and(|ip| ip.is_private() || ip.is_loopback()));
+            if (signaling.scheme() != "wss" && !lab_plain)
+                || signaling.host_str().is_none()
+                || !signaling.username().is_empty()
+                || signaling.password().is_some()
+                || signaling.query().is_some()
+                || signaling.fragment().is_some()
+            {
+                return Err("The Mixel connection service must use WSS without URL credentials".into());
+            }
         }
         if self.oauth_provider.is_empty()
             || self.oauth_provider.len() > 80
@@ -254,5 +290,34 @@ impl ServiceConfig {
         }
         signaling_server::delegated_auth::public_keys(&self.authority_keys.join(","))
             .map_err(|_| "Invalid identity authority public key".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn signaling_endpoints_deduplicates_primary_and_backups() {
+        let cfg = ServiceConfig {
+            schema: 2,
+            identity_url: "https://ism-api.mixel.ch".into(),
+            public_key: "sb_publishable_test".into(),
+            signaling_url: "wss://rs.mixel.ch:9444/v1/ws".into(),
+            signaling_urls: vec![
+                "wss://rs.mixel.ch:9444/v1/ws".into(),
+                "wss://rs2.mixel.ch:9444/v1/ws".into(),
+            ],
+            authority_url: "https://ism-api.mixel.ch".into(),
+            authority_keys: vec!["a".repeat(64)],
+            oauth_provider: "keycloak".into(),
+            sso_domain: None,
+            relay_only: false,
+            customer_signup: true,
+        };
+        let endpoints = cfg.signaling_endpoints().unwrap();
+        assert_eq!(endpoints.len(), 2);
+        assert_eq!(endpoints[0].as_str(), "wss://rs.mixel.ch:9444/v1/ws");
+        assert_eq!(endpoints[1].as_str(), "wss://rs2.mixel.ch:9444/v1/ws");
     }
 }

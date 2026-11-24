@@ -1287,10 +1287,7 @@ impl RemoteSession {
         }
         identity.public_key()?;
         let config = crate::service_config::ServiceConfig::load()?;
-        let url: reqwest::Url = config
-            .signaling_url
-            .parse()
-            .map_err(|_| "Invalid connection-service configuration")?;
+        let urls = config.signaling_endpoints()?;
         inner.generation = inner
             .generation
             .checked_add(1)
@@ -1342,7 +1339,7 @@ impl RemoteSession {
                 generation,
                 auth,
                 identity,
-                url,
+                urls,
                 credential,
                 cancel.clone(),
                 tx,
@@ -3502,7 +3499,7 @@ async fn supervise(
     generation: u64,
     auth: RegistrationAuth,
     identity: Arc<IdentityState>,
-    url: reqwest::Url,
+    urls: Vec<reqwest::Url>,
     initial: Option<Credential>,
     cancel: Arc<AtomicBool>,
     tx: mpsc::Sender<Command>,
@@ -3513,12 +3510,14 @@ async fn supervise(
     drop(initial);
     let mut backoff = Backoff::default();
     let mut ever_ready = false;
+    let mut endpoint_index: usize = 0;
     // A session whose media connection survives a lost connection to the connection service (resume).
     let mut keep: Option<Carry> = None;
     loop {
         if cancel.load(Ordering::Acquire) {
             return Ok(());
         }
+        let url = urls[endpoint_index].clone();
         // The kept session's media is bound to the registration's flag: the next registration continues it.
         let attempt = keep.as_ref().map_or_else(|| Arc::new(AtomicBool::new(false)), |kept| kept.attempt.clone());
         let guard = AttemptGuard(attempt.clone(), false);
@@ -3548,6 +3547,7 @@ async fn supervise(
             Ok(()) => return Ok(()),
             Err(error) => error,
         };
+        crate::app_log::info("signaling", &format!("endpoint={} ended: {}", url, error.message));
         // Lab builds only: why the registration ended (a running session ends with it).
         #[cfg(feature = "qa-session")]
         eprintln!("QA registration ended at clock {}: {}", crate::remote_control::qa_wall_clock(), error.message);
@@ -3566,7 +3566,16 @@ async fn supervise(
         if keep.as_ref().is_some_and(|kept| kept.since.elapsed() >= RESUME_WINDOW) {
             keep = None;
         }
-        let delay=backoff.next(error.registered_for).ok_or_else(||format!("{}; automatic reconnect attempts exhausted. Register this computer again when the network is available.",error.message))?;
+        let mut delay = backoff.next(error.registered_for).ok_or_else(||format!("{}; automatic reconnect attempts exhausted. Register this computer again when the network is available.",error.message))?;
+        if urls.len() > 1 {
+            endpoint_index = (endpoint_index + 1) % urls.len();
+            // R-1: Fast failover to the next signaling host so sessions recover within seconds.
+            delay = delay.min(Duration::from_secs(1));
+            crate::app_log::info(
+                "signaling",
+                &format!("failing over to endpoint {}/{}: {}", endpoint_index + 1, urls.len(), urls[endpoint_index]),
+            );
+        }
         {
             let carried: Vec<Uuid> = keep.as_ref().map(|kept| kept.peers.iter().filter(|peer| !peer.host).map(|peer| peer.ui).collect()).unwrap_or_default();
             let mut inner = state.0.lock().await;
