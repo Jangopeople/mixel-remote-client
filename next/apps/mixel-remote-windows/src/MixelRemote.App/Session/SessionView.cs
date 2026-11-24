@@ -478,8 +478,18 @@ internal sealed class SessionView : Grid
             var chosen = modePicker.SelectedIndex switch { 1 => "speed", 2 => "quality", _ => "auto" };
             if (chosen != session.QualityMode) session.SetQualityMode(chosen);
         };
+        var connPath = session.Remote.ConnectionPath is { Length: > 0 } p
+            ? $"{(p == "relay" ? L("Relay") : L("Direct"))} · {(session.Remote.ConnectionProtocol ?? "udp").ToUpperInvariant()}"
+            : "—";
+        var bitrateText = session.Remote.BitrateKbps is { } kbps
+            ? (kbps >= 1000 ? $"{kbps / 1000.0:0.0} Mbps" : $"{kbps} kbps")
+            : "—";
+        var rttText = session.Remote.RttMs is { } rtt ? $"{rtt} ms" : "—";
         var facts = Ui.Column(8,
-            Ui.Heading(L("Picture quality")),
+            Ui.Heading(L("Connection & picture")),
+            Ui.Split(Ui.Text(L("Connection"), secondary: true), Ui.Text(connPath)),
+            Ui.Split(Ui.Text(L("Round-trip time"), secondary: true), Ui.Text(rttText)),
+            Ui.Split(Ui.Text(L("Bitrate"), secondary: true), Ui.Text(bitrateText)),
             Ui.Split(Ui.Text(L("Pictures per second"), secondary: true), Ui.Text(L("%d fps", session.Fps))),
             Ui.Split(Ui.Text(L("Resolution"), secondary: true), Ui.Text(session.Frame is { } frame ? $"{frame.Width} × {frame.Height}" : "—")),
             Ui.Split(Ui.Text(L("Video decoding"), secondary: true), Ui.Text(L("Mixel engine"))),

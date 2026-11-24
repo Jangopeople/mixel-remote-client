@@ -151,6 +151,14 @@ pub struct Status {
     pub password_session: Option<PasswordSessionView>,
     /// D1: the administrator's setting for unattended access on this device (`device_policy`), when known.
     pub unattended_allowed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_protocol: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rtt_ms: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bitrate_kbps: Option<u32>,
     #[serde(skip)]
     password_ends: Option<std::time::Instant>,
     #[serde(skip)]
@@ -309,6 +317,10 @@ impl Default for Status {
             reconnect_failed: false,
             password_session: None,
             unattended_allowed: None,
+            connection_path: None,
+            connection_protocol: None,
+            rtt_ms: None,
+            bitrate_kbps: None,
             password_ends: None,
             password_flag: false,
             code_expires_at: None,
@@ -2386,7 +2398,7 @@ impl RemoteSession {
         video.take(session)
     }
 
-    async fn change(&self, generation: u64, update: impl FnOnce(&mut Status)) {
+    pub(crate) async fn change(&self, generation: u64, update: impl FnOnce(&mut Status)) {
         let mut inner = self.0.lock().await;
         if inner.generation != generation || inner.cancel.load(Ordering::Acquire) {
             return;
@@ -2524,7 +2536,7 @@ impl RemoteSession {
         Ok(())
     }
     /// Changes what one technician session shows (phase, message).
-    async fn slot_change(&self, generation: u64, key: Uuid, update: impl FnOnce(&mut crate::remote_sessions::SessionStatus)) {
+    pub(crate) async fn slot_change(&self, generation: u64, key: Uuid, update: impl FnOnce(&mut crate::remote_sessions::SessionStatus)) {
         let mut inner = self.0.lock().await;
         if inner.generation != generation || inner.cancel.load(Ordering::Acquire) {
             return;
@@ -3245,6 +3257,104 @@ fn remember_gone(gone: &mut std::collections::VecDeque<(Uuid, std::time::Instant
 }
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+fn env_proxy_for(target_host: &str) -> Option<String> {
+    if let Ok(no_proxy) = std::env::var("NO_PROXY").or_else(|_| std::env::var("no_proxy")) {
+        for entry in no_proxy.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            if entry == "*"
+                || target_host.eq_ignore_ascii_case(entry)
+                || target_host
+                    .to_ascii_lowercase()
+                    .ends_with(&format!(".{}", entry.trim_start_matches('.').to_ascii_lowercase()))
+            {
+                return None;
+            }
+        }
+    }
+    for key in ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"] {
+        if let Ok(val) = std::env::var(key) {
+            let trimmed = val.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_owned());
+            }
+        }
+    }
+    None
+}
+
+async fn connect_signaling_socket(
+    url: &reqwest::Url,
+    config: WebSocketConfig,
+) -> Result<(Socket, tokio_tungstenite::tungstenite::handshake::client::Response), Failure> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let host = url.host_str().unwrap_or_default();
+    let port = url.port_or_known_default().unwrap_or(443);
+    if let Some(proxy_raw) = env_proxy_for(host)
+        && let Ok(proxy_url) = reqwest::Url::parse(&proxy_raw)
+        && matches!(proxy_url.scheme(), "http" | "https")
+        && let Some(proxy_host) = proxy_url.host_str()
+    {
+        let proxy_port = proxy_url.port_or_known_default().unwrap_or(8080);
+        crate::app_log::info(
+            "signaling",
+            &format!("connecting to {host}:{port} via HTTP proxy {proxy_host}:{proxy_port}"),
+        );
+        let mut tcp = tokio::net::TcpStream::connect((proxy_host, proxy_port))
+            .await
+            .map_err(|_| Failure::network("HTTP proxy connection failed"))?;
+        let mut req = format!("CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n");
+        if !proxy_url.username().is_empty() {
+            use base64::Engine as _;
+            let creds = format!(
+                "{}:{}",
+                proxy_url.username(),
+                proxy_url.password().unwrap_or_default()
+            );
+            let encoded = base64::engine::general_purpose::STANDARD.encode(creds);
+            req.push_str(&format!("Proxy-Authorization: Basic {encoded}\r\n"));
+        }
+        req.push_str("\r\n");
+        tcp.write_all(req.as_bytes())
+            .await
+            .map_err(|_| Failure::network("HTTP proxy CONNECT write failed"))?;
+        let mut resp = Vec::with_capacity(512);
+        let mut byte = [0u8; 1];
+        while resp.len() < 8192 {
+            let n = tcp
+                .read(&mut byte)
+                .await
+                .map_err(|_| Failure::network("HTTP proxy CONNECT read failed"))?;
+            if n == 0 {
+                return Err(Failure::network("HTTP proxy closed during CONNECT"));
+            }
+            resp.push(byte[0]);
+            if resp.ends_with(b"\r\n\r\n") {
+                break;
+            }
+        }
+        let header = String::from_utf8_lossy(&resp);
+        let status_ok = header
+            .lines()
+            .next()
+            .is_some_and(|line| line.contains(" 200"));
+        if !status_ok {
+            crate::app_log::info("signaling", "HTTP proxy CONNECT rejected");
+            return Err(Failure::network("HTTP proxy rejected CONNECT tunnel"));
+        }
+        return tokio_tungstenite::client_async_tls_with_config(
+            url.as_str(),
+            tcp,
+            Some(config),
+            None,
+        )
+        .await
+        .map_err(crate::remote_recovery::socket);
+    }
+    crate::app_log::info("signaling", &format!("connecting direct to {host}:{port}"));
+    connect_async_with_config(url.as_str(), Some(config), false)
+        .await
+        .map_err(crate::remote_recovery::socket)
+}
 struct LeaseTask(JoinHandle<()>);
 impl Drop for LeaseTask {
     fn drop(&mut self) {
@@ -3541,10 +3651,9 @@ async fn run(
         .max_message_size(Some(MAX_MESSAGE))
         .max_frame_size(Some(MAX_MESSAGE));
     let connect = async {
-        tokio::time::timeout(Duration::from_secs(12), connect_async_with_config(url.as_str(), Some(config), false))
+        tokio::time::timeout(Duration::from_secs(12), connect_signaling_socket(&url, config))
             .await
             .map_err(|_| Failure::network("Secure connection timed out"))?
-            .map_err(crate::remote_recovery::socket)
     };
     let prepare = async {
         let enrolled = auth.enrollment(&initial, &identity).await?;
@@ -3725,7 +3834,7 @@ async fn run(
                     }
                     let now=SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_|"System clock is unavailable")?.as_secs();
                     if now>=authorized_until || pending_renewal.is_some_and(|deadline|std::time::Instant::now()>=deadline) {return Err(Failure::network("Device authorization expired; reconnecting"));}
-                    if last_activity.elapsed()>Duration::from_secs(150){return Err(Failure::network("Connection-service heartbeat expired"));}
+                    if last_activity.elapsed()>Duration::from_secs(50){crate::app_log::info("signaling","heartbeat expired after 50s — reconnecting");return Err(Failure::network("Connection-service heartbeat expired"));}
                     let mut finished_retry:Vec<usize>=Vec::new();
                     for (position,active) in retries.iter_mut().enumerate(){
                         if ctrl.iter().any(|session|session.remote==active.host && session.signals.is_some()){

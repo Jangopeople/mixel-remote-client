@@ -94,6 +94,10 @@ public sealed record RemoteStatus
     /// <summary>The technician offers to show their screen in this meeting room: [session, room].</summary>
     public List<string>? MeetingOffer { get; init; }
     public string? CursorShape { get; init; }
+    public string? ConnectionPath { get; init; }
+    public string? ConnectionProtocol { get; init; }
+    public uint? RttMs { get; init; }
+    public uint? BitrateKbps { get; init; }
     public List<Colleague> Colleagues { get; init; } = [];
     public JoinRequest? JoinRequest { get; init; }
     public List<Invitation> Invitations { get; init; } = [];
@@ -138,6 +142,7 @@ public sealed record RemoteStatus
                 Received = Received, Control = Control, ControlPending = ControlPending, Clipboard = Clipboard, Files = Files, RecordingPermitted = RecordingPermitted,
                 Recording = Recording, RecordingParts = RecordingParts, Displays = Displays, Display = Display, DisplayAll = DisplayAll, PrintJobs = PrintJobs,
                 HostActions = HostActions, SigninId = SigninId, HostMacs = HostMacs, MeetingOffer = MeetingOffer, CursorShape = CursorShape, PeerFeatures = PeerFeatures,
+        ConnectionPath = ConnectionPath, ConnectionProtocol = ConnectionProtocol, RttMs = RttMs, BitrateKbps = BitrateKbps,
                 JoinedSession = JoinedSession, Switched = Switched, PasswordSession = PasswordSession, UnattendedSession = UnattendedSession, UnattendedRefused = UnattendedRefused,
             },
         ];
@@ -194,6 +199,10 @@ public sealed record SessionStatus
     public List<string> HostMacs { get; init; } = [];
     public List<string>? MeetingOffer { get; init; }
     public string? CursorShape { get; init; }
+    public string? ConnectionPath { get; init; }
+    public string? ConnectionProtocol { get; init; }
+    public uint? RttMs { get; init; }
+    public uint? BitrateKbps { get; init; }
     public List<string> PeerFeatures { get; init; } = [];
     public bool JoinedSession { get; init; }
     public bool Switched { get; init; }
@@ -225,6 +234,7 @@ public sealed record SessionStatus
         Received = Received, Control = Control, ControlPending = ControlPending, Clipboard = Clipboard, Files = Files, RecordingPermitted = RecordingPermitted,
         Recording = Recording, RecordingParts = RecordingParts, Displays = Displays, Display = Display, DisplayAll = DisplayAll, PrintJobs = PrintJobs,
         HostActions = HostActions, SigninId = SigninId, HostMacs = HostMacs, MeetingOffer = MeetingOffer, CursorShape = CursorShape, PeerFeatures = PeerFeatures,
+        ConnectionPath = ConnectionPath, ConnectionProtocol = ConnectionProtocol, RttMs = RttMs, BitrateKbps = BitrateKbps,
         JoinedSession = JoinedSession, Switched = Switched,
         // The engine reports these per session: the top-level values (one session) belong to an older engine only.
         PasswordSession = PasswordSession, UnattendedSession = UnattendedSession, UnattendedRefused = UnattendedRefused,

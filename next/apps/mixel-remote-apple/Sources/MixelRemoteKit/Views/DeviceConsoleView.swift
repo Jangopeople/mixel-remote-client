@@ -623,13 +623,37 @@ struct ConnectNotices: View {
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 10) {
+            ForEach(workspace.endedNotices) { notice in
+                ended(notice)
+            }
             ForEach(workspace.readyNotices, id: \.self) { peer in
                 if let tab = workspace.tab(peer) { ready(tab) }
             }
             if let attempt = workspace.attempt { panel(attempt) }
         }
+        .animation(.easeOut(duration: 0.18), value: workspace.endedNotices)
         .animation(.easeOut(duration: 0.18), value: workspace.readyNotices)
         .animation(.easeOut(duration: 0.18), value: workspace.attempt)
+    }
+
+    private func ended(_ notice: WorkspaceModel.EndedNotice) -> some View {
+        HStack(spacing: 10) {
+            OSTile(os: notice.os, dot: Theme.warning, size: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: notice.name).font(.system(size: 13, weight: .semibold))
+                Text(verbatim: notice.reason).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            Button { workspace.dismissEndedNotice(notice.peer) } label: { Image(systemName: "xmark").font(.system(size: 10, weight: .bold)) }
+                .buttonStyle(.plain).foregroundStyle(.secondary)
+                .help(L("Dismiss"))
+                .accessibilityLabel(Text(verbatim: L("Dismiss")))
+        }
+        .padding(12)
+        .frame(width: 380)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.warning.opacity(0.45)))
+        .shadow(color: .black.opacity(0.15), radius: 14, y: 6)
     }
 
     private func ready(_ tab: WorkspaceModel.SessionTab) -> some View {

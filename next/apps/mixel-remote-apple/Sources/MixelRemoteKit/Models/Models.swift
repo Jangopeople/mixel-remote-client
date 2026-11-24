@@ -71,6 +71,18 @@ public struct Refusal: Codable, Equatable, Sendable {
     public init(peer: UInt32, message: String, at: UInt64) { self.peer = peer; self.message = message; self.at = at }
 }
 
+public struct ConnectionPrefs: Codable, Equatable, Sendable {
+    public var relayOnly: Bool
+    public var idleTimeoutMinutes: UInt32
+    public var logDir: String?
+}
+
+public struct DiagnosticsExport: Codable, Equatable, Sendable {
+    public var path: String
+    public var sizeBytes: Int
+    public var logDir: String?
+}
+
 public struct RemoteStatus: Codable, Equatable, Sendable {
     public var controllerOnly: Bool
     public var platform: String
@@ -135,6 +147,10 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
     /// Why the last request that never became a session was refused; kept apart from `message`, which belongs to
     /// the session in front (engine 2.1.0, `last_refusal`).
     public var lastRefusal: Refusal?
+    public var connectionPath: String?
+    public var connectionProtocol: String?
+    public var rttMs: UInt32?
+    public var bitrateKbps: UInt32?
     public var isReconnecting: Bool { reconnecting == true }
 
     /// A copy with rapidly incrementing counters (`received`, `sessions[].received`, `sessions[].quality`)
@@ -272,6 +288,10 @@ public struct RemoteStatus: Codable, Equatable, Sendable {
         copy.peerFeatures = item.peerFeatures
         copy.joinedSession = item.joinedSession
         copy.switched = item.switched
+        copy.connectionPath = item.connectionPath ?? copy.connectionPath
+        copy.connectionProtocol = item.connectionProtocol ?? copy.connectionProtocol
+        copy.rttMs = item.rttMs ?? copy.rttMs
+        copy.bitrateKbps = item.bitrateKbps ?? copy.bitrateKbps
         // The one-time-password and unattended flags belong to the session itself (engine 2.1.0 reports them per
         // `sessions[]` item; an older engine's single session carries the status's own, see `viewerSessions`).
         copy.passwordSession = item.passwordSession
@@ -323,6 +343,10 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
     public var unattendedSession: Bool
     /// Unattended access was asked for, but that computer is not set up for it: the person there is asked instead.
     public var unattendedRefused = false
+    public var connectionPath: String?
+    public var connectionProtocol: String?
+    public var rttMs: UInt32?
+    public var bitrateKbps: UInt32?
 
     /// A request still waiting for Accept or negotiating (not a session asking its computer again).
     public var isNewRequest: Bool { ["outgoing", "negotiating"].contains(phase) && !reconnecting && !reconnectFailed }
@@ -347,6 +371,7 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
         case id, session, peer, device, phase, message, consent, received, control, controlPending, clipboard, files, recordingPermitted, recording, recordingParts, displays, display
         case displayAll, printJobs, hostActions, signinId, hostMacs, meetingOffer, cursorShape, peerFeatures, joinedSession, switched, quality, startedAt
         case reconnecting, reconnectFailed, passwordSession, unattendedSession, unattendedRefused
+        case connectionPath, connectionProtocol, rttMs, bitrateKbps
     }
 
     public init(from decoder: Decoder) throws {
@@ -384,6 +409,10 @@ public struct RemoteSessionItem: Codable, Equatable, Sendable, Identifiable {
         passwordSession = try? c.decodeIfPresent(PasswordSessionView.self, forKey: .passwordSession)
         unattendedSession = (try? c.decodeIfPresent(Bool.self, forKey: .unattendedSession)) ?? false
         unattendedRefused = (try? c.decodeIfPresent(Bool.self, forKey: .unattendedRefused)) ?? false
+        connectionPath = try? c.decodeIfPresent(String.self, forKey: .connectionPath)
+        connectionProtocol = try? c.decodeIfPresent(String.self, forKey: .connectionProtocol)
+        rttMs = try? c.decodeIfPresent(UInt32.self, forKey: .rttMs)
+        bitrateKbps = try? c.decodeIfPresent(UInt32.self, forKey: .bitrateKbps)
     }
 
     public func encode(to encoder: Encoder) throws {

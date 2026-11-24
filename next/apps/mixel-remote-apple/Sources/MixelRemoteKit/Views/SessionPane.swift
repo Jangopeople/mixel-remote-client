@@ -391,7 +391,19 @@ struct SessionBar: View {
         .accessibilityValue(Text(verbatim: L("%d fps", session.fps)))
         .popover(isPresented: $quality, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 8) {
-                Text(verbatim: L("Picture quality")).font(.headline)
+                Text(verbatim: L("Connection & picture")).font(.headline)
+                if let path = remote.connectionPath {
+                    let proto = (remote.connectionProtocol ?? "udp").uppercased()
+                    let pathLabel = path == "relay" ? L("Relay") : L("Direct")
+                    LabeledContent { Text(verbatim: "\(pathLabel) · \(proto)").monospacedDigit() } label: { Text(verbatim: L("Connection")) }
+                }
+                if let rtt = remote.rttMs {
+                    LabeledContent { Text(verbatim: "\(rtt) ms").monospacedDigit() } label: { Text(verbatim: L("Round-trip time")) }
+                }
+                if let kbps = remote.bitrateKbps {
+                    let rateText = kbps >= 1000 ? String(format: "%.1f Mbps", Double(kbps) / 1000.0) : "\(kbps) kbps"
+                    LabeledContent { Text(verbatim: rateText).monospacedDigit() } label: { Text(verbatim: L("Bitrate")) }
+                }
                 LabeledContent { Text(verbatim: L("%d fps", session.fps)).monospacedDigit() } label: { Text(verbatim: L("Pictures per second")) }
                 LabeledContent { Text(verbatim: session.size.width > 0 ? "\(Int(session.size.width)) × \(Int(session.size.height))" : "—").monospacedDigit() } label: { Text(verbatim: L("Resolution")) }
                 LabeledContent {

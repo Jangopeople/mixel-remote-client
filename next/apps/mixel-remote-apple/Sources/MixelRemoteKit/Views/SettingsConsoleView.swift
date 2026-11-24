@@ -397,6 +397,36 @@ struct SettingsConsoleView: View {
 
     private var about: some View {
         VStack(alignment: .leading, spacing: 10) {
+            heading(L("Connection & diagnostics"))
+            ConsoleCard {
+                VStack(alignment: .leading, spacing: 0) {
+                    SettingRow(
+                        title: L("Relay-only connections"),
+                        help: L("Route all sessions through the Mixel relay instead of direct LAN/NAT paths (hides IP addresses).")
+                    ) {
+                        ConsoleSwitch(isOn: Binding(get: { settings.relayOnly }, set: { settings.setRelayOnly($0) }), label: L("Relay-only connections"))
+                    }
+                    SettingRow(
+                        title: L("Unattended idle timeout"),
+                        help: L("Automatically end unattended sessions after inactivity.")
+                    ) {
+                        Picker("", selection: Binding(get: { settings.idleTimeoutMinutes }, set: { settings.setIdleTimeout($0) })) {
+                            Text(verbatim: L("Off")).tag(UInt32(0))
+                            Text(verbatim: L("15 min")).tag(UInt32(15))
+                            Text(verbatim: L("30 min")).tag(UInt32(30))
+                            Text(verbatim: L("60 min")).tag(UInt32(60))
+                        }
+                        .labelsHidden()
+                        .frame(width: 110)
+                    }
+                    SettingRow(
+                        title: L("Send diagnostics"),
+                        help: L("Save a sanitized log bundle (sign-in, signaling, connection path, performance) to attach to a support ticket.")
+                    ) {
+                        Button(L("Export diagnostics")) { settings.exportDiagnostics() }
+                    }
+                }
+            }
             heading(L("About and legal"))
             ConsoleCard { AboutBlock(app: app).padding(16) }
         }

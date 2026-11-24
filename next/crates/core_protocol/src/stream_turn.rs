@@ -123,6 +123,7 @@ struct StreamSocket {
     pipes: HashMap<SocketAddr, Arc<Pipe>>,
     incoming: Mutex<mpsc::Receiver<Received>>,
     udp_writes: Arc<AtomicU64>,
+    udp_reads: Arc<AtomicU64>,
 }
 impl fmt::Debug for StreamSocket {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -193,7 +194,11 @@ impl AsyncUdpSocket for StreamSocket {
             return Poll::Ready(Ok(1));
         }
         drop(incoming);
-        self.udp.poll_recv(cx, bufs, meta)
+        let result = self.udp.poll_recv(cx, bufs, meta);
+        if matches!(result, Poll::Ready(Ok(n)) if n > 0) {
+            self.udp_reads.fetch_add(1, Ordering::Relaxed);
+        }
+        result
     }
 }
 impl Drop for StreamSocket {
@@ -209,6 +214,8 @@ pub(crate) struct StreamRuntime {
     routes: Vec<Route>,
     pipes: Mutex<Vec<Weak<Pipe>>>,
     udp_writes: Arc<AtomicU64>,
+    udp_reads: Arc<AtomicU64>,
+    stream_protocol: Arc<AtomicU64>,
 }
 impl fmt::Debug for StreamRuntime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -249,7 +256,7 @@ impl StreamRuntime {
             })
         });
         let defer = if has_udp_turn {
-            Duration::from_millis(350)
+            Duration::from_millis(1200)
         } else {
             Duration::ZERO
         };
@@ -323,9 +330,20 @@ impl StreamRuntime {
                 routes,
                 pipes: Mutex::new(vec![]),
                 udp_writes: Arc::new(AtomicU64::new(0)),
+                udp_reads: Arc::new(AtomicU64::new(0)),
+                stream_protocol: Arc::new(AtomicU64::new(0)),
             }),
             servers,
         )))
+    }
+    /// Returns `"tls"` or `"tcp"` if a stream TURN fallback pipe connected (and UDP did not answer),
+    /// otherwise `"udp"`.
+    pub(crate) fn active_protocol(&self) -> &'static str {
+        match self.stream_protocol.load(Ordering::Relaxed) {
+            2 => "tls",
+            1 => "tcp",
+            _ => "udp",
+        }
     }
     #[cfg(test)]
     pub(crate) fn physical_udp_writes(&self) -> u64 {
@@ -401,10 +419,18 @@ impl Runtime for StreamRuntime {
             registry.push(Arc::downgrade(&pipe));
             let owned = pipe.clone();
             let incoming = tx.clone();
+            let udp_reads = self.udp_reads.clone();
+            let stream_protocol = self.stream_protocol.clone();
             tokio::spawn(async move {
-                let result = std::panic::AssertUnwindSafe(run_pipe(&owned, stopped, incoming))
-                    .catch_unwind()
-                    .await;
+                let result = std::panic::AssertUnwindSafe(run_pipe(
+                    &owned,
+                    stopped,
+                    incoming,
+                    udp_reads,
+                    stream_protocol,
+                ))
+                .catch_unwind()
+                .await;
                 let error = match result {
                     Ok(result) => result.err().map(|error| error.to_string()),
                     Err(_) => Some("TURN stream worker panicked".into()),
@@ -418,6 +444,7 @@ impl Runtime for StreamRuntime {
             pipes,
             incoming: Mutex::new(rx),
             udp_writes: self.udp_writes.clone(),
+            udp_reads: self.udp_reads.clone(),
         }))
     }
     fn wrap_tcp_listener(
@@ -470,21 +497,24 @@ async fn run_pipe(
     pipe: &Arc<Pipe>,
     mut stopped: watch::Receiver<bool>,
     incoming: mpsc::Sender<Received>,
+    udp_reads: Arc<AtomicU64>,
+    stream_protocol: Arc<AtomicU64>,
 ) -> io::Result<()> {
     // When UDP TURN is also configured, give UDP TURN a head start so interactive video never
     // accidentally nominates TCP/TLS TURN (which suffers TCP head-of-line blocking on WAN),
-    // while UDP-blocked corporate firewalls still fall back seamlessly after `defer`.
+    // and skip opening TCP/TLS sockets completely once UDP TURN has already answered.
     if !pipe.route.defer.is_zero() {
         tokio::select! {
             _ = tokio::time::sleep(pipe.route.defer) => {}
             _ = stopped.changed() => return Ok(()),
         }
-        if *stopped.borrow() {
+        if *stopped.borrow() || udp_reads.load(Ordering::Relaxed) > 0 {
             return Ok(());
         }
     }
     let stream =
         tokio::select! {result=connect(&pipe.route)=>result?,_=stopped.changed()=>return Ok(())};
+    stream_protocol.store(if pipe.route.tls.is_some() { 2 } else { 1 }, Ordering::Relaxed);
     let (reader, mut writer) = tokio::io::split(stream);
     let source = pipe.route.alias;
     let mut read_task = AbortReader(tokio::spawn(read_packets(reader, incoming, source)));
@@ -568,6 +598,7 @@ mod receive_tests {
             pipes: HashMap::new(),
             incoming: Mutex::new(incoming),
             udp_writes: Arc::new(AtomicU64::new(0)),
+            udp_reads: Arc::new(AtomicU64::new(0)),
         };
 
         assert_eq!(socket.max_gro_segments(), expected);

@@ -82,6 +82,18 @@ pub struct SessionStatus {
     pub joined_session: bool,
     pub switched: bool,
     pub quality: Quality,
+    /// Connection path telemetry for the session toolbar (`"direct"` or `"relay"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_path: Option<String>,
+    /// Underlying transport protocol (`"udp"`, `"tcp"`, or `"tls"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_protocol: Option<String>,
+    /// Smoothed round-trip time in milliseconds, when measured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rtt_ms: Option<u32>,
+    /// Current media bitrate in kilobits per second, when measured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bitrate_kbps: Option<u32>,
     /// Seconds since the Unix epoch.
     pub started_at: u64,
     /// The computer went away or the connection service restarted: this session asks again by itself
@@ -244,6 +256,10 @@ impl Registry {
                 joined_session: false,
                 switched: false,
                 quality: Quality::default(),
+                connection_path: None,
+                connection_protocol: None,
+                rtt_ms: None,
+                bitrate_kbps: None,
                 started_at: SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |now| now.as_secs()),
                 reconnecting: false,
                 reconnect_failed: false,

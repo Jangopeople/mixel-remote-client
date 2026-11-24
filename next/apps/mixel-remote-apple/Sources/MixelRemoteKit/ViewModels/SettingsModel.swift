@@ -23,6 +23,9 @@ public final class SettingsModel: ObservableObject {
     @Published public private(set) var signInWorking = false
     @Published public var signInMessage = ""
     @Published public var language: String = Translator.shared.choice
+    @Published public var relayOnly = false
+    @Published public var idleTimeoutMinutes: UInt32 = 0
+    @Published public var diagnosticsPath = ""
     @Published public var error = ""
     @Published public var notice = ""
     /// "Stay signed in" chosen on the sign-in screen, before there is an account to remember. Applied
@@ -76,6 +79,10 @@ public final class SettingsModel: ObservableObject {
     public func load() async {
         if !app.isPhone { signInScreen = try? await app.engine.run("signin_screen_status") }
         startup = try? await app.engine.run("startup_settings")
+        if let prefs: ConnectionPrefs = try? await app.engine.run("get_connection_prefs") {
+            relayOnly = prefs.relayOnly
+            idleTimeoutMinutes = prefs.idleTimeoutMinutes
+        }
         removalPending = (try? await app.engine.run("device_removal_pending", as: Bool.self)) ?? false
         if !app.isPhone {
             printing = try? await app.engine.run("remote_printing_status")
@@ -95,6 +102,44 @@ public final class SettingsModel: ObservableObject {
             app.enrollment.forget()
         }
         removalPending = (try? await app.engine.run("device_removal_pending", as: Bool.self)) ?? false
+    }
+
+    public func setRelayOnly(_ enabled: Bool) {
+        relayOnly = enabled
+        Task {
+            do {
+                try await app.engine.perform("set_relay_only", ["enabled": enabled])
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    public func setIdleTimeout(_ minutes: UInt32) {
+        idleTimeoutMinutes = minutes
+        Task {
+            do {
+                try await app.engine.perform("set_idle_timeout", ["minutes": Int(minutes)])
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    public func exportDiagnostics() {
+        Task {
+            do {
+                let result: DiagnosticsExport = try await app.engine.run("export_diagnostics")
+                diagnosticsPath = result.path
+                notice = L("Diagnostics saved.")
+                #if os(macOS)
+                let url = URL(fileURLWithPath: result.path)
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+                #endif
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
     }
 
     public func setStaySignedIn(_ enabled: Bool) {

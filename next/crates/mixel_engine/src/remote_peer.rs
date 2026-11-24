@@ -434,10 +434,13 @@ async fn create_transport(
     };
     transport.map_err(|_| "Cannot create the native WebRTC transport".to_owned())
 }
-/// Whether a session's transport may publish only relay candidates (`MIXEL_RELAY_ONLY=1` forces strict relay-only;
+/// Whether a session's transport may publish only relay candidates (`service-config.json`,
+/// `MIXEL_RELAY_ONLY=1`, or user/company `relay_only` preference forces strict relay-only;
 /// otherwise direct LAN/STUN UDP candidates are gathered alongside TURN relay candidates for lowest latency).
 fn relay_only_transport(configured: bool) -> bool {
-    configured && crate::remote_control::lab_flag("MIXEL_RELAY_ONLY")
+    configured
+        || crate::remote_control::lab_flag("MIXEL_RELAY_ONLY")
+        || crate::app_log::relay_only_enabled()
 }
 
 async fn run(config: &mut Config, parts: Option<WarmParts>) -> Result<(), String> {
@@ -453,6 +456,17 @@ async fn run(config: &mut Config, parts: Option<WarmParts>) -> Result<(), String
         None => {
             let servers = std::mem::take(&mut config.ice_servers);
             let transport = create_transport(servers, config.relay_only).await?;
+            let path_label = if strict_relay { "relay" } else { "direct" };
+            crate::app_log::info(
+                "peer",
+                &format!(
+                    "session={} role={} transport={} protocol={}",
+                    config.session,
+                    if config.host { "host" } else { "viewer" },
+                    path_label,
+                    transport.active_protocol()
+                ),
+            );
             crate::qa_timeline::mark(if strict_relay { "transport created (relay only)" } else { "transport created (direct and relay)" });
             (transport, None)
         }
@@ -514,7 +528,12 @@ async fn run(config: &mut Config, parts: Option<WarmParts>) -> Result<(), String
         .await
         .map_err(|_| "WebRTC cleanup timed out".to_owned())
         .and_then(|value| value.map_err(|_| "WebRTC cleanup failed".into()));
-    result.and(closed)
+    let final_result = result.and(closed);
+    match &final_result {
+        Ok(()) => crate::app_log::info("peer", &format!("session={} ended cleanly", config.session)),
+        Err(reason) => crate::app_log::info("peer", &format!("session={} ended with error: {reason}", config.session)),
+    }
+    final_result
 }
 fn source_size(config: &Config) -> Result<(usize, usize), String> {
     source_size_within(config, (1280.0, 720.0))
@@ -2117,6 +2136,16 @@ async fn host_media(
             perf_bytes += encoded.annex_b.len();
             if perf_logged.elapsed() >= Duration::from_secs(5) {
                 let secs = perf_logged.elapsed().as_secs_f64().max(0.1);
+                let kbps = (perf_bytes as f64 * 8.0 / secs / 1000.0).round() as u32;
+                let rtt = rate.base_delay().as_millis().min(u32::MAX as u128) as u32;
+                let path_str = if relay_only_transport(config.relay_only) { "relay" } else { "direct" };
+                let proto_str = transport.active_protocol();
+                config.state.change(config.generation, |status| {
+                    status.connection_path = Some(path_str.into());
+                    status.connection_protocol = Some(proto_str.into());
+                    status.rtt_ms = Some(rtt);
+                    status.bitrate_kbps = Some(kbps);
+                }).await;
                 perf_log(&format!(
                     "host fps={:.1} kbps={:.0} size={}x{} target_kbps={} pace_kBs={:.0} deliv_kBs={:.0} rtt_ms={} queue_ms={} inflight_kB={} enc={}",
                     f64::from(perf_frames) / secs,
@@ -2134,6 +2163,17 @@ async fn host_media(
                 perf_frames = 0;
                 perf_bytes = 0;
                 perf_logged = Instant::now();
+            }
+            // Item 10: unattended idle-session timeout (when configured in Settings).
+            if !config.confirm {
+                let timeout_mins = crate::app_log::idle_timeout_minutes();
+                if timeout_mins > 0
+                    && control.controller_idle_for() >= Duration::from_secs(u64::from(timeout_mins) * 60)
+                {
+                    let reason = format!("Session ended after {timeout_mins} min of inactivity");
+                    crate::app_log::info("peer", &format!("session={} {reason}", config.session));
+                    return Err(reason);
+                }
             }
             // The encoder follows the pace and user quality preference (`Auto` / `Speed` / `Quality`).
             let mode_changed = control.quality_mode() != quality_mode;
@@ -2679,13 +2719,28 @@ async fn viewer_media(
                             && !recording.as_ref().is_some_and(|scope| scope.is_recording());
                         perf_v_frames += 1;
                         perf_v_bytes += frame.len();
-                        if perf_v_at.elapsed() >= Duration::from_secs(5) {
+                        if perf_v_at.elapsed() >= Duration::from_secs(2) {
                             let secs = perf_v_at.elapsed().as_secs_f64().max(0.1);
+                            let kbps = (perf_v_bytes as f64 * 8.0 / secs / 1000.0).round() as u32;
+                            let path_str = if relay_only_transport(config.relay_only) { "relay" } else { "direct" };
+                            let proto_str = transport.active_protocol();
+                            config.state.slot_change(config.generation, config.slot, |view| {
+                                view.connection_path = Some(path_str.into());
+                                view.connection_protocol = Some(proto_str.into());
+                                view.bitrate_kbps = Some(kbps);
+                            }).await;
+                            config.state.change(config.generation, |status| {
+                                status.connection_path = Some(path_str.into());
+                                status.connection_protocol = Some(proto_str.into());
+                                status.bitrate_kbps = Some(kbps);
+                            }).await;
                             perf_log(&format!(
-                                "viewer fps={:.1} kbps={:.0} mode={}",
+                                "viewer fps={:.1} kbps={:.0} mode={} path={} proto={}",
                                 f64::from(perf_v_frames) / secs,
                                 perf_v_bytes as f64 * 8.0 / secs / 1000.0,
                                 if compressed { "hw" } else { "sw" },
+                                path_str,
+                                proto_str,
                             ));
                             perf_v_frames = 0;
                             perf_v_bytes = 0;

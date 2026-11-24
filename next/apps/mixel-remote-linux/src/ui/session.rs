@@ -664,9 +664,25 @@ impl SessionView {
         inner.set_margin_bottom(12);
         inner.set_margin_start(12);
         inner.set_margin_end(12);
-        inner.append(&heading(&t("Picture quality")));
+        inner.append(&heading(&t("Connection & picture")));
         let size_text = if session.size.0 > 0 { format!("{} × {}", session.size.0, session.size.1) } else { "—".into() };
-        for (title, value) in [(t("Pictures per second"), quality_title.clone()), (t("Picture size"), size_text)] {
+        let conn_text = match remote.connection_path.as_deref() {
+            Some("relay") => format!("{} · {}", t("Relay"), remote.connection_protocol.as_deref().unwrap_or("udp").to_uppercase()),
+            Some(_) => format!("{} · {}", t("Direct"), remote.connection_protocol.as_deref().unwrap_or("udp").to_uppercase()),
+            None => "—".into(),
+        };
+        let rtt_text = remote.rtt_ms.map_or_else(|| "—".into(), |ms| format!("{ms} ms"));
+        let bitrate_text = remote.bitrate_kbps.map_or_else(
+            || "—".into(),
+            |kbps| if kbps >= 1000 { format!("{:.1} Mbps", f64::from(kbps) / 1000.0) } else { format!("{kbps} kbps") },
+        );
+        for (title, value) in [
+            (t("Connection"), conn_text),
+            (t("Round-trip time"), rtt_text),
+            (t("Bitrate"), bitrate_text),
+            (t("Pictures per second"), quality_title.clone()),
+            (t("Picture size"), size_text),
+        ] {
             let row = hbox(16);
             let k = dim(&title);
             k.set_hexpand(true);

@@ -99,6 +99,10 @@ pub struct RemoteStatus {
     pub unattended_session: bool,
     /// Unattended was asked for, but that computer is not set up for it: the person there is asked instead.
     pub unattended_refused: bool,
+    pub connection_path: Option<String>,
+    pub connection_protocol: Option<String>,
+    pub rtt_ms: Option<u32>,
+    pub bitrate_kbps: Option<u32>,
     pub pairing: Option<PairingPrompt>,
     pub pairing_message: Option<String>,
     pub code_required: bool,
@@ -201,6 +205,10 @@ pub struct SessionItem {
     pub unattended_session: bool,
     /// Unattended was asked for, but that computer is not set up for it: the person there is asked instead.
     pub unattended_refused: bool,
+    pub connection_path: Option<String>,
+    pub connection_protocol: Option<String>,
+    pub rtt_ms: Option<u32>,
+    pub bitrate_kbps: Option<u32>,
 }
 
 /// Where one session's connection to its computer stands.
@@ -307,6 +315,10 @@ impl RemoteStatus {
             password_session: self.password_session.clone(),
             unattended_session: self.unattended_session,
             unattended_refused: self.unattended_refused,
+            connection_path: self.connection_path.clone(),
+            connection_protocol: self.connection_protocol.clone(),
+            rtt_ms: self.rtt_ms,
+            bitrate_kbps: self.bitrate_kbps,
             ..SessionItem::default()
         }]
     }
@@ -363,6 +375,10 @@ impl RemoteStatus {
         view.password_session = item.password_session.clone();
         view.unattended_session = item.unattended_session;
         view.unattended_refused = item.unattended_refused;
+        view.connection_path = item.connection_path.clone().or(view.connection_path);
+        view.connection_protocol = item.connection_protocol.clone().or(view.connection_protocol);
+        view.rtt_ms = item.rtt_ms.or(view.rtt_ms);
+        view.bitrate_kbps = item.bitrate_kbps.or(view.bitrate_kbps);
         view.session_reconnecting = item.reconnecting && !item.reconnect_failed;
         view.session_reconnect_failed = item.reconnect_failed;
         view

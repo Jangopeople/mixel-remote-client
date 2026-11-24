@@ -467,6 +467,25 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
         }
         // ---- The connection and sessions ----
         "remote_status" => out(remote.status().await),
+        "get_connection_prefs" => out(json!({
+            "relay_only": crate::app_log::relay_only_enabled(),
+            "idle_timeout_minutes": crate::app_log::idle_timeout_minutes(),
+            "log_dir": crate::app_log::log_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
+        })),
+        "set_relay_only" => {
+            let enabled: bool = args.get("enabled")?;
+            crate::app_log::set_relay_only(enabled)?;
+            out(json!({ "relay_only": enabled }))
+        }
+        "set_idle_timeout" => {
+            let minutes: u32 = args.get("minutes")?;
+            crate::app_log::set_idle_timeout_minutes(minutes)?;
+            out(json!({ "idle_timeout_minutes": crate::app_log::idle_timeout_minutes() }))
+        }
+        "export_diagnostics" => {
+            let version = option_env!("MIXEL_ENGINE_APP_VERSION").unwrap_or("2.1.27");
+            out(crate::app_log::export_diagnostics(version)?)
+        }
         // LAB builds only: one live session as technician, the same on every system (`qa_live.rs`).
         #[cfg(feature = "qa-session")]
         "qa_live_technician" => out(Box::pin(crate::qa_live::technician(

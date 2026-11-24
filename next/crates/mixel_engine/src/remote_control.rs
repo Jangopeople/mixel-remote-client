@@ -256,6 +256,7 @@ pub struct ControlPipe {
     report_unsupported_input: bool,
     last_idle_sent: Instant,
     pub last_video_idle: Instant,
+    last_controller_activity: Instant,
     last_keyframe_request: Option<Instant>,
     force_keyframe: bool,
     /// Technician: the host uses receive reports (`video_rate::FEATURE`).
@@ -448,6 +449,7 @@ impl ControlPipe {
             report_unsupported_input: peer_supports_input_result,
             last_idle_sent: Instant::now(),
             last_video_idle: Instant::now(),
+            last_controller_activity: Instant::now(),
             last_keyframe_request: None,
             force_keyframe: false,
             report_video: !config.host && features.iter().any(|name| name == crate::video_rate::FEATURE),
@@ -501,6 +503,7 @@ impl ControlPipe {
             report_unsupported_input: true,
             last_idle_sent: Instant::now(),
             last_video_idle: Instant::now(),
+            last_controller_activity: Instant::now(),
             last_keyframe_request: None,
             force_keyframe: false,
             report_video: false,
@@ -658,6 +661,10 @@ impl ControlPipe {
 
     pub fn quality_mode(&self) -> QualityMode {
         self.quality_mode
+    }
+    /// Host: how long since the controller sent any input/action/clipboard/drawing record.
+    pub fn controller_idle_for(&self) -> Duration {
+        self.last_controller_activity.elapsed()
     }
 
     pub fn h264_high(&self) -> bool {
@@ -1011,6 +1018,7 @@ impl ControlPipe {
                     .open(&record)
                     .map_err(|error| error.to_string())?,
             );
+            self.last_controller_activity = Instant::now();
             // Drawings: in view-only sessions too, and many at a time (they arrive while the
             // technician draws, and a view-only host polls only between pictures).
             let mut drawn = 0;

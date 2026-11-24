@@ -75,12 +75,29 @@ public final class WorkspaceModel: ObservableObject {
     /// Sessions shown in their own window.
     @Published public private(set) var windows: Set<UInt32> = []
     @Published public private(set) var attempt: Attempt?
+    /// Notice shown when an open session ends unexpectedly so it never vanishes without a reason.
+    public struct EndedNotice: Identifiable, Equatable, Sendable {
+        public var peer: UInt32
+        public var name: String
+        public var os: String
+        public var reason: String
+        public var id: UInt32 { peer }
+    }
+
     /// Sessions that became ready while the person stayed elsewhere: "SRV-DC-02 is ready · Open".
     @Published public private(set) var readyNotices: [UInt32] = []
+    @Published public private(set) var endedNotices: [EndedNotice] = []
+    private var lastMessages: [UInt32: String] = [:]
+    private var locallyEnded: Set<UInt32> = []
+
+    public func dismissEndedNotice(_ peer: UInt32) { endedNotices.removeAll { $0.peer == peer } }
 
     func reset() {
         attempt = nil
         readyNotices.removeAll()
+        endedNotices.removeAll()
+        lastMessages.removeAll()
+        locallyEnded.removeAll()
         selected = .console
         windows.removeAll()
     }
@@ -164,12 +181,23 @@ public final class WorkspaceModel: ObservableObject {
         let before = Dictionary(uniqueKeysWithValues: tabs.map { ($0.peer, $0) })
         if next != tabs { tabs = next }
         let open = Set(next.map(\.peer))
+        for item in status.viewerSessions {
+            if let p = item.peer, !item.message.isEmpty { lastMessages[p] = item.message }
+        }
         // Ended sessions: their tab, window and notice go away; the Devices list comes back.
-        for peer in before.keys where !open.contains(peer) {
+        for (peer, prior) in before where !open.contains(peer) {
             if windows.contains(peer) { windows.remove(peer); closeWindow(peer) }
             if windowFocus == peer { windowFocus = nil }
             readyNotices.removeAll { $0 == peer }
             if selected == .session(peer) { selected = .console }
+            let wasLocal = locallyEnded.remove(peer) != nil
+            let lastMsg = lastMessages.removeValue(forKey: peer) ?? ""
+            if !wasLocal {
+                let rawReason = !lastMsg.isEmpty ? lastMsg : (!status.message.isEmpty ? status.message : "")
+                let reason = rawReason.isEmpty ? L("The remote session ended.") : Translator.shared.translate(rawReason)
+                endedNotices.removeAll { $0.peer == peer }
+                endedNotices.append(EndedNotice(peer: peer, name: prior.name, os: prior.os, reason: reason))
+            }
         }
         updateAttempt(status)
         for tab in next where tab.state == "ready" && before[tab.peer]?.state != "ready" {
@@ -362,6 +390,7 @@ public final class WorkspaceModel: ObservableObject {
 
     /// Ends one session.
     public func end(_ peer: UInt32) {
+        locallyEnded.insert(peer)
         session(for: peer)?.end()
     }
 

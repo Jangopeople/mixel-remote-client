@@ -8,6 +8,6 @@
     "2da4e754d0ab4a620e90b7d6a0afadc563a1177293be4abe0e66e639574ad907"
   ],
   "oauth_provider": "keycloak",
-  "relay_only": true,
+  "relay_only": false,
   "customer_signup": true
 }

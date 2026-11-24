@@ -428,6 +428,12 @@ impl NativeTransport {
             .ok_or(TransportError::Fingerprint)?;
         Ok(Sha256::digest(leaf).into())
     }
+    /// Transport protocol actually used by the relay/direct path (`"udp"`, `"tcp"`, or `"tls"`).
+    pub fn active_protocol(&self) -> &'static str {
+        self.streams
+            .as_ref()
+            .map_or("udp", |runtime| runtime.active_protocol())
+    }
     pub async fn close(&self) -> Result<(), TransportError> {
         let peer = self.peer.close().await;
         let streams = if let Some(runtime) = &self.streams {
