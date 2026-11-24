@@ -1569,20 +1569,20 @@ fn perf_log(line: &str) {
 /// big pictures back and the technician saw a few a second; smaller pictures come more often.
 pub(crate) fn encoder_bitrate(size: (usize, usize), pace_bytes_per_second: f64) -> u32 {
     let ceiling: u32 = if size.0 > 1920 || size.1 > 1080 {
-        16_000_000
+        20_000_000
     } else if size.0 > 1280 || size.1 > 720 {
-        6_000_000
+        12_000_000
     } else {
-        3_000_000
+        4_000_000
     };
     let carried = (pace_bytes_per_second * 8.0 * 0.6).clamp(0.0, f64::from(ceiling)) as u32;
     let rung = ENCODER_LADDER.iter().copied().filter(|rung| *rung <= carried).max().unwrap_or(ENCODER_MIN_BITRATE);
     if carried >= ceiling { ceiling } else { rung.clamp(ENCODER_MIN_BITRATE.min(ceiling), ceiling) }
 }
-/// The bit rates the encoder is set to (bit/s), ~1.5x apart from 180 kbps (WAN) to 16 Mbps (4K LAN).
-const ENCODER_LADDER: [u32; 13] = [
+/// The bit rates the encoder is set to (bit/s), ~1.5x apart from 180 kbps (WAN) to 20 Mbps (4K LAN).
+const ENCODER_LADDER: [u32; 14] = [
     180_000, 260_000, 380_000, 550_000, 800_000, 1_200_000, 1_800_000, 2_700_000, 4_000_000,
-    6_000_000, 9_000_000, 12_000_000, 16_000_000,
+    6_000_000, 9_000_000, 12_000_000, 16_000_000, 20_000_000,
 ];
 /// The encoder's next bit rate: down at once when the pace fell to less than two thirds of it, up
 /// by half at most when the pace allows 40 % more (the pace rises fast after a few complete
@@ -1712,8 +1712,8 @@ mod bitrate_tests {
     #[test]
     fn the_bit_rate_follows_the_pace_within_bounds() {
         let full_hd = (1920, 1080);
-        assert_eq!(encoder_bitrate(full_hd, 12_000_000.0), 6_000_000, "a fast line: full rate");
-        assert_eq!(encoder_bitrate((1280, 720), 12_000_000.0), 3_000_000);
+        assert_eq!(encoder_bitrate(full_hd, 12_000_000.0), 12_000_000, "a fast line: full rate");
+        assert_eq!(encoder_bitrate((1280, 720), 12_000_000.0), 4_000_000);
         assert_eq!(encoder_bitrate(full_hd, 500_000.0), 1_800_000, "the start pace (4 Mbit/s): the rung below 2.4 Mbit/s");
         assert_eq!(encoder_bitrate(full_hd, 300_000.0), 1_200_000, "steps of 1.5x, so a small move in the pace does not restart the encoder");
         assert_eq!(encoder_bitrate(full_hd, 125_000.0), 550_000, "1 Mbit/s pace");
@@ -1876,7 +1876,12 @@ async fn host_media(
     let result = async {
         let high_profile = control.h264_high();
         let mut full_size = size;
-        let mut bitrate = encoder_bitrate(size, crate::video_pacing::START_RATE);
+        let base_bitrate = encoder_bitrate(size, crate::video_pacing::START_RATE);
+        let mut bitrate = if !relay_only_transport(config.relay_only) && size.0 > 1280 {
+            base_bitrate.max(4_000_000)
+        } else {
+            base_bitrate
+        };
         let (mut encoder, mut sequence, started) = match handed_encoder {
             Some((encoder, seq, started_at)) => (encoder, seq, started_at),
             None => (start_encoder(size, bitrate, high_profile)?, 0, Instant::now()),
@@ -1888,6 +1893,7 @@ async fn host_media(
         let mut retry_encode = false;
         // The encoder left the last picture out: it is given again although the screen is unchanged.
         let mut encode_again = false;
+        let mut static_refined = false;
         let mut sent = 0u64;
         let mut last = Instant::now();
         let mut recent: Option<Arc<native_os_capture::stream::CapturedFrame>> = None;
@@ -2067,9 +2073,10 @@ async fn host_media(
                     } else {
                         Arc::new(fit_frame(&frame, size)?)
                     };
-                    // R-5: Fast strided perceptual static-frame check (samples every 32nd pixel with ±2
-                    // per-channel dither tolerance so ScreenCaptureKit 1-bit noise does not burn 36% CPU
-                    // or send 14-40 fps on a still screen, while snapping back to 60 fps on any real change).
+                    // Q-1 / Q-3 / R-5: Strided perceptual static-frame check (samples every 8th pixel
+                    // with ±2 per-channel dither tolerance so ScreenCaptureKit 1-bit noise does not
+                    // waste CPU while small UI/clock changes are caught). Never skip indefinitely:
+                    // send one crisp refinement frame after 500 ms static, and a keep-alive frame every 2 s.
                     let same_as_recent = !force_keyframe
                         && !encode_again
                         && sent > 0
@@ -2085,7 +2092,7 @@ async fn host_media(
                             if a.len() != b.len() {
                                 return false;
                             }
-                            // 4 bytes per BGRA pixel; step 128 bytes = every 32nd pixel (~256x less bandwidth).
+                            // 4 bytes per BGRA pixel; step 32 bytes = every 8th pixel.
                             let mut idx = 0usize;
                             while idx + 3 < a.len() {
                                 if a[idx].abs_diff(b[idx]) > 2
@@ -2094,16 +2101,21 @@ async fn host_media(
                                 {
                                     return false;
                                 }
-                                idx += 128;
+                                idx += 32;
                             }
                             true
                         });
                     if same_as_recent {
-                        if last.elapsed() >= Duration::from_secs(2) {
-                            control.video_idle(channel).await?;
+                        let need_refine = !static_refined && last.elapsed() >= Duration::from_millis(500);
+                        let need_keepalive = last.elapsed() >= Duration::from_secs(2);
+                        if need_refine {
+                            static_refined = true;
+                        } else if !need_keepalive {
+                            tokio::time::sleep(Duration::from_millis(40)).await;
+                            continue;
                         }
-                        tokio::time::sleep(Duration::from_millis(40)).await;
-                        continue;
+                    } else {
+                        static_refined = false;
                     }
                     recent = Some(frame.clone());
                     frame
@@ -2589,9 +2601,16 @@ async fn viewer_media(
     let mut previous_rtp: Option<u32> = None;
     let mut timestamp_ticks = 0u64;
     let mut received = 0u64;
+    let mut received_bytes = 0u64;
     let mut last = Instant::now();
+    let mut last_keyframe_ask = Instant::now();
     let mut perf_v_at = Instant::now();
+    let mut perf_v_log_at = Instant::now();
     let (mut perf_v_frames, mut perf_v_bytes) = (0u32, 0usize);
+    if config.previous.is_some() {
+        // Q-2: Immediately request a keyframe on a renewed transport so handover never stalls.
+        let _ = control.request_keyframe(channel).await;
+    }
     #[cfg(feature = "qa-session")]
     let mut qa_video = (0u32, Duration::ZERO, Duration::ZERO, Instant::now());
     // Lab builds only: what arrived, for a session that ends without pictures.
@@ -2779,33 +2798,7 @@ async fn viewer_media(
                             && !recording.as_ref().is_some_and(|scope| scope.is_recording());
                         perf_v_frames += 1;
                         perf_v_bytes += frame.len();
-                        if perf_v_at.elapsed() >= Duration::from_secs(2) {
-                            let secs = perf_v_at.elapsed().as_secs_f64().max(0.1);
-                            let kbps = (perf_v_bytes as f64 * 8.0 / secs / 1000.0).round() as u32;
-                            let path_str = if relay_only_transport(config.relay_only) { "relay" } else { "direct" };
-                            let proto_str = transport.active_protocol();
-                            config.state.slot_change(config.generation, config.slot, |view| {
-                                view.connection_path = Some(path_str.into());
-                                view.connection_protocol = Some(proto_str.into());
-                                view.bitrate_kbps = Some(kbps);
-                            }).await;
-                            config.state.change(config.generation, |status| {
-                                status.connection_path = Some(path_str.into());
-                                status.connection_protocol = Some(proto_str.into());
-                                status.bitrate_kbps = Some(kbps);
-                            }).await;
-                            perf_log(&format!(
-                                "viewer fps={:.1} kbps={:.0} mode={} path={} proto={}",
-                                f64::from(perf_v_frames) / secs,
-                                perf_v_bytes as f64 * 8.0 / secs / 1000.0,
-                                if compressed { "hw" } else { "sw" },
-                                path_str,
-                                proto_str,
-                            ));
-                            perf_v_frames = 0;
-                            perf_v_bytes = 0;
-                            perf_v_at = Instant::now();
-                        }
+                        received_bytes = received_bytes.saturating_add(frame.len() as u64);
                         if compressed != window_decodes {
                             window_decodes = compressed;
                             waiting_for_key = true;
@@ -2885,10 +2878,10 @@ async fn viewer_media(
                                         qa_video = (0, Duration::ZERO, Duration::ZERO, Instant::now());
                                     }
                                 }
-                                if received.is_multiple_of(30) {
+                                if received == 1 || received.is_multiple_of(30) {
                                     config
                                         .state
-                                        .update_peer(config.generation, config.session, "Remote video decoded with hardware acceleration", received)
+                                        .update_peer(config.generation, config.session, "Remote video decoded with hardware acceleration", received_bytes)
                                         .await;
                                 }
                                 continue;
@@ -2992,7 +2985,7 @@ async fn viewer_media(
                                 } else {
                                     "Remote video decoded"
                                 },
-                                received,
+                                received_bytes,
                             )
                             .await;
                     }
@@ -3003,12 +2996,57 @@ async fn viewer_media(
                 Err(_) => break,
             }
         }
+        // Q-5: Update viewer bitrate, path, protocol, and received bytes every 1 s even on still screens
+        // so the quality popover never freezes on stale bitrate or "1 byte" frame counts.
+        if perf_v_at.elapsed() >= Duration::from_secs(1) {
+            let secs = perf_v_at.elapsed().as_secs_f64().max(0.1);
+            let kbps = (perf_v_bytes as f64 * 8.0 / secs / 1000.0).round() as u32;
+            let path_str = if relay_only_transport(config.relay_only) { "relay" } else { "direct" };
+            let proto_str = transport.active_protocol();
+            config.state.slot_change(config.generation, config.slot, |view| {
+                view.connection_path = Some(path_str.into());
+                view.connection_protocol = Some(proto_str.into());
+                view.bitrate_kbps = Some(kbps);
+                view.received = received_bytes;
+            }).await;
+            config.state.change(config.generation, |status| {
+                status.connection_path = Some(path_str.into());
+                status.connection_protocol = Some(proto_str.into());
+                status.bitrate_kbps = Some(kbps);
+                status.received = received_bytes;
+            }).await;
+            if perf_v_log_at.elapsed() >= Duration::from_secs(5) {
+                perf_log(&format!(
+                    "viewer fps={:.1} kbps={} rx_kb={} mode={} path={} proto={}",
+                    f64::from(perf_v_frames) / secs,
+                    kbps,
+                    received_bytes / 1024,
+                    if window_decodes { "hw" } else { "sw" },
+                    path_str,
+                    proto_str,
+                ));
+                perf_v_log_at = Instant::now();
+            }
+            perf_v_frames = 0;
+            perf_v_bytes = 0;
+            perf_v_at = Instant::now();
+        }
+        // Q-1: If no video frame AND no idle heartbeat arrives for 3 s, proactively request a keyframe
+        // instead of sitting frozen; fail and trigger reconnect after 12 s instead of 5 minutes.
+        if last.elapsed() >= Duration::from_secs(3)
+            && control.video_idle_for() >= Duration::from_secs(3)
+            && last_keyframe_ask.elapsed() >= Duration::from_secs(2)
+        {
+            last_keyframe_ask = Instant::now();
+            crate::app_log::info("peer", &format!("session={} viewer requesting keyframe after {}ms video silence", config.session, last.elapsed().as_millis()));
+            let _ = control.request_keyframe(channel).await;
+        }
         #[cfg(feature = "qa-session")]
         if qa_turn.elapsed() > Duration::from_millis(300) {
             eprintln!("QA technician loop at clock {}: taking {taken} picture packets (decoding, handing over) took {} ms", crate::remote_control::qa_wall_clock(), qa_turn.elapsed().as_millis());
         }
-        if last.elapsed() > Duration::from_secs(30)
-            && control.video_idle_for() > Duration::from_secs(30)
+        if last.elapsed() > Duration::from_secs(12)
+            && control.video_idle_for() > Duration::from_secs(12)
         {
             #[cfg(feature = "qa-session")]
             eprintln!("QA video timed out: {} RTP packets ({} bytes, {} with the end mark), {} pictures assembled, {} decoded, {} keyframe requests; {qa_keys} keyframe slices begun, {qa_gaps} gaps in the numbering ({qa_lost} numbers missing), {qa_late} packets late", qa_rtp.0, qa_rtp.1, qa_rtp.4, qa_rtp.2, received, qa_rtp.3);

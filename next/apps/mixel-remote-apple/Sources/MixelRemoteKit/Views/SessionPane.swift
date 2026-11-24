@@ -129,7 +129,11 @@ struct SessionStage: View {
                 .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.brand, lineWidth: 2))
                 .allowsHitTesting(false)
             }
-            if session.hasFrame, session.focused, session.link == .live { DrawingOverlay(drawing: drawing, pictureSize: session.size) }
+            // Q-4: Mount DrawingOverlay (which holds a GeometryReader + TimelineView + Canvas) only when
+            // actively drawing or displaying strokes, eliminating continuous SwiftUI layout/render churn.
+            if session.hasFrame, session.focused, session.link == .live, drawing.on || !drawing.strokes.isEmpty {
+                DrawingOverlay(drawing: drawing, pictureSize: session.size)
+            }
             switch session.link {
             case .reconnecting:
                 VStack(spacing: 12) {
@@ -325,9 +329,10 @@ struct SessionBar: View {
             divider
             if remote.files { toggle(.files, L("Files"), "doc.badge.arrow.up") }
             toggle(.chat, L("Chat"), "bubble.left")
-            if drawing.available {
-                button(L("Draw"), "pencil.tip", on: drawing.on) { drawing.on.toggle() }
-            }
+            // N-4: Always keep Draw in the toolbar (disabled when unavailable) so Record never shifts under the pointer.
+            button(L("Draw"), "pencil.tip", on: drawing.on) { drawing.on.toggle() }
+                .disabled(!drawing.available)
+                .opacity(drawing.available ? 1 : 0.45)
             if let recording = remote.recording {
                 button(recording.running ? L("Stop") : L("Record"), recording.running ? "stop.circle.fill" : "record.circle", on: recording.running, danger: recording.running) {
                     if recording.running { session.stopRecording() } else { record() }
@@ -429,6 +434,11 @@ struct SessionBar: View {
                     Text(verbatim: session.link == .reconnecting ? L("Reconnecting…") : L("Disconnected"))
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Theme.warning)
+                } else if session.pictureStalled {
+                    Circle().fill(Theme.warning).frame(width: 7, height: 7)
+                    Text(verbatim: L("Picture paused"))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.warning)
                 } else {
                     HStack(alignment: .bottom, spacing: 2) {
                         ForEach(1...3, id: \.self) { level in
@@ -495,8 +505,7 @@ struct SessionBar: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(16)
-            .frame(minWidth: 350, idealWidth: 370)
-            .fixedSize()
+            .frame(width: 360)
         }
     }
 

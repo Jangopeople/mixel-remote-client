@@ -79,7 +79,22 @@ struct MainWindow: View {
                 isFullScreen = NSApp?.windows.contains(where: { $0.styleMask.contains(.fullScreen) }) ?? false
                 app.workspace.openWindow = { peer in openWindow(id: "session", value: peer) }
                 app.workspace.focusWindow = { peer in NotificationCenter.default.post(name: .mixelFocusSessionWindow, object: peer) }
-                app.workspace.closeWindow = { peer in NotificationCenter.default.post(name: .mixelCloseSessionWindow, object: peer) }
+                app.workspace.closeWindow = { peer in
+                    NotificationCenter.default.post(name: .mixelCloseSessionWindow, object: peer)
+                    // N-8: Also sweep NSApp.windows directly so ended session windows on other Spaces close cleanly.
+                    let autosave = "MixelSessionWindow-\(peer)"
+                    let peerName = app.devices.name(of: peer)
+                    let peerFormatted = Format.remoteId(peer)
+                    for win in NSApp?.windows ?? [] {
+                        if win.title == "Mixel Remote" { continue }
+                        if win.frameAutosaveName == autosave
+                            || (win.title.contains("— Mixel Remote") && (win.title.contains(peerName) || win.title.contains(peerFormatted)))
+                        {
+                            win.orderOut(nil)
+                            win.close()
+                        }
+                    }
+                }
                 app.start()
             }
     }

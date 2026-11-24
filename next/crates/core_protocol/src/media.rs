@@ -67,7 +67,7 @@ impl H264VideoSender {
             mime_type: "video/H264".into(),
             clock_rate: 90000,
             channels: 0,
-            sdp_fmtp_line: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"
+            sdp_fmtp_line: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=64002a"
                 .into(),
             rtcp_feedback: vec![],
         };

@@ -31,6 +31,8 @@ public final class SessionModel: ObservableObject {
     public var onFrame: ((CGImage?) -> Void)?
     @Published public private(set) var size = CGSize.zero
     @Published public private(set) var fps = 0
+    /// Q-1: True when a live session has received no new video frame for >4 seconds.
+    @Published public private(set) var pictureStalled = false
     @Published public private(set) var stopping = false
     @Published public var error = ""
     @Published public var notice = ""
@@ -75,6 +77,7 @@ public final class SessionModel: ObservableObject {
     private var stoppedConsent: String?
     private var shownTimes: [Date] = []
     private var lastFpsPublish = Date.distantPast
+    private var lastFrameAt: Date?
     private var inputQueue: [InputEvent] = []
     private var sending = false
     private var reconnect: Reconnect?
@@ -235,6 +238,8 @@ public final class SessionModel: ObservableObject {
         onFrame?(nil)
         size = .zero
         fps = 0
+        if pictureStalled { pictureStalled = false }
+        lastFrameAt = nil
         shownTimes.removeAll()
         lastFpsPublish = .distantPast
         decoding = .none
@@ -261,6 +266,18 @@ public final class SessionModel: ObservableObject {
                         // R-5: Adaptive idle backoff avoids 500 Hz FFI spinning on still screens (drops CPU ~36% -> <5%)
                         // while snapping back to 2 ms latency on the first motion frame.
                         emptyPolls = min(emptyPolls + 1, 100)
+                        if emptyPolls == 30 || emptyPolls == 100 {
+                            await MainActor.run {
+                                guard self.viewingSession == session, let last = self.lastFrameAt else { return }
+                                let age = Date().timeIntervalSince(last)
+                                if age >= 4.0 {
+                                    if self.fps != 0 { self.fps = 0 }
+                                    if !self.pictureStalled { self.pictureStalled = true }
+                                } else if age >= 1.5, self.fps != 0 {
+                                    self.fps = 0
+                                }
+                            }
+                        }
                         let delayNs: UInt64 = emptyPolls <= 5 ? 4_000_000 : emptyPolls <= 20 ? 12_000_000 : 33_000_000
                         try? await Task.sleep(nanoseconds: delayNs)
                         continue
@@ -358,12 +375,14 @@ public final class SessionModel: ObservableObject {
         let next = CGSize(width: decoded.width, height: decoded.height)
         if next != size { size = next }
         let now = Date()
+        lastFrameAt = now
+        if pictureStalled { pictureStalled = false }
         for _ in 0..<max(1, count) {
             shownTimes.append(now)
         }
         shownTimes.removeAll { now.timeIntervalSince($0) > 1 }
-        // Publish FPS at most twice a second (or on first frame) so SwiftUI toolbars stay quiet.
-        if first || now.timeIntervalSince(lastFpsPublish) >= 0.5 {
+        // Q-4: Publish FPS at most once a second (or on first frame) so SwiftUI toolbars stay quiet.
+        if first || now.timeIntervalSince(lastFpsPublish) >= 1.0 {
             lastFpsPublish = now
             if fps != shownTimes.count { fps = shownTimes.count }
         }

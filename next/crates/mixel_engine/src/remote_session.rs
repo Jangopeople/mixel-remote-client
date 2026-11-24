@@ -2562,6 +2562,14 @@ impl RemoteSession {
     async fn slot_active(&self, key: Uuid) -> bool {
         self.0.lock().await.slots.find(key).is_some_and(|slot| slot.live())
     }
+    async fn slot_is_direct(&self, key: Uuid) -> bool {
+        self.0
+            .lock()
+            .await
+            .slots
+            .find(key)
+            .is_some_and(|slot| slot.view.connection_path.as_deref() == Some("direct"))
+    }
     /// A technician session is over (it ended, failed or was refused): its state goes, the others stay.
     /// `message` is what a single-session caller reads from the top-level status afterwards.
     /// The stable id and the device of a technician session (any id of it in).
@@ -2858,7 +2866,18 @@ impl Peer {
     /// renewed one takes over, and the person sees the same session (`ui`) with the same
     /// consent, grants and stop flags: both transports stop with the session.
     /// What the renewal of this transport needs now (see `renewal_decision`).
-    fn renewal_step(&self, now: u64, live: bool) -> Renewal {
+    fn renewal_step(&self, now: u64, live: bool, direct: bool) -> Renewal {
+        let shortened = renewal_shortened();
+        // Q-2: A healthy direct UDP session does not depend on TURN relay credentials.
+        // Avoid tearing down and rebuilding working direct transports every ~5 minutes
+        // when TURN TTL approaches expiry; rotate hourly unless a lab override is active.
+        if direct
+            && shortened.is_none()
+            && self.restart_pending.is_none()
+            && self.rotated_at.elapsed() < Duration::from_secs(3600)
+        {
+            return Renewal::Wait;
+        }
         let relay_left = if self.relay_expires == 0 { None } else { Some(self.relay_expires.saturating_sub(now)) };
         let step = renewal_decision(
             live && !self.cancel.load(Ordering::Acquire),
@@ -2866,7 +2885,7 @@ impl Peer {
             self.restart_tries,
             self.rotated_at.elapsed(),
             relay_left,
-            renewal_shortened(),
+            shortened,
         );
         #[cfg(feature = "qa-session")]
         if step == Renewal::Wait && self.restart_pending.is_none() && self.rotated_at.elapsed() >= Duration::from_secs(31) && (relay_left.is_some_and(|left| left <= 90) || renewal_shortened().is_some_and(|after| self.rotated_at.elapsed() >= after)) {
@@ -3893,10 +3912,13 @@ async fn run(
                         }
                         if active.started_at.elapsed()>=Duration::from_secs(8*3600){return Err("The accepted connection lifetime expired".into());}
                         if !active.host{
-                            let live=active.signals.is_some() && state.status().await.phase=="active";
-                            let step=active.renewal_step(now,live);
+                            let status=state.status().await;
+                            let live=active.signals.is_some() && status.phase=="active";
+                            let direct=status.connection_path.as_deref()==Some("direct");
+                            let step=active.renewal_step(now,live,direct);
                             if step==Renewal::Expired{return Err("The accepted connection renewal deadline expired".into());}
                             if active.apply_renewal(step){
+                                crate::app_log::info("session", &format!("session={} triggering transport renewal step={step:?} direct={direct} relay_left={:?} since_rotation={}s", active.id, (active.relay_expires != 0).then(|| active.relay_expires.saturating_sub(now)), active.rotated_at.elapsed().as_secs()));
                                 send(&mut socket,ClientMessage::Restart{session:active.id}).await?;
                                 state.change(generation,|status|status.message="Renewing relay credentials and transport keys for the accepted peer".into()).await;
                             }
@@ -3914,12 +3936,14 @@ async fn run(
                             if invitation_expired {ended.push((active.id,"The local invitation or acceptance deadline expired; request a fresh connection".into()));continue;}
                             if active.started_at.elapsed()>=Duration::from_secs(8*3600) {ended.push((active.id,"The accepted connection lifetime expired".into()));continue;}
                             let live=active.signals.is_some() && state.slot_active(active.ui).await;
-                            let step=active.renewal_step(now,live);
+                            let direct=state.slot_is_direct(active.ui).await;
+                            let step=active.renewal_step(now,live,direct);
                             if step==Renewal::Expired {ended.push((active.id,"The accepted connection renewal deadline expired".into()));continue;}
                             if matches!(step,Renewal::Send|Renewal::Retry|Renewal::GiveUp) {renew.push((active.id,step));}
                         }
                         for (session,step) in renew {
                             if let Some(active)=ctrl.iter_mut().find(|active|active.id==session) && active.apply_renewal(step) {
+                                crate::app_log::info("session", &format!("session={session} triggering technician transport renewal step={step:?} relay_left={:?} since_rotation={}s", (active.relay_expires != 0).then(|| active.relay_expires.saturating_sub(now)), active.rotated_at.elapsed().as_secs()));
                                 send(&mut socket,ClientMessage::Restart{session}).await?;
                                 state.slot_change(generation,active.ui,|view|view.message="Renewing relay credentials and transport keys for the accepted peer".into()).await;
                             }
@@ -5125,21 +5149,21 @@ mod consent_tests {
         peer.relay_expires = 1_000;
         peer.rotated_at = std::time::Instant::now() - Duration::from_secs(600);
         // 920 s clock: 80 s left.
-        assert_eq!(peer.renewal_step(920, true), Renewal::Send);
+        assert_eq!(peer.renewal_step(920, true, false), Renewal::Send);
         assert!(peer.apply_renewal(Renewal::Send));
         assert_eq!((peer.restart_tries, peer.restart_pending.is_some()), (1, true));
-        assert_eq!(peer.renewal_step(921, true), Renewal::Wait);
+        assert_eq!(peer.renewal_step(921, true, false), Renewal::Wait);
         peer.restart_pending = Some(std::time::Instant::now() - Duration::from_secs(7));
-        assert_eq!(peer.renewal_step(930, true), Renewal::Retry);
+        assert_eq!(peer.renewal_step(930, true, false), Renewal::Retry);
         assert!(peer.apply_renewal(Renewal::Retry));
         peer.restart_pending = Some(std::time::Instant::now() - Duration::from_secs(7));
         assert!(peer.apply_renewal(Renewal::Retry));
         assert_eq!(peer.restart_tries, 3);
         peer.restart_pending = Some(std::time::Instant::now() - Duration::from_secs(7));
-        assert_eq!(peer.renewal_step(945, true), Renewal::GiveUp);
+        assert_eq!(peer.renewal_step(945, true, false), Renewal::GiveUp);
         assert!(!peer.apply_renewal(Renewal::GiveUp));
         assert_eq!((peer.restart_tries, peer.restart_pending.is_none()), (0, true));
-        assert_eq!(peer.renewal_step(946, true), Renewal::Wait, "waits the pause between renewals again");
+        assert_eq!(peer.renewal_step(946, true, false), Renewal::Wait, "waits the pause between renewals again");
         // An answer (the broker's Restarted) resets the count.
         peer.restart_tries = 2;
         peer.begin_renewal(Uuid::from_u128(9));
@@ -5176,8 +5200,8 @@ mod consent_tests {
         // The connection service no longer knows the session: no request for another renewal goes out (it would be
         // refused and end the connection), however long it takes.
         assert_eq!((active.restart_tries, active.restart_pending.is_some()), (0, false));
-        assert_eq!(active.renewal_step(920, true), Renewal::Wait);
-        assert_eq!(active.renewal_step(5_000_000, true), Renewal::Wait);
+        assert_eq!(active.renewal_step(920, true, false), Renewal::Wait);
+        assert_eq!(active.renewal_step(5_000_000, true, false), Renewal::Wait);
         // Nothing to go back to a second time, and a failure of the only transport ends the session.
         assert!(!can_go_back_to_transport_before(&peer, &ctrl, first));
         // A session whose renewal succeeded (a fresh peer: the transport before ends, the new one is the session's).
@@ -5209,9 +5233,9 @@ mod consent_tests {
         let active = peer.as_mut().unwrap();
         assert_eq!(active.id, first);
         assert_eq!((active.restart_tries, active.restart_pending.is_some()), (1, true));
-        assert_eq!(active.renewal_step(920, true), Renewal::Wait);
+        assert_eq!(active.renewal_step(920, true, false), Renewal::Wait);
         active.restart_pending = Some(std::time::Instant::now() - Duration::from_secs(7));
-        assert_eq!(active.renewal_step(920, true), Renewal::Retry, "the existing retry logic asks again");
+        assert_eq!(active.renewal_step(920, true, false), Renewal::Retry, "the existing retry logic asks again");
         assert!(active.apply_renewal(Renewal::Retry));
         // The next renewal takes over: the transport before ends and nothing is left to go back to.
         let third = Uuid::from_u128(51);
@@ -6051,7 +6075,7 @@ mod multi_session_tests {
         peer.relay_expires = 1_000;
         peer.signals = Some(mpsc::channel(1).0);
         let live = peer.signals.is_some() && remote.slot_active(peer.ui).await;
-        assert_eq!(peer.renewal_step(920, live), Renewal::Send, "a second renewal is due and goes out");
+        assert_eq!(peer.renewal_step(920, live, false), Renewal::Send, "a second renewal is due and goes out");
     }
 
     #[tokio::test]
