@@ -865,7 +865,14 @@ impl ControlPipe {
         } else if plain.starts_with(core_protocol::clipboard::PREFIX) {
             return Ok(!self.clipboard.late_answer(plain));
         } else {
-            return Err("Unexpected authenticated host control message".into());
+            let prefix: String = plain
+                .iter()
+                .take(20)
+                .map(|b| if b.is_ascii_graphic() { *b as char } else { '.' })
+                .collect();
+            let msg = format!("dir=host->viewer control record rejected: unknown type (prefix={prefix:?}, len={})", plain.len());
+            crate::app_log::info("control", &msg);
+            return Err(msg);
         }
         Ok(false)
     }
@@ -884,7 +891,7 @@ impl ControlPipe {
         }
     }
     /// Controller: takes the records the host sent (print jobs, sound and clipboard chunks arrive
-    /// as many small records: up to 64 at a time). When `wait` is zero, drains only records that
+    /// as many small records: up to 128 at a time). When `wait` is zero, drains only records that
     /// are already buffered so the video receive loop never pays a timer tick between frames.
     async fn receive_host_records(
         &mut self,
@@ -892,19 +899,23 @@ impl ControlPipe {
         wait: Duration,
         stopped: bool,
     ) -> Result<(), String> {
-        let mut record = if wait.is_zero() {
-            match try_received_record(channel).await? {
-                Some(value) => value,
-                None => return Ok(()),
-            }
-        } else {
-            match tokio::time::timeout(wait, received_record(channel)).await {
-                Ok(value) => value?,
-                Err(_) => return Ok(()),
-            }
-        };
-        for _ in 0..64 {
-            let plain = Zeroizing::new(self.crypto.open(&record).map_err(|error| error.to_string())?);
+        for idx in 0..128 {
+            let record = if idx == 0 && !wait.is_zero() {
+                match tokio::time::timeout(wait, received_record(channel)).await {
+                    Ok(value) => value?,
+                    Err(_) => break,
+                }
+            } else {
+                match try_received_record(channel).await? {
+                    Some(value) => value,
+                    None => break,
+                }
+            };
+            let plain = Zeroizing::new(self.crypto.open_detailed(&record).map_err(|error| {
+                let msg = format!("dir=host->viewer {error}");
+                crate::app_log::info("control", &msg);
+                msg
+            })?);
             if self.take_host_record(&plain)? {
                 let outcome = match self.active_clipboard.as_mut() {
                     Some(active) => active.request.accept_deduped(
@@ -920,10 +931,6 @@ impl ControlPipe {
                     let _ = active.reply.send(result);
                 }
             }
-            record = match try_received_record(channel).await? {
-                Some(value) => value,
-                None => break,
-            };
         }
         let now = Instant::now();
         self.acks.expire(now);
@@ -1081,8 +1088,12 @@ impl ControlPipe {
             }
             let mut plain = Zeroizing::new(
                 self.crypto
-                    .open(&record)
-                    .map_err(|error| error.to_string())?,
+                    .open_detailed(&record)
+                    .map_err(|error| {
+                        let msg = format!("dir=viewer->host {error}");
+                        crate::app_log::info("control", &msg);
+                        msg
+                    })?,
             );
             self.last_controller_activity = Instant::now();
             if let Some(frame) = plain.strip_prefix(VOICE_RECORD) {
@@ -1106,7 +1117,11 @@ impl ControlPipe {
                     Some(value) => value,
                     None => return Ok(()),
                 };
-                plain = Zeroizing::new(self.crypto.open(&record).map_err(|error| error.to_string())?);
+                plain = Zeroizing::new(self.crypto.open_detailed(&record).map_err(|error| {
+                    let msg = format!("dir=viewer->host {error}");
+                    crate::app_log::info("control", &msg);
+                    msg
+                })?);
             }
             if plain.starts_with(core_protocol::clipboard::PREFIX) {
                 return self
@@ -1558,5 +1573,22 @@ mod input_ack_tests {
         };
         assert_eq!(outcome, Ok(()));
         assert!(lab.pipe.active_clipboard.is_none());
+    }
+
+    #[tokio::test]
+    async fn r1_receive_host_records_never_drops_record_at_64_batch_boundary() {
+        let mut lab = lab().await;
+        // Simulate a Windows host streaming 200 audio/idle control records while the viewer is busy.
+        for _ in 0..200 {
+            lab.host_sends(VIDEO_IDLE).await;
+        }
+        // Give the local WebRTC loopback a moment to queue >64 records in evt_rx.
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        for _ in 0..10 {
+            lab.pipe
+                .receive_host_records(&lab.controller, Duration::from_millis(20), false)
+                .await
+                .expect("R-1: receive_host_records must never drop record #64 and desync counter");
+        }
     }
 }

@@ -45,4 +45,12 @@ grep -q 'kVTDecompressionPropertyKey_RealTime' "$NEXT/apps/mixel-remote-apple/So
 grep -q 'CVPixelBufferGetIOSurface' "$NEXT/apps/mixel-remote-apple/Sources/MixelRemoteKit/Support/VideoFrame.swift"
 ! grep -q 'Duration::from_millis(40)' "$NEXT/crates/mixel_engine/src/remote_peer.rs"
 
+echo "=== Gate 9: R-1/R-2/R-3 (200-record burst, 10k concurrent sealer, dedup openWindow, warm cooldown) ==="
+cd "$NEXT"
+cargo test -p core_protocol --lib --quiet -- r1_open_detailed_distinguishes_length_reorder_and_bad_tag
+cargo test -p core_protocol --lib --quiet -- r1_ten_thousand_records_from_concurrent_producers_stay_in_order
+cargo test -p mixel_engine --lib --quiet -- r1_receive_host_records_never_drops_record_at_64_batch_boundary
+grep -q 'MixelSessionWindow-' "$NEXT/apps/mixel-remote-apple/Mac/MixelRemoteApp.swift"
+grep -q 'warm_log\.back()' "$NEXT/crates/mixel_engine/src/remote_session.rs"
+
 echo "=== ALL REGRESSION GATE CHECKS PASSED ==="

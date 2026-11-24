@@ -55,6 +55,29 @@ pub enum CryptoError {
     Exhausted,
 }
 
+/// Detailed reason a control record was rejected, so logs and diagnostics tell
+/// bad length, replay/reorder, bad authentication tag, and key exhaustion apart.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum RecordOpenError {
+    #[error("control record rejected: bad length (len={len}, expected_counter={expected})")]
+    BadLength { len: usize, expected: u64 },
+    #[error("control record rejected: replay or reorder (got={got}, expected={expected}, len={len})")]
+    ReplayOrReorder { got: u64, expected: u64, len: usize },
+    #[error("control record rejected: bad tag (counter={counter}, len={len})")]
+    BadTag { counter: u64, len: usize },
+    #[error("control key exhausted; reconnect required")]
+    Exhausted,
+}
+
+impl From<RecordOpenError> for CryptoError {
+    fn from(err: RecordOpenError) -> Self {
+        match err {
+            RecordOpenError::Exhausted => CryptoError::Exhausted,
+            _ => CryptoError::Record,
+        }
+    }
+}
+
 /// Binds both enrolled device identities to one random 256-bit session identifier.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Context {
@@ -315,21 +338,38 @@ impl ControlChannel {
         Ok(record)
     }
     pub fn open(&mut self, record: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        if !(HEADER + TAG..=HEADER + TAG + MAX_PLAINTEXT).contains(&record.len()) {
-            return Err(CryptoError::Record);
+        self.open_detailed(record).map_err(Into::into)
+    }
+
+    pub fn open_detailed(&mut self, record: &[u8]) -> Result<Vec<u8>, RecordOpenError> {
+        let len = record.len();
+        if !(HEADER + TAG..=HEADER + TAG + MAX_PLAINTEXT).contains(&len) {
+            return Err(RecordOpenError::BadLength {
+                len,
+                expected: self.rx_sequence,
+            });
         }
         let sequence = u64::from_be_bytes(
             record[..HEADER]
                 .try_into()
-                .map_err(|_| CryptoError::Record)?,
+                .map_err(|_| RecordOpenError::BadLength {
+                    len,
+                    expected: self.rx_sequence,
+                })?,
         );
         if sequence != self.rx_sequence {
-            return Err(CryptoError::Record);
+            return Err(RecordOpenError::ReplayOrReorder {
+                got: sequence,
+                expected: self.rx_sequence,
+                len,
+            });
         }
         if sequence >= MAX_RECORDS {
-            return Err(CryptoError::Exhausted);
+            return Err(RecordOpenError::Exhausted);
         }
-        let next = sequence.checked_add(1).ok_or(CryptoError::Exhausted)?;
+        let next = sequence
+            .checked_add(1)
+            .ok_or(RecordOpenError::Exhausted)?;
         let mut aad = self.binding.to_vec();
         aad.extend(&record[..HEADER]);
         let plaintext = self
@@ -341,7 +381,10 @@ impl ControlChannel {
                     aad: &aad,
                 },
             )
-            .map_err(|_| CryptoError::Record)?;
+            .map_err(|_| RecordOpenError::BadTag {
+                counter: sequence,
+                len,
+            })?;
         self.rx_sequence = next;
         Ok(plaintext)
     }
@@ -445,5 +488,75 @@ mod tests {
             cf.verified_session().fingerprints(),
             controller.verified_session().fingerprints()
         );
+    }
+
+    #[test]
+    fn r1_open_detailed_distinguishes_length_reorder_and_bad_tag() {
+        let (a, b, context) = keys();
+        let ah = Handshake::new(context.clone(), Role::Controller, &a, [1; 32]).unwrap();
+        let bh = Handshake::new(context, Role::Host, &b, [2; 32]).unwrap();
+        let hello = ah.hello();
+        let mut controller = ah.finish(&bh.hello(), [2; 32]).unwrap();
+        let mut host = bh.finish(&hello, [1; 32]).unwrap();
+
+        let r0 = host.seal(b"zero").unwrap();
+        let r1 = host.seal(b"one").unwrap();
+
+        assert_eq!(
+            controller.open_detailed(&[1, 2, 3]),
+            Err(RecordOpenError::BadLength { len: 3, expected: 0 })
+        );
+        assert_eq!(
+            controller.open_detailed(&r1),
+            Err(RecordOpenError::ReplayOrReorder {
+                got: 1,
+                expected: 0,
+                len: r1.len(),
+            })
+        );
+        let mut bad_tag = r0.clone();
+        *bad_tag.last_mut().unwrap() ^= 0xff;
+        assert_eq!(
+            controller.open_detailed(&bad_tag),
+            Err(RecordOpenError::BadTag {
+                counter: 0,
+                len: bad_tag.len(),
+            })
+        );
+        assert_eq!(controller.open_detailed(&r0).unwrap(), b"zero");
+        assert_eq!(controller.open_detailed(&r1).unwrap(), b"one");
+    }
+
+    #[test]
+    fn r1_ten_thousand_records_from_concurrent_producers_stay_in_order() {
+        let (a, b, context) = keys();
+        let ah = Handshake::new(context.clone(), Role::Controller, &a, [1; 32]).unwrap();
+        let bh = Handshake::new(context, Role::Host, &b, [2; 32]).unwrap();
+        let hello = ah.hello();
+        let mut controller = ah.finish(&bh.hello(), [2; 32]).unwrap();
+        let mut host = bh.finish(&hello, [1; 32]).unwrap();
+
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        let mut handles = Vec::new();
+        for producer in 0..8u32 {
+            let tx = tx.clone();
+            handles.push(std::thread::spawn(move || {
+                for seq in 0..1250u32 {
+                    tx.send(format!("p{producer}:{seq}").into_bytes()).unwrap();
+                }
+            }));
+        }
+        drop(tx);
+        let mut opened = 0usize;
+        for msg in rx {
+            let sealed = host.seal(&msg).unwrap();
+            let plain = controller.open_detailed(&sealed).unwrap();
+            assert_eq!(plain, msg);
+            opened += 1;
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert_eq!(opened, 10_000);
     }
 }

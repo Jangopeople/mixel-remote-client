@@ -77,7 +77,21 @@ struct MainWindow: View {
             }
             .onAppear {
                 isFullScreen = NSApp?.windows.contains(where: { $0.styleMask.contains(.fullScreen) }) ?? false
-                app.workspace.openWindow = { peer in openWindow(id: "session", value: peer) }
+                app.workspace.openWindow = { peer in
+                    // R-2: Never spawn a duplicate session window for a peer that already has one open.
+                    let autosave = "MixelSessionWindow-\(peer)"
+                    if let existing = NSApp?.windows.first(where: {
+                        $0.title != "Mixel Remote"
+                            && $0.frameAutosaveName == autosave
+                            && ($0.isVisible || $0.isMiniaturized)
+                    }) {
+                        existing.deminiaturize(nil)
+                        existing.makeKeyAndOrderFront(nil)
+                        NSApp?.activate(ignoringOtherApps: true)
+                        return
+                    }
+                    openWindow(id: "session", value: peer)
+                }
                 app.workspace.focusWindow = { peer in NotificationCenter.default.post(name: .mixelFocusSessionWindow, object: peer) }
                 app.workspace.closeWindow = { peer in
                     // Defer window teardown to the next runloop turn (outside SwiftUI DisplayList/CA::Transaction)
