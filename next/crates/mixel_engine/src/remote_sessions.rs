@@ -94,6 +94,9 @@ pub struct SessionStatus {
     /// Current media bitrate in kilobits per second, when measured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bitrate_kbps: Option<u32>,
+    /// W-1: True only when neither video frames nor idle-liveness notifications arrived for >3 s.
+    #[serde(default)]
+    pub video_stalled: bool,
     /// Seconds since the Unix epoch.
     pub started_at: u64,
     /// The computer went away or the connection service restarted: this session asks again by itself
@@ -260,6 +263,7 @@ impl Registry {
                 connection_protocol: None,
                 rtt_ms: None,
                 bitrate_kbps: None,
+                video_stalled: false,
                 started_at: SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |now| now.as_secs()),
                 reconnecting: false,
                 reconnect_failed: false,

@@ -476,8 +476,8 @@ fn save_part(
     awaiting_key.store(false, Ordering::Release);
     let (start, size, sps, pps, mut last_arrived) = first;
     let file = tempfile::Builder::new()
-        .prefix(".mixel-recording-")
-        .suffix(".part")
+        .prefix("mixel-recording-in-progress-")
+        .suffix(".mp4.part")
         .tempfile_in(parent)
         .map_err(|_| "Could not create a private recording in that folder")?;
     let track = mp4::TrackConfig {

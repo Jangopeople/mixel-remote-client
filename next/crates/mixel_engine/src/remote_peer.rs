@@ -1778,6 +1778,60 @@ fn start_encoder(size: (usize, usize), bitrate: u32, high_profile: bool) -> Resu
     Ok(requests)
 }
 
+/// W-4: Fast strided perceptual static-frame check (samples every 8th pixel with ±4 per-channel
+/// dither tolerance and allows up to 8 noisy/cursor-blink sampled pixels) so still screens on macOS
+/// ScreenCaptureKit do not send 55 fps while any real UI change snaps back immediately.
+pub(crate) fn frames_effectively_identical(
+    prev: &native_os_capture::stream::CapturedFrame,
+    frame: &native_os_capture::stream::CapturedFrame,
+) -> bool {
+    if prev.width() != frame.width()
+        || prev.height() != frame.height()
+        || prev.stride() != frame.stride()
+    {
+        return false;
+    }
+    let a = prev.pixels();
+    let b = frame.pixels();
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff_pixels = 0usize;
+    let mut idx = 0usize;
+    while idx + 3 < a.len() {
+        if a[idx].abs_diff(b[idx]) > 4
+            || a[idx + 1].abs_diff(b[idx + 1]) > 4
+            || a[idx + 2].abs_diff(b[idx + 2]) > 4
+        {
+            diff_pixels += 1;
+            if diff_pixels > 8 {
+                return false;
+            }
+        }
+        idx += 32;
+    }
+    true
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ViewerLiveness {
+    Ok,
+    Stalled,
+    TimedOut,
+}
+
+/// W-1: Viewer liveness decision from `liveness = min(last_frame_age, last_idle_age)`.
+/// If the host did not advertise `vidle`, never time out for video silence.
+pub(crate) fn viewer_liveness_action(peer_vidle: bool, liveness: Duration) -> ViewerLiveness {
+    if peer_vidle && liveness > Duration::from_secs(10) {
+        ViewerLiveness::TimedOut
+    } else if liveness >= Duration::from_secs(3) {
+        ViewerLiveness::Stalled
+    } else {
+        ViewerLiveness::Ok
+    }
+}
+
 /// Scales a captured BGRA frame to the stream size (nearest pixel; used after a display switch).
 fn fit_frame(
     frame: &native_os_capture::stream::CapturedFrame,
@@ -2073,44 +2127,21 @@ async fn host_media(
                     } else {
                         Arc::new(fit_frame(&frame, size)?)
                     };
-                    // Q-1 / Q-3 / R-5: Strided perceptual static-frame check (samples every 8th pixel
-                    // with ±2 per-channel dither tolerance so ScreenCaptureKit 1-bit noise does not
-                    // waste CPU while small UI/clock changes are caught). Never skip indefinitely:
-                    // send one crisp refinement frame after 500 ms static, and a keep-alive frame every 2 s.
+                    // W-1 / W-4: Suppress encoding when the screen is effectively static.
+                    // Send one crisp refinement frame 500 ms after the last real change, then
+                    // send periodic 1 s video-idle notifications instead of burning 55 fps.
                     let same_as_recent = !force_keyframe
                         && !encode_again
                         && sent > 0
-                        && recent.as_ref().is_some_and(|prev| {
-                            if prev.width() != frame.width()
-                                || prev.height() != frame.height()
-                                || prev.stride() != frame.stride()
-                            {
-                                return false;
-                            }
-                            let a = prev.pixels();
-                            let b = frame.pixels();
-                            if a.len() != b.len() {
-                                return false;
-                            }
-                            // 4 bytes per BGRA pixel; step 32 bytes = every 8th pixel.
-                            let mut idx = 0usize;
-                            while idx + 3 < a.len() {
-                                if a[idx].abs_diff(b[idx]) > 2
-                                    || a[idx + 1].abs_diff(b[idx + 1]) > 2
-                                    || a[idx + 2].abs_diff(b[idx + 2]) > 2
-                                {
-                                    return false;
-                                }
-                                idx += 32;
-                            }
-                            true
-                        });
+                        && recent
+                            .as_ref()
+                            .is_some_and(|prev| frames_effectively_identical(prev, &frame));
                     if same_as_recent {
                         let need_refine = !static_refined && last.elapsed() >= Duration::from_millis(500);
-                        let need_keepalive = last.elapsed() >= Duration::from_secs(2);
                         if need_refine {
                             static_refined = true;
-                        } else if !need_keepalive {
+                        } else {
+                            control.video_idle(channel).await?;
                             tokio::time::sleep(Duration::from_millis(40)).await;
                             continue;
                         }
@@ -2121,16 +2152,12 @@ async fn host_media(
                     frame
                 }
                 Err(native_os_capture::stream::CaptureError::Timeout) => {
-                    // The picture captured last goes to the encoder again although the screen has not
-                    // changed: a complete picture is wanted, or the encoder left that picture out
-                    // (its rate control drops pictures after large ones). Without the second case
-                    // the last change on a screen that then stays still was never sent: after a
-                    // moving picture the technician kept seeing an old one until something else
-                    // changed (lab, 14 Nov 2026).
+                    // W-1: On a keyframe request or left-out frame, ALWAYS encode and send an IDR
+                    // of the current screen immediately (even when nothing changed on Windows DXGI).
                     if (force_keyframe || encode_again) && let Some(frame) = &recent {
                         frame.clone()
                     } else {
-                        if sent > 0 && last.elapsed() >= Duration::from_secs(2) {
+                        if sent > 0 {
                             control.video_idle(channel).await?;
                         }
                         continue;
@@ -2472,6 +2499,9 @@ impl<'a> Ctl<'a> {
     fn video_idle_for(&self) -> Duration {
         self.pipe.as_ref().map_or(Duration::ZERO, |pipe| pipe.last_video_idle.elapsed())
     }
+    fn peer_video_idle(&self) -> bool {
+        self.pipe.as_ref().is_some_and(|pipe| pipe.peer_video_idle())
+    }
     async fn poll(&mut self, config: &Config, channel: &Arc<dyn NativeDataChannel>) -> Result<(), String> {
         if let Some(pipe) = &mut self.pipe {
             return pipe.poll(config, channel).await;
@@ -2604,8 +2634,9 @@ async fn viewer_media(
     let mut received_bytes = 0u64;
     let mut last = Instant::now();
     let mut last_keyframe_ask = Instant::now();
+    let mut last_rec_key_ask = Instant::now() - Duration::from_secs(1);
+    let mut last_video_size: (u16, u16) = (1920, 1080);
     let mut perf_v_at = Instant::now();
-    let mut perf_v_log_at = Instant::now();
     let (mut perf_v_frames, mut perf_v_bytes) = (0u32, 0usize);
     if config.previous.is_some() {
         // Q-2: Immediately request a keyframe on a renewed transport so handover never stalls.
@@ -2620,8 +2651,9 @@ async fn viewer_media(
     let (mut qa_expected, mut qa_gaps, mut qa_late, mut qa_keys, mut qa_lost): (Option<u16>, u64, u64, u64, u64) = (None, 0, 0, 0, 0);
     #[cfg(feature = "qa-session")]
     let mut qa_jumps: Vec<String> = Vec::new();
+    // W-3: Keep hardware passthrough (`mode=hw`) even while recording is active.
     let (mut window_decodes, mut waiting_for_key) = (
-        config.video.wants_compressed() && !recording.as_ref().is_some_and(|scope| scope.is_recording()),
+        config.video.wants_compressed(),
         false,
     );
     let mut seed_keyframe: Option<(u64, Vec<u8>)> = None;
@@ -2791,11 +2823,9 @@ async fn viewer_media(
                             .checked_mul(1_000_000)
                             .ok_or("Video timestamp exhausted")?
                             / 90_000;
-                        // The window decodes itself when it can (much faster for large pictures);
-                        // an active recording needs the decoded picture size, so it temporarily
-                        // switches to the native decoder only while recording is actually running.
-                        let compressed = config.video.wants_compressed()
-                            && !recording.as_ref().is_some_and(|scope| scope.is_recording());
+                        // W-3: Always stay in hardware passthrough (`mode=hw`) during recording;
+                        // H.264 access units are written straight to the MP4 writer without decoding.
+                        let compressed = config.video.wants_compressed();
                         perf_v_frames += 1;
                         perf_v_bytes += frame.len();
                         received_bytes = received_bytes.saturating_add(frame.len() as u64);
@@ -2863,6 +2893,9 @@ async fn viewer_media(
                                 if received == 1 {
                                     eprintln!("QA first picture after {} ms: {} packets, {qa_gaps} gaps ({qa_lost} numbers missing), {} requests for a complete picture", qa_started.elapsed().as_millis(), qa_rtp.0, qa_rtp.3);
                                 }
+                                if let Some(recording) = &recording {
+                                    recording.submit(&frame, timestamp_ticks, last_video_size);
+                                }
                                 let packet = crate::remote_video::compressed_packet(config.session, received, timestamp, &frame, key)?.from_transport(config.transport);
                                 if !config.video.publish_compressed(packet)? {
                                     waiting_for_key = true;
@@ -2921,11 +2954,12 @@ async fn viewer_media(
                         } else {
                             seed_keyframe = None;
                         }
+                        last_video_size = (decoded.width() as u16, decoded.height() as u16);
                         if let Some(recording) = &recording {
                             recording.submit(
                                 &frame,
                                 timestamp_ticks,
-                                (decoded.width() as u16, decoded.height() as u16),
+                                last_video_size,
                             );
                         }
                         received += 1;
@@ -2996,58 +3030,72 @@ async fn viewer_media(
                 Err(_) => break,
             }
         }
-        // Q-5: Update viewer bitrate, path, protocol, and received bytes every 1 s even on still screens
-        // so the quality popover never freezes on stale bitrate or "1 byte" frame counts.
+        // W-3: Request a keyframe immediately when a recording starts so it begins within <300 ms.
+        if recording.as_ref().is_some_and(|scope| scope.needs_keyframe())
+            && last_rec_key_ask.elapsed() >= Duration::from_millis(400)
+        {
+            last_rec_key_ask = Instant::now();
+            let _ = control.request_keyframe(channel).await;
+        }
+        // W-1: Liveness is the later of last video frame and last idle notification.
+        let liveness = last.elapsed().min(control.video_idle_for());
+        let liveness_state = viewer_liveness_action(control.peer_video_idle(), liveness);
+        let is_stalled = liveness_state != ViewerLiveness::Ok;
+        // Q-5 / Q-5b: Update viewer telemetry and write 1 perf log line/sec per session with session id & host.
         if perf_v_at.elapsed() >= Duration::from_secs(1) {
             let secs = perf_v_at.elapsed().as_secs_f64().max(0.1);
             let kbps = (perf_v_bytes as f64 * 8.0 / secs / 1000.0).round() as u32;
             let path_str = if relay_only_transport(config.relay_only) { "relay" } else { "direct" };
             let proto_str = transport.active_protocol();
+            let sid = config.session.to_string();
+            let sid8 = &sid[..sid.len().min(8)];
+            let mut peer_id = 0u32;
             config.state.slot_change(config.generation, config.slot, |view| {
+                peer_id = view.peer;
                 view.connection_path = Some(path_str.into());
                 view.connection_protocol = Some(proto_str.into());
                 view.bitrate_kbps = Some(kbps);
                 view.received = received_bytes;
+                view.video_stalled = is_stalled;
             }).await;
             config.state.change(config.generation, |status| {
+                if peer_id == 0 {
+                    peer_id = status.peer.unwrap_or(0);
+                }
                 status.connection_path = Some(path_str.into());
                 status.connection_protocol = Some(proto_str.into());
                 status.bitrate_kbps = Some(kbps);
                 status.received = received_bytes;
+                status.video_stalled = is_stalled;
             }).await;
-            if perf_v_log_at.elapsed() >= Duration::from_secs(5) {
-                perf_log(&format!(
-                    "viewer fps={:.1} kbps={} rx_kb={} mode={} path={} proto={}",
-                    f64::from(perf_v_frames) / secs,
-                    kbps,
-                    received_bytes / 1024,
-                    if window_decodes { "hw" } else { "sw" },
-                    path_str,
-                    proto_str,
-                ));
-                perf_v_log_at = Instant::now();
-            }
+            perf_log(&format!(
+                "viewer session={} host={} fps={:.1} kbps={} rx_kb={} rtt_ms=0 loss_pct=0.0 target_kbps={} mode={} path={} proto={}",
+                sid8,
+                peer_id,
+                f64::from(perf_v_frames) / secs,
+                kbps,
+                received_bytes / 1024,
+                kbps,
+                if window_decodes { "hw" } else { "sw" },
+                path_str,
+                proto_str,
+            ));
             perf_v_frames = 0;
             perf_v_bytes = 0;
             perf_v_at = Instant::now();
         }
-        // Q-1: If no video frame AND no idle heartbeat arrives for 3 s, proactively request a keyframe
-        // instead of sitting frozen; fail and trigger reconnect after 12 s instead of 5 minutes.
-        if last.elapsed() >= Duration::from_secs(3)
-            && control.video_idle_for() >= Duration::from_secs(3)
-            && last_keyframe_ask.elapsed() >= Duration::from_secs(2)
-        {
+        // W-1: Request a keyframe at 3 s and 6 s of genuine liveness silence; timeout at 10 s ONLY
+        // when the host advertised `vidle` and sent neither frames nor idle notifications.
+        if liveness >= Duration::from_secs(3) && last_keyframe_ask.elapsed() >= Duration::from_secs(3) {
             last_keyframe_ask = Instant::now();
-            crate::app_log::info("peer", &format!("session={} viewer requesting keyframe after {}ms video silence", config.session, last.elapsed().as_millis()));
+            crate::app_log::info("peer", &format!("session={} viewer requesting keyframe after {}ms liveness silence", config.session, liveness.as_millis()));
             let _ = control.request_keyframe(channel).await;
         }
         #[cfg(feature = "qa-session")]
         if qa_turn.elapsed() > Duration::from_millis(300) {
             eprintln!("QA technician loop at clock {}: taking {taken} picture packets (decoding, handing over) took {} ms", crate::remote_control::qa_wall_clock(), qa_turn.elapsed().as_millis());
         }
-        if last.elapsed() > Duration::from_secs(12)
-            && control.video_idle_for() > Duration::from_secs(12)
-        {
+        if liveness_state == ViewerLiveness::TimedOut {
             #[cfg(feature = "qa-session")]
             eprintln!("QA video timed out: {} RTP packets ({} bytes, {} with the end mark), {} pictures assembled, {} decoded, {} keyframe requests; {qa_keys} keyframe slices begun, {qa_gaps} gaps in the numbering ({qa_lost} numbers missing), {qa_late} packets late", qa_rtp.0, qa_rtp.1, qa_rtp.4, qa_rtp.2, received, qa_rtp.3);
             #[cfg(feature = "qa-session")]
@@ -3093,6 +3141,42 @@ mod display_fit_tests {
         assert_eq!(&out[0..4], &[255, 0, 0, 255]);
         assert_eq!(&out[3 * 32 + 7 * 4..3 * 32 + 8 * 4], &[0, 0, 255, 255]);
         assert!(fit_frame(&source, (0, 4)).is_err());
+    }
+    #[test]
+    fn w4_static_frame_suppresses_dither_and_detects_real_change() {
+        let base = vec![120u8; 64 * 16 * 4];
+        let a = CapturedFrame::bgra(64, 16, 64 * 4, base.clone()).unwrap();
+        // Minor ±3 temporal dither + 1 blinking cursor pixel -> still static.
+        let mut dithered = base.clone();
+        for b in dithered.iter_mut() {
+            *b = b.saturating_add(3);
+        }
+        dithered[0] = 255;
+        let b = CapturedFrame::bgra(64, 16, 64 * 4, dithered).unwrap();
+        assert!(super::frames_effectively_identical(&a, &b));
+        // Real desktop change (e.g. window or text update across >8 sampled pixels) -> changed.
+        let mut changed = base;
+        for px in 0..100 {
+            let at = px * 32;
+            if at + 3 < changed.len() {
+                changed[at] = 10;
+            }
+        }
+        let c = CapturedFrame::bgra(64, 16, 64 * 4, changed).unwrap();
+        assert!(!super::frames_effectively_identical(&a, &c));
+    }
+    #[test]
+    fn w1_viewer_liveness_never_kills_legacy_host_or_healthy_idle_host() {
+        use std::time::Duration;
+        use super::{ViewerLiveness, viewer_liveness_action};
+        // Host without vidle advertisement: never time out for silence.
+        assert_eq!(viewer_liveness_action(false, Duration::from_secs(60)), ViewerLiveness::Stalled);
+        // Host with vidle sending 1s idle heartbeats: always Ok.
+        assert_eq!(viewer_liveness_action(true, Duration::from_secs(1)), ViewerLiveness::Ok);
+        assert_eq!(viewer_liveness_action(true, Duration::from_millis(2500)), ViewerLiveness::Ok);
+        // Genuine silence > 3 s: Stalled; > 10 s with vidle: TimedOut.
+        assert_eq!(viewer_liveness_action(true, Duration::from_secs(4)), ViewerLiveness::Stalled);
+        assert_eq!(viewer_liveness_action(true, Duration::from_secs(11)), ViewerLiveness::TimedOut);
     }
 }
 

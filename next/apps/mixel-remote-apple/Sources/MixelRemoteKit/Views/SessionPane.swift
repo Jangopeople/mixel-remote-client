@@ -47,6 +47,13 @@ public struct SessionPane: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Theme.page)
+            .task {
+                // N-8: Auto-close an undismissed ended-session window after 60 s so windows never pile up.
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                if !Task.isCancelled, inWindow, workspace.tab(peer) == nil {
+                    workspace.closeWindow(peer)
+                }
+            }
         }
     }
 }
@@ -65,10 +72,9 @@ struct SessionStage: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ViewThatFits(in: .horizontal) {
-                SessionBar(app: app, session: session, drawing: drawing, workspace: workspace, tab: tab, inWindow: inWindow, compact: false, tool: $tool, inviting: $inviting)
-                SessionBar(app: app, session: session, drawing: drawing, workspace: workspace, tab: tab, inWindow: inWindow, compact: true, tool: $tool, inviting: $inviting)
-            }
+            // Q-4: Render one SessionBar instead of ViewThatFits (which instantiated and laid out
+            // two full SessionBar hierarchies on every layout pass).
+            SessionBar(app: app, session: session, drawing: drawing, workspace: workspace, tab: tab, inWindow: inWindow, compact: false, tool: $tool, inviting: $inviting)
             Rectangle().fill(Theme.hairline).frame(height: 1)
             if app.remote.isReconnecting {
                 HStack(spacing: 8) {
@@ -334,10 +340,17 @@ struct SessionBar: View {
                 .disabled(!drawing.available)
                 .opacity(drawing.available ? 1 : 0.45)
             if let recording = remote.recording {
-                button(recording.running ? L("Stop") : L("Record"), recording.running ? "stop.circle.fill" : "record.circle", on: recording.running, danger: recording.running) {
-                    if recording.running { session.stopRecording() } else { record() }
+                let starting = !recording.running && (session.recordingPending || recording.phase == "waiting_for_video")
+                let label = recording.running ? L("Stop") : (starting ? L("Starting…") : L("Record"))
+                let symbol = recording.running ? "stop.circle.fill" : "record.circle"
+                button(label, symbol, on: recording.running || starting, danger: recording.running) {
+                    if recording.running || recording.phase == "waiting_for_video" {
+                        session.stopRecording()
+                    } else {
+                        record()
+                    }
                 }
-                .disabled(session.recordingPending || recording.phase == "saving" || !session.hasFrame)
+                .disabled(recording.phase == "saving" || (!recording.running && !session.hasFrame))
             }
             if app.assistant.available { toggle(.assistant, L("Report"), "doc.text") }
             more
@@ -505,7 +518,7 @@ struct SessionBar: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(16)
-            .frame(width: 360)
+            .frame(width: 400)
         }
     }
 
@@ -579,10 +592,28 @@ struct SessionBar: View {
         if inWindow { workspace.windowFocusChanged(tab.peer, focused: true) }
         Task {
             guard await session.mayRecord() else { session.error = L("Start a permitted recording after the remote screen appears"); return }
-            if let path = await app.chooseSaveLocation("Mixel Remote recording.mp4") {
-                if inWindow { workspace.windowFocusChanged(tab.peer, focused: true) }
-                session.startRecording(path: path)
+            // W-3: Save directly to ~/Movies/Mixel Remote/<computer> <yyyy-MM-dd HH.mm.ss>.mp4
+            // with a unique timestamped filename so recording starts within <300 ms with no Save panel delay.
+            let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first
+                ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Movies")
+            let dir = movies.appendingPathComponent("Mixel Remote", isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let safeName = tab.name
+                .replacingOccurrences(of: "/", with: "-")
+                .replacingOccurrences(of: ":", with: "-")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "yyyy-MM-dd HH.mm.ss"
+            let stamp = formatter.string(from: Date())
+            var candidate = dir.appendingPathComponent("\(safeName.isEmpty ? Format.remoteId(tab.peer) : safeName) \(stamp).mp4")
+            var suffix = 2
+            while FileManager.default.fileExists(atPath: candidate.path) {
+                candidate = dir.appendingPathComponent("\(safeName.isEmpty ? Format.remoteId(tab.peer) : safeName) \(stamp) (\(suffix)).mp4")
+                suffix += 1
             }
+            if inWindow { workspace.windowFocusChanged(tab.peer, focused: true) }
+            session.startRecording(path: candidate.path)
         }
     }
 }
@@ -610,10 +641,18 @@ public struct SessionWindowView: View {
                 window = found
                 // A session window belongs to a running session: macOS does not bring it back after a restart.
                 found?.isRestorable = false
-                // N-10: Remember size and position per computer and avoid opening wider than 1280×820 by default.
+                // N-10: Persist and restore exact window frame per computer ID (fallback to last-used frame)
+                // across connect, end, and reconnect.
                 if let found, found.frameAutosaveName.isEmpty {
-                    let autosaveKey = "MixelSessionWindow-\(peer)"
-                    if !found.setFrameUsingName(autosaveKey) {
+                    let peerKey = "MixelSessionWindowFrame-\(peer)"
+                    let lastKey = "MixelSessionWindowFrame-last"
+                    let defaults = UserDefaults.standard
+                    if let saved = defaults.string(forKey: peerKey) ?? defaults.string(forKey: lastKey) {
+                        let rect = NSRectFromString(saved)
+                        if rect.width >= 820, rect.height >= 520 {
+                            found.setFrame(rect, display: true)
+                        }
+                    } else {
                         var frame = found.frame
                         if frame.width > 1440 || frame.height > 920 {
                             frame.size = NSSize(width: 1180, height: 760)
@@ -621,7 +660,7 @@ public struct SessionWindowView: View {
                             found.center()
                         }
                     }
-                    found.setFrameAutosaveName(autosaveKey)
+                    found.setFrameAutosaveName("MixelSessionWindow-\(peer)")
                 }
                 guard let found, closeGuard == nil else { return }
                 let guardian = WindowCloseGuard(window: found) { [weak found] in
@@ -641,6 +680,20 @@ public struct SessionWindowView: View {
                 closeGuard = nil
                 workspace.windowFocusChanged(peer, focused: false)
                 workspace.windowClosed(peer)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResizeNotification)) { note in
+                if let window, (note.object as? NSWindow) === window {
+                    let str = NSStringFromRect(window.frame)
+                    UserDefaults.standard.set(str, forKey: "MixelSessionWindowFrame-\(peer)")
+                    UserDefaults.standard.set(str, forKey: "MixelSessionWindowFrame-last")
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didMoveNotification)) { note in
+                if let window, (note.object as? NSWindow) === window {
+                    let str = NSStringFromRect(window.frame)
+                    UserDefaults.standard.set(str, forKey: "MixelSessionWindowFrame-\(peer)")
+                    UserDefaults.standard.set(str, forKey: "MixelSessionWindowFrame-last")
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
                 if let window, (note.object as? NSWindow) === window { workspace.windowFocusChanged(peer, focused: true) }

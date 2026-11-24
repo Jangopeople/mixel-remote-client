@@ -140,6 +140,9 @@ pub fn lab_flag(name: &str) -> bool {
 }
 
 /// Optional features this app announces to the other side of a session.
+/// W-1: Host sends periodic 1 s video-idle liveness notifications when the screen has no damage.
+pub const VIDEO_IDLE_FEATURE: &str = "vidle";
+
 pub fn own_features() -> Vec<&'static str> {
     own_features_with(vrate2_enabled())
 }
@@ -154,6 +157,7 @@ pub fn own_features_with(vrate2: bool) -> Vec<&'static str> {
         FULL_HD,
         ULTRA_HD,
         CURSOR_FEATURE,
+        VIDEO_IDLE_FEATURE,
         crate::video_rate::FEATURE,
         crate::remote_session::JOIN,
         crate::remote_session::SWITCH,
@@ -264,6 +268,8 @@ pub struct ControlPipe {
     report_video: bool,
     /// Technician: the reports carry the own clock (`video_rate::FEATURE_CLOCK`).
     report_clock: bool,
+    /// W-1: True when the host advertised `vidle` (periodic 1 s video-idle liveness notifications).
+    peer_video_idle: bool,
     /// Host: reports from the technician that the picture loop has not taken yet.
     video_reports: Vec<crate::video_rate::Report>,
     clipboard: crate::remote_clipboard::ClipboardPipe,
@@ -317,7 +323,7 @@ impl ControlPipe {
     ) -> Result<Self, String> {
         let DisplayOffer { sources: displays, count, current, actions, features } = displays;
         let display_offer = (count, current);
-        let (input_tx, input_rx) = mpsc::channel(32);
+        let (input_tx, input_rx) = mpsc::channel(256);
         let (clipboard_tx, clipboard_rx) = mpsc::channel(1);
         let (allowed, clipboard, files, recording, router) = if config.host {
             let router = if config.control {
@@ -477,6 +483,7 @@ impl ControlPipe {
             cursor_peer: features.iter().any(|name| name == CURSOR_FEATURE),
             cursor_shape: None,
             h264_high: features.iter().any(|name| name == H264_HIGH),
+            peer_video_idle: !config.host && features.iter().any(|name| name == VIDEO_IDLE_FEATURE),
             _guard: config.host.then(crate::session_guard::Guard::new),
             sound_in: std::collections::VecDeque::new(),
             print_out: None,
@@ -530,6 +537,7 @@ impl ControlPipe {
             cursor_peer: false,
             cursor_shape: None,
             h264_high: false,
+            peer_video_idle: false,
             _guard: None,
             sound_in: std::collections::VecDeque::new(),
             print_out: None,
@@ -673,7 +681,7 @@ impl ControlPipe {
         Ok(())
     }
     pub async fn video_idle(&mut self, channel: &Arc<dyn NativeDataChannel>) -> Result<(), String> {
-        if !self.host || self.last_idle_sent.elapsed() < Duration::from_secs(2) {
+        if !self.host || self.last_idle_sent.elapsed() < Duration::from_secs(1) {
             return Ok(());
         }
         let record = self
@@ -713,6 +721,9 @@ impl ControlPipe {
 
     pub fn h264_high(&self) -> bool {
         self.h264_high
+    }
+    pub fn peer_video_idle(&self) -> bool {
+        self.peer_video_idle
     }
 
     /// Host: notifies a cursor-capable controller when the host cursor shape changes.
