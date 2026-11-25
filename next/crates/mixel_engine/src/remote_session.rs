@@ -2871,17 +2871,22 @@ impl Peer {
     /// What the renewal of this transport needs now (see `renewal_decision`).
     fn renewal_step(&self, now: u64, live: bool, direct: bool) -> Renewal {
         let shortened = renewal_shortened();
-        // Q-2: A healthy direct UDP session does not depend on TURN relay credentials.
-        // Avoid tearing down and rebuilding working direct transports every ~5 minutes
-        // when TURN TTL approaches expiry; rotate hourly unless a lab override is active.
+        let relay_left = if self.relay_expires == 0 { None } else { Some(self.relay_expires.saturating_sub(now)) };
+        // Q-2: A healthy direct UDP session does not depend on TURN relay credentials, so it skips
+        // the periodic rotation (hourly instead of every 12 minutes). It does NOT skip the renewal
+        // before the lease ends: the lease is also the peer authorization (it is capped by both
+        // sides' tickets), and without the renewal the session's authorization ran out about
+        // 10 minutes in. In 2.2.6-2.2.9 every direct session then ended at ~610 s ("Remote video
+        // delivery timed out" after the host stopped; Mac mini log, 24-25 Nov 2026: 46 of 46).
+        let lease_ending = relay_left.is_some_and(|left| left <= 90);
         if direct
+            && !lease_ending
             && shortened.is_none()
             && self.restart_pending.is_none()
             && self.rotated_at.elapsed() < Duration::from_secs(3600)
         {
             return Renewal::Wait;
         }
-        let relay_left = if self.relay_expires == 0 { None } else { Some(self.relay_expires.saturating_sub(now)) };
         let step = renewal_decision(
             live && !self.cancel.load(Ordering::Acquire),
             self.restart_pending.map(|sent| sent.elapsed()),
@@ -3121,6 +3126,18 @@ fn renewal_shortened() -> Option<Duration> {
     }
     #[cfg(not(feature = "qa-session"))]
     None
+}
+
+/// The connection service caps a new relay lease at 15 minutes after this device last refreshed its
+/// authorization (`Renew`). A transport renewal sent late in that window gets a short lease (seen live: 5 min
+/// instead of 10), and the next renewal follows soon after. So while less than a full lease (10 min) is left in
+/// the window, or a refresh is already on its way, the renewal waits for the refresh. It never waits once the
+/// running lease is nearly over: then a short lease is better than none.
+fn renewal_waits_for_device_refresh(since_device_refresh: Duration, refresh_pending: bool, relay_left: Option<u64>) -> bool {
+    const BROKER_WINDOW: u64 = 900;
+    const FULL_LEASE: u64 = 600;
+    let lease_has_time = relay_left.is_some_and(|left| left > 30);
+    lease_has_time && (refresh_pending || BROKER_WINDOW.saturating_sub(since_device_refresh.as_secs()) < FULL_LEASE)
 }
 
 /// When the controller side asks for new relay credentials and transport keys. `relay_left` is the time
@@ -3867,6 +3884,8 @@ async fn run(
                     }
                     let now=SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_|"System clock is unavailable")?.as_secs();
                     if now>=authorized_until || pending_renewal.is_some_and(|deadline|std::time::Instant::now()>=deadline) {return Err(Failure::network("Device authorization expired; reconnecting"));}
+                    // A transport renewal due while this device's authorization window would cut its new relay lease short.
+                    let mut device_refresh_wanted=false;
                     if last_activity.elapsed()>Duration::from_secs(50){crate::app_log::info("signaling","heartbeat expired after 50s — reconnecting");return Err(Failure::network("Connection-service heartbeat expired"));}
                     let mut finished_retry:Vec<usize>=Vec::new();
                     for (position,active) in retries.iter_mut().enumerate(){
@@ -3921,7 +3940,9 @@ async fn run(
                             let direct=status.connection_path.as_deref()==Some("direct");
                             let step=active.renewal_step(now,live,direct);
                             if step==Renewal::Expired{return Err("The accepted connection renewal deadline expired".into());}
-                            if active.apply_renewal(step){
+                            let relay_left=(active.relay_expires != 0).then(|| active.relay_expires.saturating_sub(now));
+                            if step==Renewal::Send && renewal_waits_for_device_refresh(last_renewed.elapsed(), pending_renewal.is_some(), relay_left){device_refresh_wanted=true;}
+                            else if active.apply_renewal(step){
                                 crate::app_log::info("session", &format!("session={} triggering transport renewal step={step:?} direct={direct} relay_left={:?} since_rotation={}s", active.id, (active.relay_expires != 0).then(|| active.relay_expires.saturating_sub(now)), active.rotated_at.elapsed().as_secs()));
                                 send(&mut socket,ClientMessage::Restart{session:active.id}).await?;
                                 state.change(generation,|status|status.message="Renewing relay credentials and transport keys for the accepted peer".into()).await;
@@ -3943,6 +3964,8 @@ async fn run(
                             let direct=state.slot_is_direct(active.ui).await;
                             let step=active.renewal_step(now,live,direct);
                             if step==Renewal::Expired {ended.push((active.id,"The accepted connection renewal deadline expired".into()));continue;}
+                            let relay_left=(active.relay_expires != 0).then(|| active.relay_expires.saturating_sub(now));
+                            if step==Renewal::Send && renewal_waits_for_device_refresh(last_renewed.elapsed(), pending_renewal.is_some(), relay_left) {device_refresh_wanted=true;continue;}
                             if matches!(step,Renewal::Send|Renewal::Retry|Renewal::GiveUp) {renew.push((active.id,step));}
                         }
                         for (session,step) in renew {
@@ -3996,7 +4019,7 @@ async fn run(
                     };
                     if fresh_principal.user!=principal.user || fresh_principal.tenant!=principal.tenant || fresh_principal.staff!=principal.staff {return Err(Failure::network("Account authorization changed; reconnecting registration"));}
                     let token_changed = fresh.as_ref().zip(credential.as_ref()).is_some_and(|(new, old)| new.token.as_str()!=old.token.as_str());
-                    if pending_renewal.is_none() && last_delegation_attempt.elapsed()>=Duration::from_secs(31) && (token_changed || last_renewed.elapsed()>=Duration::from_secs(600) || authorized_until.saturating_sub(now)<=180) {
+                    if pending_renewal.is_none() && last_delegation_attempt.elapsed()>=Duration::from_secs(31) && (token_changed || device_refresh_wanted || last_renewed.elapsed()>=Duration::from_secs(600) || authorized_until.saturating_sub(now)<=180) {
                         last_delegation_attempt=std::time::Instant::now();
                         let Ok(renewed)=registration_ticket(&fresh,&enrolled,&identity).await else {
                             continue;
@@ -4006,7 +4029,7 @@ async fn run(
                         // A ticket capped by an expiring ISM token cannot gain
                         // lifetime until native account refresh succeeds, unless the
                         // 15-minute monotonic broker lease needs a refresh.
-                        if renewed.expires_at<=authorized_until && last_renewed.elapsed()<Duration::from_secs(600) {credential=fresh;continue;}
+                        if renewed.expires_at<=authorized_until && last_renewed.elapsed()<Duration::from_secs(600) && !device_refresh_wanted {credential=fresh;continue;}
                         send(&mut socket,ClientMessage::Renew{token:signaling_server::delegated_auth::encode(&renewed).map_err(|_|"Cannot encode delegated device renewal")?}).await?;
                         own_ticket=renewed;pending_renewal=Some(std::time::Instant::now()+Duration::from_secs(20));credential=fresh;
                     }
@@ -5149,6 +5172,25 @@ mod consent_tests {
         assert_eq!(renewal_decision(true, Some(s(6)), 3, s(600), Some(0), None), Renewal::Expired);
         assert_eq!(renewal_decision(false, None, 0, s(900), Some(0), None), Renewal::Wait, "not live: never asks");
         assert_eq!(renewal_decision(true, None, 0, s(60), Some(500), Some(s(60))), Renewal::Send, "lab shortening");
+        // Seen live: a renewal 16 s before the device refresh got a 5-minute lease.
+        assert!(renewal_waits_for_device_refresh(s(584), false, Some(90)), "late in the window: refresh first");
+        assert!(!renewal_waits_for_device_refresh(s(120), false, Some(90)), "fresh window: renew now");
+        assert!(renewal_waits_for_device_refresh(s(10), true, Some(90)), "a refresh on its way is waited for");
+        assert!(!renewal_waits_for_device_refresh(s(584), true, Some(30)), "the running lease nearly over: renew anyway");
+        assert!(!renewal_waits_for_device_refresh(s(584), false, None), "lease unknown: renew now");
+    }
+    #[test]
+    fn a_direct_session_skips_the_rotation_but_not_the_renewal_before_its_lease_ends() {
+        let mut peer = invitation();
+        peer.host = false;
+        peer.signals = Some(mpsc::channel(1).0);
+        peer.relay_expires = 1_000;
+        peer.rotated_at = std::time::Instant::now() - Duration::from_secs(800);
+        // 13 minutes since the rotation, 500 s of lease left: a relayed session rotates, a direct one waits.
+        assert_eq!(peer.renewal_step(500, true, false), Renewal::Send);
+        assert_eq!(peer.renewal_step(500, true, true), Renewal::Wait);
+        // 80 s of lease left: both renew, or the peer authorization runs out.
+        assert_eq!(peer.renewal_step(920, true, true), Renewal::Send);
     }
     #[test]
     fn the_renewal_bookkeeping_counts_tries_and_starts_over_after_giving_up() {
