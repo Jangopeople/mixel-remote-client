@@ -2871,17 +2871,22 @@ impl Peer {
     /// What the renewal of this transport needs now (see `renewal_decision`).
     fn renewal_step(&self, now: u64, live: bool, direct: bool) -> Renewal {
         let shortened = renewal_shortened();
-        // Q-2: A healthy direct UDP session does not depend on TURN relay credentials.
-        // Avoid tearing down and rebuilding working direct transports every ~5 minutes
-        // when TURN TTL approaches expiry; rotate hourly unless a lab override is active.
+        let relay_left = if self.relay_expires == 0 { None } else { Some(self.relay_expires.saturating_sub(now)) };
+        // Q-2: A healthy direct UDP session does not depend on TURN relay credentials, so it skips
+        // the periodic rotation (hourly instead of every 12 minutes). It does NOT skip the renewal
+        // before the lease ends: the lease is also the peer authorization (it is capped by both
+        // sides' tickets), and without the renewal the session's authorization ran out about
+        // 10 minutes in. In 2.2.6-2.2.9 every direct session then ended at ~610 s ("Remote video
+        // delivery timed out" after the host stopped; Mac mini log, 24-25 Nov 2026: 46 of 46).
+        let lease_ending = relay_left.is_some_and(|left| left <= 90);
         if direct
+            && !lease_ending
             && shortened.is_none()
             && self.restart_pending.is_none()
             && self.rotated_at.elapsed() < Duration::from_secs(3600)
         {
             return Renewal::Wait;
         }
-        let relay_left = if self.relay_expires == 0 { None } else { Some(self.relay_expires.saturating_sub(now)) };
         let step = renewal_decision(
             live && !self.cancel.load(Ordering::Acquire),
             self.restart_pending.map(|sent| sent.elapsed()),
@@ -5149,6 +5154,19 @@ mod consent_tests {
         assert_eq!(renewal_decision(true, Some(s(6)), 3, s(600), Some(0), None), Renewal::Expired);
         assert_eq!(renewal_decision(false, None, 0, s(900), Some(0), None), Renewal::Wait, "not live: never asks");
         assert_eq!(renewal_decision(true, None, 0, s(60), Some(500), Some(s(60))), Renewal::Send, "lab shortening");
+    }
+    #[test]
+    fn a_direct_session_skips_the_rotation_but_not_the_renewal_before_its_lease_ends() {
+        let mut peer = invitation();
+        peer.host = false;
+        peer.signals = Some(mpsc::channel(1).0);
+        peer.relay_expires = 1_000;
+        peer.rotated_at = std::time::Instant::now() - Duration::from_secs(800);
+        // 13 minutes since the rotation, 500 s of lease left: a relayed session rotates, a direct one waits.
+        assert_eq!(peer.renewal_step(500, true, false), Renewal::Send);
+        assert_eq!(peer.renewal_step(500, true, true), Renewal::Wait);
+        // 80 s of lease left: both renew, or the peer authorization runs out.
+        assert_eq!(peer.renewal_step(920, true, true), Renewal::Send);
     }
     #[test]
     fn the_renewal_bookkeeping_counts_tries_and_starts_over_after_giving_up() {
