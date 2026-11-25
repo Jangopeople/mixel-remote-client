@@ -1831,19 +1831,23 @@ pub(crate) fn frames_effectively_identical(
     if a.len() != b.len() {
         return false;
     }
+    // Every pixel is checked. Sampling every 8th pixel (2.2.9) missed small changes such as
+    // the taskbar clock or a typed character: those never reached the viewer, so the picture
+    // looked frozen. Equal 64-byte runs are skipped with a fast compare, and only runs that
+    // differ are checked per pixel, ignoring ±4 dither and up to 8 changed pixels (a caret).
     let mut diff_pixels = 0usize;
-    let mut idx = 0usize;
-    while idx + 3 < a.len() {
-        if a[idx].abs_diff(b[idx]) > 4
-            || a[idx + 1].abs_diff(b[idx + 1]) > 4
-            || a[idx + 2].abs_diff(b[idx + 2]) > 4
-        {
-            diff_pixels += 1;
-            if diff_pixels > 8 {
-                return false;
+    for (run_a, run_b) in a.chunks(64).zip(b.chunks(64)) {
+        if run_a == run_b {
+            continue;
+        }
+        for (pa, pb) in run_a.as_chunks::<4>().0.iter().zip(run_b.as_chunks::<4>().0) {
+            if pa[0].abs_diff(pb[0]) > 4 || pa[1].abs_diff(pb[1]) > 4 || pa[2].abs_diff(pb[2]) > 4 {
+                diff_pixels += 1;
+                if diff_pixels > 8 {
+                    return false;
+                }
             }
         }
-        idx += 32;
     }
     true
 }
@@ -3228,6 +3232,22 @@ mod display_fit_tests {
         }
         let c = CapturedFrame::bgra(64, 16, 64 * 4, changed).unwrap();
         assert!(!super::frames_effectively_identical(&a, &c));
+    }
+    #[test]
+    fn a_small_change_between_sampled_columns_is_not_static() {
+        // A clock digit changing: a 3 x 10 pixel stroke in columns 3..6 (2.2.9 sampled only
+        // every 8th column, so it never saw this and the viewer kept the old time).
+        let base = vec![40u8; 64 * 16 * 4];
+        let a = CapturedFrame::bgra(64, 16, 64 * 4, base.clone()).unwrap();
+        let mut digit = base;
+        for y in 3..13 {
+            for x in 3..6 {
+                let at = y * 64 * 4 + x * 4;
+                digit[at..at + 3].copy_from_slice(&[255, 255, 255]);
+            }
+        }
+        let b = CapturedFrame::bgra(64, 16, 64 * 4, digit).unwrap();
+        assert!(!super::frames_effectively_identical(&a, &b));
     }
     #[test]
     fn w1_viewer_liveness_never_kills_legacy_host_or_healthy_idle_host() {
