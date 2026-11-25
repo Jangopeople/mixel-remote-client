@@ -408,6 +408,18 @@ impl NativeTransport {
         }
         Ok(description)
     }
+    /// Whether the pair ICE selected runs through the relay: either side's candidate of the pair is a
+    /// relay candidate. `None` while no pair is selected. A session that allows direct connections can
+    /// still end up on the relay (both sides behind NAT that keeps hole punching out, a firewall
+    /// that drops UDP), so the path is read here and not taken from the relay-only setting.
+    pub async fn relayed(&self) -> Option<bool> {
+        if self.relay_only {
+            return Some(true);
+        }
+        let sctp = self.peer.sctp().await?;
+        let pair = sctp.transport().ice_transport().get_selected_candidate_pair().await.ok()??;
+        Some(pair_is_relayed(pair.local().typ, pair.remote().typ))
+    }
     pub fn ice_gathering_complete(&self) -> bool {
         *self.gathered.borrow()
     }
@@ -445,6 +457,15 @@ impl NativeTransport {
         streams?;
         Ok(())
     }
+}
+
+/// A candidate pair runs through the relay when either of its two candidates is a relay candidate.
+pub fn pair_is_relayed(
+    local: webrtc::peer_connection::RTCIceCandidateType,
+    remote: webrtc::peer_connection::RTCIceCandidateType,
+) -> bool {
+    use webrtc::peer_connection::RTCIceCandidateType::Relay;
+    local == Relay || remote == Relay
 }
 
 /// SHA-256 local certificate fingerprint from locally generated SDP. All media
@@ -511,6 +532,20 @@ mod receive_buffer_tests {
             received += 1;
         }
         assert_eq!(received, count, "of a burst of {count} packets ({} bytes) into {room} bytes", count * 1200);
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::pair_is_relayed;
+    use webrtc::peer_connection::RTCIceCandidateType::{Host, Prflx, Relay, Srflx};
+
+    #[test]
+    fn a_pair_is_relayed_when_either_candidate_is_a_relay_candidate() {
+        assert!(!pair_is_relayed(Host, Host));
+        assert!(!pair_is_relayed(Srflx, Prflx));
+        assert!(pair_is_relayed(Relay, Host), "our side allocated on the relay");
+        assert!(pair_is_relayed(Srflx, Relay), "the other side is on the relay");
     }
 }
 
