@@ -2879,8 +2879,12 @@ impl Peer {
         // 10 minutes in. In 2.2.6-2.2.9 every direct session then ended at ~610 s ("Remote video
         // delivery timed out" after the host stopped; Mac mini log, 24-25 Nov 2026: 46 of 46).
         let lease_ending = relay_left.is_some_and(|left| left <= 90);
+        // The media connection is down (a network change, a Wi-Fi drop): build a new one through
+        // the connection service now, in the same accepted session, instead of letting it end.
+        let link_lost = self.link.lost.load(Ordering::Acquire);
         if direct
             && !lease_ending
+            && !link_lost
             && shortened.is_none()
             && self.restart_pending.is_none()
             && self.rotated_at.elapsed() < Duration::from_secs(3600)
@@ -2894,6 +2898,7 @@ impl Peer {
             self.rotated_at.elapsed(),
             relay_left,
             shortened,
+            link_lost,
         );
         #[cfg(feature = "qa-session")]
         if step == Renewal::Wait && self.restart_pending.is_none() && self.rotated_at.elapsed() >= Duration::from_secs(31) && (relay_left.is_some_and(|left| left <= 90) || renewal_shortened().is_some_and(|after| self.rotated_at.elapsed() >= after)) {
@@ -3143,7 +3148,9 @@ fn renewal_waits_for_device_refresh(since_device_refresh: Duration, refresh_pend
 /// When the controller side asks for new relay credentials and transport keys. `relay_left` is the time
 /// the relay lease of the running transport has left (`None` while unknown, which counts as due). A request that the broker
 /// does not answer within a few seconds is sent again, well before the lease ends.
-fn renewal_decision(live: bool, pending: Option<Duration>, tries: u8, since_rotation: Duration, relay_left: Option<u64>, shortened: Option<Duration>) -> Renewal {
+/// A lost media connection is renewed at once, but not sooner than this after the last renewal.
+const LOST_LINK_RENEWAL_PAUSE: Duration = Duration::from_secs(10);
+fn renewal_decision(live: bool, pending: Option<Duration>, tries: u8, since_rotation: Duration, relay_left: Option<u64>, shortened: Option<Duration>, link_lost: bool) -> Renewal {
     if !live {
         return Renewal::Wait;
     }
@@ -3155,6 +3162,9 @@ fn renewal_decision(live: bool, pending: Option<Duration>, tries: u8, since_rota
             return Renewal::Retry;
         }
         return if relay_left.is_none_or(|left| left > 5) { Renewal::GiveUp } else { Renewal::Expired };
+    }
+    if link_lost && since_rotation >= LOST_LINK_RENEWAL_PAUSE {
+        return Renewal::Send;
     }
     let due = relay_left.is_none_or(|left| left <= 90) || since_rotation >= Duration::from_secs(720) || shortened.is_some_and(|after| since_rotation >= after);
     if since_rotation >= Duration::from_secs(31) && due { Renewal::Send } else { Renewal::Wait }
@@ -3505,7 +3515,9 @@ impl IceQueue {
     }
 }
 /// How long a session whose connection to the connection service was lost waits to be resumed.
-const RESUME_WINDOW: Duration = Duration::from_secs(30);
+/// The connection service waits 60 s for a lost side (`DROP_RESUME_WINDOW`); this side gives up
+/// a little before that.
+const RESUME_WINDOW: Duration = Duration::from_secs(55);
 /// A session carried from one registration to the next while the connection service restarts.
 struct Carry {
     /// Every session whose media connection was up (the hosted one, or the technician's, each on its own).
@@ -5162,16 +5174,20 @@ mod consent_tests {
     #[test]
     fn a_renewal_request_without_an_answer_is_sent_again_before_the_lease_ends() {
         let s = Duration::from_secs;
-        assert_eq!(renewal_decision(true, None, 0, s(100), Some(500), None), Renewal::Wait, "not due while the lease has time");
-        assert_eq!(renewal_decision(true, None, 0, s(10), Some(30), None), Renewal::Wait, "not within the pause between renewals");
-        assert_eq!(renewal_decision(true, None, 0, s(510), Some(90), None), Renewal::Send);
-        assert_eq!(renewal_decision(true, Some(s(3)), 1, s(520), Some(80), None), Renewal::Wait);
-        assert_eq!(renewal_decision(true, Some(s(6)), 1, s(520), Some(80), None), Renewal::Retry);
-        assert_eq!(renewal_decision(true, Some(s(6)), 2, s(520), Some(72), None), Renewal::Retry);
-        assert_eq!(renewal_decision(true, Some(s(6)), 3, s(540), Some(60), None), Renewal::GiveUp, "the lease still runs: start over later");
-        assert_eq!(renewal_decision(true, Some(s(6)), 3, s(600), Some(0), None), Renewal::Expired);
-        assert_eq!(renewal_decision(false, None, 0, s(900), Some(0), None), Renewal::Wait, "not live: never asks");
-        assert_eq!(renewal_decision(true, None, 0, s(60), Some(500), Some(s(60))), Renewal::Send, "lab shortening");
+        assert_eq!(renewal_decision(true, None, 0, s(100), Some(500), None, false), Renewal::Wait, "not due while the lease has time");
+        assert_eq!(renewal_decision(true, None, 0, s(10), Some(30), None, false), Renewal::Wait, "not within the pause between renewals");
+        assert_eq!(renewal_decision(true, None, 0, s(510), Some(90), None, false), Renewal::Send);
+        assert_eq!(renewal_decision(true, Some(s(3)), 1, s(520), Some(80), None, false), Renewal::Wait);
+        assert_eq!(renewal_decision(true, Some(s(6)), 1, s(520), Some(80), None, false), Renewal::Retry);
+        assert_eq!(renewal_decision(true, Some(s(6)), 2, s(520), Some(72), None, false), Renewal::Retry);
+        assert_eq!(renewal_decision(true, Some(s(6)), 3, s(540), Some(60), None, false), Renewal::GiveUp, "the lease still runs: start over later");
+        assert_eq!(renewal_decision(true, Some(s(6)), 3, s(600), Some(0), None, false), Renewal::Expired);
+        assert_eq!(renewal_decision(false, None, 0, s(900), Some(0), None, false), Renewal::Wait, "not live: never asks");
+        assert_eq!(renewal_decision(true, None, 0, s(60), Some(500), Some(s(60)), false), Renewal::Send, "lab shortening");
+        // A lost media connection (network change) is rebuilt at once, not after the lease.
+        assert_eq!(renewal_decision(true, None, 0, s(40), Some(500), None, true), Renewal::Send, "lost link: renew now");
+        assert_eq!(renewal_decision(true, None, 0, s(5), Some(500), None, true), Renewal::Wait, "not right after a renewal");
+        assert_eq!(renewal_decision(true, Some(s(3)), 1, s(40), Some(500), None, true), Renewal::Wait, "one already on its way");
         // Seen live: a renewal 16 s before the device refresh got a 5-minute lease.
         assert!(renewal_waits_for_device_refresh(s(584), false, Some(90)), "late in the window: refresh first");
         assert!(!renewal_waits_for_device_refresh(s(120), false, Some(90)), "fresh window: renew now");
@@ -5191,6 +5207,9 @@ mod consent_tests {
         assert_eq!(peer.renewal_step(500, true, true), Renewal::Wait);
         // 80 s of lease left: both renew, or the peer authorization runs out.
         assert_eq!(peer.renewal_step(920, true, true), Renewal::Send);
+        // The media connection is lost (network change): a direct session renews at once too.
+        peer.link.lost.store(true, Ordering::Release);
+        assert_eq!(peer.renewal_step(500, true, true), Renewal::Send);
     }
     #[test]
     fn the_renewal_bookkeeping_counts_tries_and_starts_over_after_giving_up() {

@@ -51,7 +51,14 @@ pub const PROBE_EVERY: Duration = Duration::from_secs(8);
 pub const MIN_LIMIT: f64 = 75_000.0;
 pub const START_LIMIT: f64 = 800_000.0;
 pub const MAX_LIMIT: f64 = 20_000_000.0;
-const HISTORY: usize = 8192;
+/// Sent packets remembered for matching reports. 8192 covered under a second at LAN pace, so a
+/// report for an older packet was ignored and the gate stayed shut; 32768 is several seconds.
+const HISTORY: usize = 32768;
+/// Bytes sent longer ago than base round trip + [`QUEUE_ALLOWED`] + this count as delivered for
+/// [`RateControl::backlogged`]: a late report (the control channel is ordered and reliable, one
+/// retransmission or a file record ahead of it holds every later report up) can no longer keep the
+/// gate shut until [`SILENCE`]. A real queue that long is cut by the queue signal meanwhile.
+pub const DELIVERED_AFTER: Duration = Duration::from_millis(300);
 const BASE_WINDOW: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -243,6 +250,7 @@ impl RateControl {
         if now.saturating_duration_since(last) >= SILENCE {
             return false;
         }
+        let in_flight = self.in_flight_aged(now);
         let mut window = self.limit * 0.6 * (self.base + QUEUE_ALLOWED).as_secs_f64() + 20_000.0;
         if self.queue <= QUEUE_LOW {
             // A clean link (no queue): a single keyframe or burst between reports must not
@@ -254,7 +262,19 @@ impl RateControl {
                 (self.limit * 0.6).clamp(45_000.0, 150_000.0)
             });
         }
-        self.in_flight() as f64 > window
+        in_flight as f64 > window
+    }
+    /// [`Self::in_flight`] without what left longer ago than the line plus its allowed queue can
+    /// hold it ([`DELIVERED_AFTER`]).
+    fn in_flight_aged(&self, now: Instant) -> u64 {
+        let horizon = self.base + QUEUE_ALLOWED + DELIVERED_AFTER;
+        let aged = self
+            .sent
+            .iter()
+            .rev()
+            .find(|(_, at, _)| now.saturating_duration_since(*at) >= horizon)
+            .map_or(0, |(_, _, total)| *total);
+        self.sent_total - self.acked_total.max(aged)
     }
     /// Call regularly: decays the limit when the reports stopped.
     pub fn tick(&mut self, now: Instant) {
@@ -742,6 +762,36 @@ mod tests {
         assert!(control.backlogged(t0 + Duration::from_millis(110)), "480 kB unreported is more than the line holds");
         // Without reports for a while it never blocks (a technician that stopped reporting).
         assert!(!control.backlogged(t0 + Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn a_late_report_holds_the_gate_well_under_a_second_not_three() {
+        let t0 = Instant::now();
+        let mut control = RateControl::new(t0);
+        control.sent(t0, 0, 1200);
+        control.report(t0 + Duration::from_millis(20), Report { seq: 0, age: Duration::ZERO, interval: Duration::from_millis(100), bytes: 1200, clock: None });
+        for seq in 1..=400u16 {
+            control.sent(t0 + Duration::from_millis(30), seq, 1200);
+        }
+        assert!(control.backlogged(t0 + Duration::from_millis(40)));
+        // The reports for these packets are held up behind a retransmission on the control channel.
+        let open_at = (1..30)
+            .map(|step| t0 + Duration::from_millis(30 + step * 50))
+            .find(|at| !control.backlogged(*at))
+            .expect("the gate opens before the 3 s silence");
+        assert!(open_at.saturating_duration_since(t0) < Duration::from_millis(800), "opened after {:?}", open_at - t0);
+    }
+
+    #[test]
+    fn a_report_for_a_packet_sent_two_seconds_ago_at_lan_pace_still_counts() {
+        let t0 = Instant::now();
+        let mut control = RateControl::new(t0);
+        // 10,000 packets a second (about 12 MB/s), the report names one 1.5 s back.
+        for seq in 0..20_000u32 {
+            control.sent(t0 + Duration::from_micros(u64::from(seq) * 100), seq as u16, 1200);
+        }
+        control.report(t0 + Duration::from_millis(2000), Report { seq: 5_000, age: Duration::ZERO, interval: Duration::from_millis(100), bytes: 120_000, clock: None });
+        assert!(control.in_flight() < 20_000 * 1200, "the report was matched");
     }
 
     #[test]

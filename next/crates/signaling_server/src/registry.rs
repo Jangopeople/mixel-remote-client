@@ -146,6 +146,8 @@ struct Peer {
     features: Vec<String>,
     /// App version and platform the app reported (`app_version`), for the Devices list.
     app_version: Option<(String, String)>,
+    /// When anything last arrived on this registration's connection (see [`Registry::touch`]).
+    seen: Instant,
 }
 impl Peer {
     fn unattended_host_only(&self) -> bool {
@@ -176,6 +178,15 @@ const SESSION_MAX: Duration = Duration::from_secs(8 * 3600);
 const ENDING_WARNINGS: [Duration; 2] = [Duration::from_secs(300), Duration::from_secs(60)];
 /// After a broker restart, a session waits this long for both sides to `resume`.
 pub const RESUME_WINDOW: Duration = Duration::from_secs(90);
+/// A running session whose one side lost its connection to the broker (Wi-Fi drop, network
+/// change, VPN) waits this long for that side to come back and `resume` it, instead of ending at
+/// once. The person at the computer does not have to accept again; the media connection may even
+/// have carried on meanwhile.
+pub const DROP_RESUME_WINDOW: Duration = Duration::from_secs(60);
+/// A device that registers again while its earlier registration is still listed takes it over
+/// when nothing arrived on the earlier one for this long (it is a dead connection the broker has not
+/// noticed yet). A live one (two copies running) keeps it, so they cannot take turns.
+pub const TAKEOVER_SILENCE: Duration = Duration::from_secs(10);
 /// A handover file older than this is ignored (the sessions it lists are long gone).
 pub const HANDOVER_MAX_AGE_SECONDS: u64 = 120;
 const CODE_ATTEMPTS: u8 = 5;
@@ -708,11 +719,17 @@ impl Registry {
         tx: mpsc::Sender<ServerMessage>,
         stop: watch::Sender<bool>,
     ) -> Result<(u32, Uuid), ErrorCode> {
-        if !(100_000_000..=999_999_999).contains(&host)
-            || self.peers.contains_key(&host)
-            || self.peers.len() >= self.max_peers
-        {
+        if !(100_000_000..=999_999_999).contains(&host) || self.peers.len() >= self.max_peers {
             return Err(ErrorCode::Busy);
+        }
+        if let Some(old) = self.peers.get(&host) {
+            // The same device is back (a network change) while its old connection still looks open.
+            if old.seen.elapsed() < TAKEOVER_SILENCE || old.principal.user != principal.user {
+                return Err(ErrorCode::Busy);
+            }
+            let generation = old.generation;
+            let _ = old.stop.send(true);
+            self.disconnect(host, generation);
         }
         let generation = Uuid::new_v4();
         self.peers.insert(
@@ -730,6 +747,7 @@ impl Registry {
                 attended_support: false,
                 features: Vec::new(),
                 app_version: None,
+                seen: Instant::now(),
             },
         );
         self.send(
@@ -838,15 +856,57 @@ impl Registry {
         {
             return;
         }
-        self.peers.remove(&id);
+        self.disconnect_at(id, Instant::now());
+    }
+    /// The registration `id` is gone: its connected sessions wait [`DROP_RESUME_WINDOW`] for it to
+    /// come back and `resume` (when both sides have a signed identity); every other session ends.
+    fn disconnect_at(&mut self, id: u32, now: Instant) {
+        let side = |registry: &Self, id: u32| {
+            registry.peers.get(&id).and_then(|peer| peer.identity.as_ref()).map(|ticket| HandoverSide {
+                connection: id,
+                profile: Uuid::from_bytes(ticket.identity.profile),
+                device: Uuid::from_bytes(ticket.identity.device),
+            })
+        };
         let sessions: Vec<_> = self
             .sessions
             .iter()
             .filter(|(_, s)| s.controller == id || s.host == id)
             .map(|(id, _)| *id)
             .collect();
-        for s in sessions {
-            self.close(s, CloseReason::Disconnected, Instant::now());
+        let mut ending = Vec::new();
+        for session in sessions {
+            let Some(room) = self.sessions.get(&session) else { continue };
+            if room.parked.is_some() {
+                // Already waiting for a side to come back (this ID's earlier connection, or a
+                // broker restart): it keeps waiting until its deadline.
+                continue;
+            }
+            let parkable = matches!(room.phase, Phase::Connected)
+                && room.parked.is_none()
+                && room.controller != room.host
+                && room.active_until.is_some_and(|until| until > now);
+            let sides = (side(self, room.controller), side(self, room.host));
+            match (parkable, sides) {
+                (true, (Some(controller), Some(host))) => {
+                    let gone_controller = room.controller == id;
+                    if let Some(room) = self.sessions.get_mut(&session) {
+                        room.parked = Some(Parked { controller, host, controller_back: !gone_controller, host_back: gone_controller });
+                        room.deadline = room.active_until.map_or(now, |until| until.min(now + DROP_RESUME_WINDOW));
+                    }
+                }
+                _ => ending.push(session),
+            }
+        }
+        self.peers.remove(&id);
+        for session in ending {
+            self.close(session, CloseReason::Disconnected, now);
+        }
+    }
+    /// Something arrived on the registration's connection (any message, a ping or a pong).
+    pub fn touch(&mut self, id: u32, generation: Uuid, now: Instant) {
+        if let Some(peer) = self.peers.get_mut(&id).filter(|peer| peer.generation == generation) {
+            peer.seen = now;
         }
     }
     pub fn expire(&mut self, now: Instant) {
@@ -858,10 +918,11 @@ impl Registry {
             .sessions
             .iter()
             .filter(|(_, s)| now >= s.deadline)
-            .map(|(id, _)| *id)
+            .map(|(id, s)| (*id, s.parked.is_some()))
             .collect();
-        for s in expired {
-            self.close(s, CloseReason::Expired, now);
+        for (s, parked) in expired {
+            // A side that did not come back in time is a lost computer, as before parking existed.
+            self.close(s, if parked { CloseReason::Disconnected } else { CloseReason::Expired }, now);
         }
         // D2: a support password that is over no longer starts sessions; the host's app is told.
         let lapsed: Vec<u32> = self
@@ -2937,11 +2998,89 @@ mod rotation_tests {
     }
 
     #[test]
+    fn a_side_that_loses_its_connection_comes_back_into_the_same_session() {
+        let mut registry = Registry::default();
+        let now = Instant::now();
+        let (technician, mut technician_events) = peer(&mut registry, 111_111_111, 10);
+        let (host, _host_events) = peer(&mut registry, 222_222_222, 11);
+        let session = connected_with_password(&mut registry, now, (111_111_111, technician), (222_222_222, host));
+        drain(&mut technician_events);
+        // The customer's network drops: the session is not closed, the technician hears nothing.
+        registry.disconnect(222_222_222, host);
+        assert!(registry.sessions.contains_key(&session));
+        assert!(drain(&mut technician_events).iter().all(|event| !matches!(event, ServerMessage::Closed { .. })));
+        assert_eq!(
+            registry.handle(111_111_111, technician, ClientMessage::Signal { session, payload: Signal::Ice("candidate".into()) }, now),
+            Err(ErrorCode::Forbidden),
+            "nothing passes while one side is away"
+        );
+        // Another account on the host's ID cannot take the session.
+        let (impostor, _i) = peer(&mut registry, 222_222_222, 12);
+        assert_eq!(registry.handle(222_222_222, impostor, ClientMessage::Resume { session }, now), Err(ErrorCode::Unavailable));
+        registry.disconnect(222_222_222, impostor);
+        // The same device is back and resumes: no new consent, the session runs on.
+        let (host, mut host_events) = peer(&mut registry, 222_222_222, 11);
+        registry.handle(222_222_222, host, ClientMessage::Resume { session }, now).unwrap();
+        assert!(drain(&mut host_events).iter().any(|event| matches!(event, ServerMessage::Resumed { session: back } if *back == session)));
+        registry.handle(111_111_111, technician, ClientMessage::Signal { session, payload: Signal::Ice("candidate".into()) }, now).unwrap();
+        assert!(drain(&mut host_events).iter().any(|event| matches!(event, ServerMessage::Signal { .. })));
+        // Back to its normal deadline: nothing ends after the resume window.
+        registry.expire(now + DROP_RESUME_WINDOW + Duration::from_secs(5));
+        assert!(registry.sessions.contains_key(&session));
+    }
+
+    #[test]
+    fn a_side_that_does_not_come_back_ends_the_session_as_lost() {
+        let mut registry = Registry::default();
+        let now = Instant::now();
+        let (technician, mut technician_events) = peer(&mut registry, 111_111_111, 10);
+        let (host, _host_events) = peer(&mut registry, 222_222_222, 11);
+        let session = connected_with_password(&mut registry, now, (111_111_111, technician), (222_222_222, host));
+        drain(&mut technician_events);
+        registry.disconnect(222_222_222, host);
+        registry.expire(now + DROP_RESUME_WINDOW - Duration::from_secs(5));
+        assert!(registry.sessions.contains_key(&session));
+        registry.expire(Instant::now() + DROP_RESUME_WINDOW + Duration::from_secs(1));
+        assert!(!registry.sessions.contains_key(&session));
+        assert!(drain(&mut technician_events).iter().any(|event| matches!(
+            event,
+            ServerMessage::Closed { session: closed, reason: CloseReason::Disconnected } if *closed == session
+        )));
+    }
+
+    #[test]
+    fn a_device_back_on_a_new_connection_takes_over_its_silent_old_one() {
+        let mut registry = Registry::default();
+        let (old, _o) = peer(&mut registry, 222_222_222, 11);
+        // The old connection was heard from a moment ago: two copies running must not take turns.
+        let (tx, _rx) = mpsc::channel(8);
+        let (stop, _) = watch::channel(false);
+        let principal = Principal { user: Uuid::from_u128(11), tenant: Some(Uuid::from_u128(1)), staff: false, expires_at: 900 };
+        assert_eq!(registry.register_with_id(222_222_222, principal.clone(), tx.clone(), stop.clone()).err(), Some(ErrorCode::Busy));
+        // Silent for longer than TAKEOVER_SILENCE: a dead connection the broker has not noticed yet.
+        registry.peers.get_mut(&222_222_222).unwrap().seen = Instant::now() - TAKEOVER_SILENCE - Duration::from_secs(1);
+        let other = Principal { user: Uuid::from_u128(99), ..principal.clone() };
+        assert_eq!(registry.register_with_id(222_222_222, other, tx.clone(), stop.clone()).err(), Some(ErrorCode::Busy), "another account never takes over");
+        let (_, new) = registry.register_with_id(222_222_222, principal, tx, stop).unwrap();
+        assert_ne!(new, old);
+        // The old connection's own end later changes nothing.
+        registry.disconnect(222_222_222, old);
+        assert_eq!(registry.peers[&222_222_222].generation, new);
+    }
+
+    #[test]
     fn every_way_a_session_ends_journals_exactly_one_end() {
         type Ender = fn(&mut Registry, Uuid, Uuid, Uuid, Instant);
         let enders: [(&str, Ender); 6] = [
-            ("controller disconnects", |registry, technician, _, _, _| registry.disconnect(111_111_111, technician)),
-            ("host disconnects", |registry, _, host, _, _| registry.disconnect(222_222_222, host)),
+            // A lost side is waited for (`DROP_RESUME_WINDOW`), then the session ends.
+            ("controller disconnects", |registry, technician, _, _, now| {
+                registry.disconnect(111_111_111, technician);
+                registry.expire(now + DROP_RESUME_WINDOW + Duration::from_secs(1));
+            }),
+            ("host disconnects", |registry, _, host, _, now| {
+                registry.disconnect(222_222_222, host);
+                registry.expire(now + DROP_RESUME_WINDOW + Duration::from_secs(1));
+            }),
             ("deadline", |registry, _, _, _, now| registry.expire(now + Duration::from_secs(9 * 3600))),
             ("policy revoked", |registry, technician, _, session, now| registry.policy_revoked(session, (111_111_111, technician), now)),
             ("shutdown", |registry, _, _, _, _| registry.shutdown()),

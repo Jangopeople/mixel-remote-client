@@ -137,7 +137,7 @@ impl HardwareH264Encoder {
             )?;
             encoder.property(
                 kVTCompressionPropertyKey_MaxKeyFrameInterval,
-                CFNumber::new_i32((fps * 10) as i32).as_ref(),
+                CFNumber::new_i32((fps * 30) as i32).as_ref(),
             )?;
             encoder.property(
                 kVTCompressionPropertyKey_ColorPrimaries,

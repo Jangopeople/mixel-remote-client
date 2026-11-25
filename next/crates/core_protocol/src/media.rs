@@ -433,8 +433,10 @@ pub struct PacketReorder<P> {
     pub given_up: u32,
 }
 
-/// Packets held behind one gap at most; beyond that the gap is given up at once.
-const REORDER_MAX_HELD: usize = 1024;
+/// Packets held behind one gap at most; beyond that the gap is given up at once. A Mac keyframe
+/// is about 850 packets and at LAN pace a whole one can arrive before the repeat of a packet lost
+/// at its start: 1024 gave such gaps up before the repeat could fill them.
+const REORDER_MAX_HELD: usize = 8192;
 
 impl<P> PacketReorder<P> {
     pub fn new(wait: std::time::Duration) -> Self {

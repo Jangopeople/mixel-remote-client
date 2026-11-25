@@ -1807,15 +1807,33 @@ mod bitrate_tests {
 
 /// Capture and encoder target FPS: 60 on macOS (VideoToolbox) and Windows (Media Foundation
 /// hardware H.264; falls back internally to 30 FPS when software OpenH264 is used), 30 on Linux.
+/// Seconds of sent pictures between two periodic complete pictures. Lost pictures are repaired
+/// at once on request (`force_keyframe`), so the periodic one is only a safety net.
+const PERIODIC_KEYFRAME_SECONDS: u64 = 30;
 const TARGET_FPS: u32 = if cfg!(any(target_os = "macos", target_os = "windows")) { 60 } else { 30 };
+
+/// How long the technician's side keeps a transport whose connection is lost before it ends it,
+/// while a renewal rebuilds the connection (normally 10 s of silence ends it).
+const LOST_LINK_PATIENCE: Duration = Duration::from_secs(30);
+/// How long a new encoder waits for an earlier one to finish closing.
+const ENCODER_PERMIT_WAIT: Duration = Duration::from_secs(1);
+/// Stalled encoders replaced in one session before it gives up ("Screen video encoder stalled").
+const ENCODER_STALL_RESTARTS: u32 = 2;
 
 fn start_encoder(size: (usize, usize), bitrate: u32, high_profile: bool) -> Result<mpsc::Sender<EncodeRequest>, String> {
     // A rotation may briefly overlap the previous encoder's cleanup. Bound
     // owners even if a VideoToolbox driver call never returns.
     static OWNERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
-    let permit = OWNERS
-        .try_acquire()
-        .map_err(|_| "Screen video encoder is busy")?;
+    // An encoder that is just closing (a renewal and a resolution change overlapping) gives its
+    // permit back within moments: wait up to a second for it instead of ending the session.
+    let waited = Instant::now();
+    let permit = loop {
+        match OWNERS.try_acquire() {
+            Ok(permit) => break permit,
+            Err(_) if waited.elapsed() < ENCODER_PERMIT_WAIT => std::thread::sleep(Duration::from_millis(10)),
+            Err(_) => return Err("Screen video encoder is busy".into()),
+        }
+    };
     let (requests, mut worker) = mpsc::channel::<EncodeRequest>(1);
     std::thread::Builder::new()
         .name("mixel-screen-encoder".into())
@@ -2024,6 +2042,7 @@ async fn host_media(
         let mut quality_mode = control.quality_mode();
         crate::qa_timeline::mark("encoder started");
         let mut retry_encode = false;
+        let mut stall_restarts = 0u32;
         // The encoder left the last picture out: it is given again although the screen is unchanged.
         let mut encode_again = false;
         let mut static_refined = false;
@@ -2262,27 +2281,39 @@ async fn host_media(
                 .try_send(EncodeRequest {
                     frame,
                     timestamp: started.elapsed().as_micros() as u64,
-                    // One complete picture to start with and one every ~10 s (600 frames on macOS, 300 on Windows/Linux).
+                    // One complete picture to start with and one every ~30 s of sent pictures
+                    // (`PERIODIC_KEYFRAME_SECONDS`). Every 10 s cost a visible hitch on slow lines.
                     // Lost packets trigger an immediate explicit keyframe request via `force_keyframe`,
                     // and pictures left out by the encoder are retried via `encode_again`.
-                    keyframe: force_keyframe || sent.is_multiple_of(u64::from(TARGET_FPS) * 10),
+                    keyframe: force_keyframe || sent.is_multiple_of(u64::from(TARGET_FPS) * PERIODIC_KEYFRAME_SECONDS),
                     bitrate: pending_bitrate.take(),
                     reply,
                 })
                 .map_err(|_| "Screen video encoder stopped")?;
             let deadline = Instant::now() + Duration::from_secs(5);
-            let EncodeReply { picture: encoded, retry, left_out, backend } = loop {
+            let reply = loop {
                 match tokio::time::timeout(Duration::from_millis(5), &mut output).await {
-                    Ok(result) => break result.map_err(|_| "Screen video encoder stopped")??,
+                    Ok(result) => break Some(result.map_err(|_| "Screen video encoder stopped")??),
                     Err(_) if config.stopped() => return Ok(()),
-                    Err(_) if Instant::now() >= deadline => {
-                        return Err("Screen video encoder stalled".into());
-                    }
+                    Err(_) if Instant::now() >= deadline => break None,
                     Err(_) => {
                         pump_ice(config, transport).await?;
                         control.poll(config, channel).await?;
                     }
                 }
+            };
+            let Some(EncodeReply { picture: encoded, retry, left_out, backend }) = reply else {
+                // A stalled encoder (a driver call that does not return) is replaced and a
+                // complete picture follows, instead of ending the session; the stuck thread keeps
+                // its permit, so this can happen only so often.
+                if stall_restarts >= ENCODER_STALL_RESTARTS {
+                    return Err("Screen video encoder stalled".into());
+                }
+                stall_restarts += 1;
+                crate::app_log::info("peer", &format!("session={} screen video encoder stalled; starting a new one ({stall_restarts} of {ENCODER_STALL_RESTARTS})", config.session));
+                encoder = start_encoder(size, bitrate, high_profile)?;
+                retry_encode = true;
+                continue;
             };
             retry_encode = retry;
             encode_again = left_out;
@@ -2497,6 +2528,14 @@ async fn send_picture(
         sender.send(consent, annex_b, duration).await.map_err(|error| error.to_string())?;
         return Ok(true);
     }
+    // The media connection is lost (a network change on either side): the picture is left out
+    // instead of ending the session, so the technician's renewal can build a new connection in
+    // the same session. The technician ends it if that does not happen in time.
+    let lost = !transport.connected();
+    config.link.lost.store(lost, Ordering::Release);
+    if lost {
+        return Ok(true);
+    }
     let packets = sender.packets(consent, annex_b, duration).await.map_err(|error| error.to_string())?;
     let complete = crate::session_mirror::is_keyframe(annex_b);
     let sent = crate::video_pacing::spread(
@@ -2632,6 +2671,9 @@ impl<'a> Ctl<'a> {
             None => Ok(()),
         }
     }
+    fn keyframe_asks_taken(&mut self) -> u32 {
+        self.pipe.as_mut().map_or(0, |pipe| pipe.take_keyframe_asks())
+    }
     async fn request_keyframe(&mut self, channel: &Arc<dyn NativeDataChannel>) -> Result<(), String> {
         match &mut self.pipe {
             Some(pipe) => pipe.request_keyframe(channel).await,
@@ -2746,6 +2788,7 @@ async fn viewer_media(
     let mut last_video_size: (u16, u16) = (1920, 1080);
     let mut perf_v_at = Instant::now();
     let (mut perf_v_frames, mut perf_v_bytes) = (0u32, 0usize);
+    let mut perf_v_gaps = (0u32, 0u32);
     if config.previous.is_some() {
         // Q-2: Immediately request a keyframe on a renewed transport so handover never stalls.
         let _ = control.request_keyframe(channel).await;
@@ -3176,13 +3219,22 @@ async fn viewer_media(
                 status.received = received_bytes;
                 status.video_stalled = is_stalled;
             }).await;
+            // Round trip of the connection and what happened to gaps in the picture packets this
+            // second: filled by a repeat (`gaps_filled`) or given up (`gaps_lost`, each costs a
+            // complete picture); `loss_pct` is the given-up gaps per picture shown.
+            let rtt_ms = transport.round_trip().await.map_or(0, |rtt| rtt.as_millis());
+            let gaps_filled = reorder.filled.saturating_sub(perf_v_gaps.0);
+            let gaps_lost = reorder.given_up.saturating_sub(perf_v_gaps.1);
+            perf_v_gaps = (reorder.filled, reorder.given_up);
+            let loss_pct = if perf_v_frames + gaps_lost == 0 { 0.0 } else { f64::from(gaps_lost) * 100.0 / f64::from(perf_v_frames + gaps_lost) };
             perf_log(&format!(
-                "viewer session={} host={} fps={:.1} kbps={} rx_kb={} rtt_ms=0 loss_pct=0.0 target_kbps={} mode={} path={} proto={}",
+                "viewer session={} host={} fps={:.1} kbps={} rx_kb={} rtt_ms={rtt_ms} loss_pct={loss_pct:.1} gaps_filled={gaps_filled} gaps_lost={gaps_lost} keyframe_asks={} target_kbps={} mode={} path={} proto={}",
                 sid8,
                 peer_id,
                 f64::from(perf_v_frames) / secs,
                 kbps,
                 received_bytes / 1024,
+                control.keyframe_asks_taken(),
                 kbps,
                 if window_decodes { "hw" } else { "sw" },
                 path_str,
@@ -3203,7 +3255,11 @@ async fn viewer_media(
         if qa_turn.elapsed() > Duration::from_millis(300) {
             eprintln!("QA technician loop at clock {}: taking {taken} picture packets (decoding, handing over) took {} ms", crate::remote_control::qa_wall_clock(), qa_turn.elapsed().as_millis());
         }
-        if liveness_state == ViewerLiveness::TimedOut {
+        // A lost media connection is being rebuilt through the connection service (a renewal in
+        // the same session): give it time before this transport gives up on its own.
+        if liveness_state == ViewerLiveness::TimedOut
+            && (!config.link.lost.load(Ordering::Acquire) || liveness >= LOST_LINK_PATIENCE)
+        {
             #[cfg(feature = "qa-session")]
             eprintln!("QA video timed out: {} RTP packets ({} bytes, {} with the end mark), {} pictures assembled, {} decoded, {} keyframe requests; {qa_keys} keyframe slices begun, {qa_gaps} gaps in the numbering ({qa_lost} numbers missing), {qa_late} packets late", qa_rtp.0, qa_rtp.1, qa_rtp.4, qa_rtp.2, received, qa_rtp.3);
             #[cfg(feature = "qa-session")]
