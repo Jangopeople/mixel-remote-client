@@ -68,4 +68,13 @@ cargo test -p mixel_engine --lib --quiet -- only_an_x64_console_program_may_repl
 grep -q 'is_console_program(&copied)' "$NEXT/crates/mixel_engine/src/windows_signin_host.rs"
 grep -q 'user="$($c.UserName)"' "$NEXT/crates/mixel_engine/src/approved_scripts.rs"
 
+echo "=== Gate 12: 2.2.12 lost video packets repaired, sessions survive network drops, sign-in kept across restarts ==="
+cd "$NEXT"
+cargo test -p mixel_engine --lib --quiet -- one_lost_picture_on_a_clean_line_keeps_the_pace_but_repeated_ones_step_back
+cargo test -p mixel_engine --lib --quiet -- a_late_report_holds_the_gate_well_under_a_second_not_three
+cargo test -p signaling_server --lib --quiet -- a_side_that_loses_its_connection_comes_back_into_the_same_session
+cargo test -p signaling_server --lib --quiet -- a_device_back_on_a_new_connection_takes_over_its_silent_old_one
+cargo test -p mixel_engine --lib --quiet -- a_rotated_refresh_token_is_kept_before_anything_else_can_fail
+cargo test -p mixel_engine --lib --quiet -- a_restore_keeps_trying_after_the_quick_attempts
+
 echo "=== ALL REGRESSION GATE CHECKS PASSED ==="
