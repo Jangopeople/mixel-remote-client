@@ -757,7 +757,7 @@ impl AccountAuth {
             .then(|| Zeroizing::new(inner.tokens.as_ref().map(|t| t.refresh_token.0.clone()).unwrap_or_default()));
         drop(inner);
         if let Some(token) = keep {
-            let _ = tokio::task::spawn_blocking(move || crate::session_store::save(&token)).await;
+            save_session(token).await;
         }
         Ok(())
     }
@@ -799,11 +799,24 @@ impl AccountAuth {
             }
             inner.restore_started = true;
         }
-        let Ok(Ok(Some(saved))) = tokio::task::spawn_blocking(crate::session_store::load).await else {
-            return;
+        let saved = match tokio::task::spawn_blocking(crate::session_store::load).await {
+            Ok(Ok(Some(saved))) => saved,
+            Ok(Ok(None)) => {
+                crate::app_log::info("account", "no saved sign-in on this computer");
+                return;
+            }
+            Ok(Err(error)) => {
+                crate::app_log::info("account", &format!("the saved sign-in could not be read: {error}"));
+                return;
+            }
+            Err(_) => return,
         };
-        let Ok((client, _, _)) = AuthClient::configured() else {
-            return;
+        let client = match AuthClient::configured() {
+            Ok((client, _, _)) => client,
+            Err(error) => {
+                crate::app_log::info("account", &format!("sign-in service configuration unavailable: {error}"));
+                return;
+            }
         };
         let generation = {
             let mut inner = self.inner.lock().await;
@@ -823,17 +836,30 @@ impl AccountAuth {
         };
         let this = self.clone();
         let task = tokio::spawn(async move {
-            // Retry transient network errors on launch/wake (e.g. Wi-Fi reconnecting after sleep)
-            // instead of wiping the saved refresh token on the first failed attempt.
-            let mut result: Result<(), String> = Err("Identity service unavailable".into());
-            for delay_secs in [0u64, 2, 4, 6, 8, 10] {
+            // Retry transient network errors on launch/wake (e.g. Wi-Fi reconnecting after sleep,
+            // or a PC that starts Mixel Remote before its network is up) instead of wiping the
+            // saved refresh token. After the quick attempts, keep trying in the background until
+            // the service answers or the person starts a new sign-in.
+            crate::app_log::info("account", "restoring the saved sign-in");
+            let mut saved = saved;
+            let mut attempt = 0usize;
+            let result: Result<(), String> = loop {
+                let delay_secs = RESTORE_RETRY_SECONDS
+                    .get(attempt)
+                    .copied()
+                    .unwrap_or(RESTORE_BACKGROUND_RETRY_SECONDS);
                 if delay_secs > 0 {
                     tokio::time::sleep(Duration::from_secs(delay_secs)).await;
                 }
-                if this.inner.lock().await.generation != generation {
-                    return;
+                {
+                    let inner = this.inner.lock().await;
+                    if inner.generation != generation
+                        || (attempt >= RESTORE_RETRY_SECONDS.len() && inner.status.phase != "signed_out")
+                    {
+                        return;
+                    }
                 }
-                result = async {
+                let outcome = async {
                     let tokens: Tokens = client
                         .request(
                             "/auth/v1/token?grant_type=refresh_token",
@@ -841,37 +867,47 @@ impl AccountAuth {
                             None,
                         )
                         .await?;
+                    // The saved token is spent now: a retry must use the new one.
+                    saved = Zeroizing::new(tokens.refresh_token.0.clone());
+                    this.hold_rotated(generation, &saved).await;
                     this.apply(generation, client.clone(), tokens, None).await
                 }
                 .await;
-                if result.is_ok() {
-                    break;
+                match outcome {
+                    Ok(()) => break Ok(()),
+                    Err(error) if is_permanent_auth_denial(&error) => break Err(error),
+                    Err(error) => {
+                        attempt += 1;
+                        if attempt == RESTORE_RETRY_SECONDS.len() {
+                            crate::app_log::info(
+                                "account",
+                                &format!("restoring the saved sign-in failed, retrying in the background: {error}"),
+                            );
+                            let mut inner = this.inner.lock().await;
+                            if inner.generation != generation {
+                                return;
+                            }
+                            revoke(&mut inner);
+                            inner.status.phase = "signed_out".into();
+                            inner.status.message =
+                                "Could not reach Mixel sign-in service. Mixel Remote keeps trying; check your connection.".into();
+                        }
+                    }
                 }
-                if let Err(error) = &result
-                    && is_permanent_auth_denial(error)
-                {
-                    break;
-                }
-            }
+            };
             if let Err(error) = result {
-                if is_permanent_auth_denial(&error) {
-                    let _ = tokio::task::spawn_blocking(crate::session_store::clear).await;
-                }
+                crate::app_log::info("account", &format!("the saved sign-in was refused: {error}"));
+                let _ = tokio::task::spawn_blocking(crate::session_store::clear).await;
                 let mut inner = this.inner.lock().await;
                 if inner.generation == generation {
                     revoke(&mut inner);
-                    if is_permanent_auth_denial(&error) {
-                        inner.remember = false;
-                    }
+                    inner.remember = false;
                     inner.status.phase = "signed_out".into();
-                    inner.status.message = if is_permanent_auth_denial(&error) {
-                        "Your saved sign-in expired. Sign in again.".into()
-                    } else {
-                        "Could not reach Mixel sign-in service. Check your connection and try again.".into()
-                    };
+                    inner.status.message = "Your saved sign-in expired. Sign in again.".into();
                 }
                 return;
             }
+            crate::app_log::info("account", "the saved sign-in was restored");
             this.inner.lock().await.restored = true;
             this.maintain(generation).await;
         });
@@ -953,12 +989,33 @@ impl AccountAuth {
                 None,
             )
             .await?;
+        // The old refresh token is spent: if apply() fails on a later network call, the
+        // retry must send the new one, or the service refuses it and signs the person out.
+        self.hold_rotated(generation, &tokens.refresh_token.0).await;
         self.apply(generation, client, tokens, Some(subject))
             .await?;
         if self.inner.lock().await.status.phase != "authenticated" {
             return Err("Account authorization changed; sign in again".into());
         }
         Ok(())
+    }
+    /// The identity service rotates the refresh token on every use and refuses a spent one
+    /// shortly after. Keep the new token (and save it when the person stays signed in) as soon
+    /// as the service hands it out, before anything else can fail.
+    async fn hold_rotated(&self, generation: u64, refresh: &str) {
+        let save = {
+            let mut inner = self.inner.lock().await;
+            if inner.generation != generation {
+                return;
+            }
+            if let Some(tokens) = inner.tokens.as_mut() {
+                tokens.refresh_token = Secret(refresh.to_owned());
+            }
+            inner.remember.then(|| Zeroizing::new(refresh.to_owned()))
+        };
+        if let Some(token) = save {
+            save_session(token).await;
+        }
     }
     async fn fail(&self, generation: u64, message: &str) {
         let mut inner = self.inner.lock().await;
@@ -1334,6 +1391,19 @@ fn app_callback_parts(address: &str) -> Result<AppCallback, String> {
     let reason: String = reason.chars().filter(|c| !c.is_control()).take(300).collect();
     Ok((Zeroizing::new(states[0].clone()), code, reason))
 }
+/// Quick restore attempts after launch (seconds before each), then one every
+/// RESTORE_BACKGROUND_RETRY_SECONDS until the service answers.
+const RESTORE_RETRY_SECONDS: [u64; 6] = [0, 2, 4, 6, 8, 10];
+const RESTORE_BACKGROUND_RETRY_SECONDS: u64 = 30;
+
+/// Saves the refresh token for "stay signed in"; a failure is logged (without the token).
+async fn save_session(token: Zeroizing<String>) {
+    let saved = tokio::task::spawn_blocking(move || crate::session_store::save(&token)).await;
+    if let Ok(Err(error)) | Err(error) = saved.map_err(|_| "Session storage unavailable".to_owned()) {
+        crate::app_log::info("account", &format!("could not save the sign-in: {error}"));
+    }
+}
+
 fn is_permanent_auth_denial(error: &str) -> bool {
     error.contains("HTTP 400") || error.contains("HTTP 401") || error.contains("HTTP 403")
 }
@@ -1563,6 +1633,33 @@ mod tests {
         assert!(is_permanent_auth_denial("Identity request was denied (HTTP 403)"));
         assert!(!is_permanent_auth_denial("The Mixel identity service is unavailable"));
         assert!(!is_permanent_auth_denial("Identity request was denied (HTTP 502)"));
+    }
+
+    #[tokio::test]
+    async fn a_rotated_refresh_token_is_kept_before_anything_else_can_fail() {
+        // The service refuses a spent refresh token: once it hands out a new one, a retry after a
+        // later failure (company lookup, profile, network) must send the new one, never the old.
+        let auth = AccountAuth::default();
+        {
+            let mut inner = auth.inner.lock().await;
+            inner.tokens = Some(Tokens {
+                access_token: Secret("access".into()),
+                refresh_token: Secret("spent".into()),
+                expires_in: 3600,
+            });
+        }
+        auth.hold_rotated(0, "fresh").await;
+        assert_eq!(auth.inner.lock().await.tokens.as_ref().unwrap().refresh_token.0, "fresh");
+        // A newer sign-in (another generation) is left alone.
+        auth.hold_rotated(1, "stale").await;
+        assert_eq!(auth.inner.lock().await.tokens.as_ref().unwrap().refresh_token.0, "fresh");
+    }
+
+    #[test]
+    fn a_restore_keeps_trying_after_the_quick_attempts() {
+        assert_eq!(RESTORE_RETRY_SECONDS[0], 0, "the first attempt is immediate");
+        assert!(RESTORE_RETRY_SECONDS.iter().sum::<u64>() <= 60, "quick attempts end within a minute");
+        assert!((10..=120).contains(&RESTORE_BACKGROUND_RETRY_SECONDS), "then it keeps trying, not hammering");
     }
 
     #[tokio::test]
