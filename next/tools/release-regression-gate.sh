@@ -53,4 +53,12 @@ cargo test -p mixel_engine --lib --quiet -- r1_receive_host_records_never_drops_
 grep -q 'MixelSessionWindow-' "$NEXT/apps/mixel-remote-apple/Mac/MixelRemoteApp.swift"
 grep -q 'warm_log\.back()' "$NEXT/crates/mixel_engine/src/remote_session.rs"
 
+echo "=== Gate 10: 2.2.10 freezes (display kept on, every-pixel change check, in-place OpenH264 bit rate, direct-session renewal) ==="
+cd "$NEXT"
+cargo test -p mixel_engine --lib --quiet -- a_small_change_between_sampled_columns_is_not_static
+cargo test -p mixel_engine --lib --quiet -- a_session_is_direct_only_when_the_selected_pair_has_no_relay_candidate
+cargo test -p native_os_capture --lib --quiet -- the_bit_rate_changes_in_place_without_a_complete_picture
+grep -q 'pub fn keep_display_on(' "$NEXT/crates/native_os_capture/src/windows_capture.rs"
+grep -q 'keep_display_on(true)' "$NEXT/crates/mixel_engine/src/capture_worker.rs"
+
 echo "=== ALL REGRESSION GATE CHECKS PASSED ==="
