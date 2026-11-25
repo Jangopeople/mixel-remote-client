@@ -193,6 +193,18 @@ impl Drop for Mapped<'_> {
 /// The shortest time between two pictures when only GDI can copy the screen.
 const GDI_ONLY_INTERVAL: Duration = Duration::from_millis(33);
 
+/// How the last picture was copied (for the perf log): 0 none yet, 1 desktop duplication, 2 GDI.
+static LAST_METHOD: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// How the last picture was copied: "dxgi" (desktop duplication), "gdi" (slow full-screen copy).
+pub fn capture_method() -> &'static str {
+    match LAST_METHOD.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => "dxgi",
+        2 => "gdi",
+        _ => "none",
+    }
+}
+
 pub struct WindowsCapture {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
@@ -337,7 +349,7 @@ impl WindowsCapture {
             duplication
                 .AcquireNextFrame(milliseconds, &mut info, &mut resource)
         } {
-            Ok(()) => {}
+            Ok(()) => LAST_METHOD.store(1, std::sync::atomic::Ordering::Relaxed),
             Err(error) if error.code() == DXGI_ERROR_WAIT_TIMEOUT => {
                 if !self.received_visible_frame
                     && self.fallback.is_none()
@@ -485,6 +497,7 @@ impl WindowsCapture {
             .map_err(|error| CaptureError::Native(error.to_string()))
     }
     fn fallback_frame(&mut self) -> Result<CapturedFrame, CaptureError> {
+        LAST_METHOD.store(2, std::sync::atomic::Ordering::Relaxed);
         if !gdi::default_input_desktop() {
             return Err(CaptureError::Target);
         }

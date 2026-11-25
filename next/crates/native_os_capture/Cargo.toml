@@ -69,4 +69,5 @@ libc = "0.2"
 
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "android"))'.dependencies]
 openh264 = "=0.9.9"
+openh264-sys2 = "=0.9.9"
 h264-reader = "=0.9.0"

@@ -1601,6 +1601,41 @@ const ENCODER_MIN_BITRATE: u32 = 300_000;
 /// Minimum settle time between encoder resolution/bitrate reconfigurations.
 const BITRATE_SETTLE: Duration = Duration::from_millis(4000);
 
+/// The largest stream (long side, short side) a software encoder is given on Windows, unless the
+/// technician chose `Quality`; `None`: no limit (hardware encoders, other systems).
+pub(crate) fn software_size_box(backend: &str, mode: crate::remote_control::QualityMode) -> Option<(usize, usize)> {
+    (cfg!(target_os = "windows") && backend == "OpenH264" && mode != crate::remote_control::QualityMode::Quality)
+        .then_some((1280, 720))
+}
+
+/// How the screen was copied, for the perf log ("dxgi" or the slow "gdi" on Windows).
+fn capture_method() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        native_os_capture::windows_capture::capture_method()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        "sck"
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        "native"
+    }
+}
+
+/// Why a Windows host encodes in software, for the perf log (empty otherwise).
+fn software_reason(backend: &str) -> String {
+    #[cfg(target_os = "windows")]
+    if backend == "OpenH264"
+        && let Some(reason) = native_os_capture::windows_mf_encoder::hardware_failure()
+    {
+        return format!(" sw_reason=\"{reason}\"");
+    }
+    let _ = backend;
+    String::new()
+}
+
 fn scale_to_box(full: (usize, usize), max_long: f64, max_short: f64) -> (usize, usize) {
     let (long_side, short_side) = (full.0.max(full.1), full.0.min(full.1));
     if long_side as f64 <= max_long && short_side as f64 <= max_short {
@@ -1750,7 +1785,7 @@ fn start_encoder(size: (usize, usize), bitrate: u32, high_profile: bool) -> Resu
             while let Some(request) = worker.blocking_recv() {
                 let result = match &mut encoder {
                     Ok(encoder) => {
-                        #[cfg(any(target_os = "windows", target_os = "macos"))]
+                        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
                         if let Some(target_bps) = request.bitrate {
                             let _ = encoder.set_bitrate(target_bps);
                         }
@@ -1972,6 +2007,10 @@ async fn host_media(
         let mut rate = crate::video_rate::RateControl::new(Instant::now());
         let mut perf_logged = Instant::now();
         let (mut perf_frames, mut perf_bytes) = (0u32, 0usize);
+        // Where the time of the sent pictures went (capture, encode, send) and how often the loop
+        // waited for the line: the perf log then tells a slow screen copy from a slow encoder.
+        let (mut perf_capture, mut perf_encode, mut perf_send) = (Duration::ZERO, Duration::ZERO, Duration::ZERO);
+        let mut perf_backlogged = 0u32;
         #[cfg(feature = "qa-session")]
         let mut qa_rate_logged = Instant::now();
         #[cfg(feature = "qa-session")]
@@ -2086,6 +2125,7 @@ async fn host_media(
                 qa_rate_logged = Instant::now();
             }
             if rate.backlogged(Instant::now()) {
+                perf_backlogged += 1;
                 #[cfg(feature = "qa-session")]
                 {
                     qa_skip += 1;
@@ -2106,6 +2146,7 @@ async fn host_media(
             let force_keyframe = requested || mirror.take_keyframe_request() || retry_encode;
             #[cfg(feature = "qa-session")]
             let lap = Instant::now();
+            let perf_lap = Instant::now();
             let frame = match session_platform::frames(&capture).next(
                 sequence,
                 Duration::from_millis(if control.receiving_clipboard() {
@@ -2170,6 +2211,8 @@ async fn host_media(
             }
             #[cfg(feature = "qa-session")]
             let (capture_time, lap) = (lap.elapsed(), Instant::now());
+            let picture_capture = perf_lap.elapsed();
+            let perf_lap = Instant::now();
             let (reply, mut output) = tokio::sync::oneshot::channel();
             encoder
                 .try_send(EncodeRequest {
@@ -2199,6 +2242,8 @@ async fn host_media(
             };
             retry_encode = retry;
             encode_again = left_out;
+            let picture_encode = perf_lap.elapsed();
+            let perf_lap = Instant::now();
             #[cfg(feature = "qa-session")]
             if sent == 0 {
                 crate::qa_timeline::mark(if encoded.is_some() { "first picture encoded" } else { "first picture left out by the encoder" });
@@ -2221,6 +2266,9 @@ async fn host_media(
             if !send_picture(&sender, &mut pacer, Some(&mut rate), consent, &encoded.annex_b, duration, config, transport, control, channel).await? {
                 break;
             }
+            perf_capture += picture_capture;
+            perf_encode += picture_encode;
+            perf_send += perf_lap.elapsed();
             // Lab builds only: a picture whose capture, encoding or sending took long (input waits meanwhile).
             #[cfg(feature = "qa-session")]
             if capture_time + encode_time + lap.elapsed() > Duration::from_millis(400) {
@@ -2245,8 +2293,10 @@ async fn host_media(
                     status.rtt_ms = Some(rtt);
                     status.bitrate_kbps = Some(kbps);
                 }).await;
+                let pictures = f64::from(perf_frames.max(1));
+                let average = |total: Duration| total.as_secs_f64() * 1000.0 / pictures;
                 perf_log(&format!(
-                    "host fps={:.1} kbps={:.0} size={}x{} target_kbps={} pace_kBs={:.0} deliv_kBs={:.0} rtt_ms={} queue_ms={} inflight_kB={} enc={}",
+                    "host fps={:.1} kbps={:.0} size={}x{} target_kbps={} pace_kBs={:.0} deliv_kBs={:.0} rtt_ms={} queue_ms={} inflight_kB={} enc={} capture_ms={:.1} encode_ms={:.1} send_ms={:.1} backlogged={} copy={}{}",
                     f64::from(perf_frames) / secs,
                     perf_bytes as f64 * 8.0 / secs / 1000.0,
                     size.0,
@@ -2258,9 +2308,16 @@ async fn host_media(
                     rate.queue_delay().as_millis(),
                     rate.in_flight() / 1000,
                     backend,
+                    average(perf_capture),
+                    average(perf_encode),
+                    average(perf_send),
+                    perf_backlogged,
+                    capture_method(),
+                    software_reason(backend),
                 ));
                 perf_frames = 0;
                 perf_bytes = 0;
+                (perf_capture, perf_encode, perf_send, perf_backlogged) = (Duration::ZERO, Duration::ZERO, Duration::ZERO, 0);
                 perf_logged = Instant::now();
             }
             // Item 10: unattended idle-session timeout (when configured in Settings).
@@ -2276,9 +2333,15 @@ async fn host_media(
             }
             // The encoder follows the pace and user quality preference (`Auto` / `Speed` / `Quality`).
             let mode_changed = control.quality_mode() != quality_mode;
-            if mode_changed || bitrate_set.elapsed() >= BITRATE_SETTLE {
+            // Software encoding (no hardware encoder on this computer) keeps up with 720p, not with
+            // a moving full-HD screen: an HP laptop sent 2-3 pictures a second at 1080p.
+            let software_box = software_size_box(backend, control.quality_mode());
+            let over_box = software_box.is_some_and(|(long, short)| size.0.max(size.1) > long || size.0.min(size.1) > short);
+            if mode_changed || over_box || bitrate_set.elapsed() >= BITRATE_SETTLE {
                 quality_mode = control.quality_mode();
-                let next_size = adaptive_size_for_mode(full_size, size, pacer.rate(), rate.base_delay(), quality_mode);
+                let full = software_box.map_or(full_size, |(long, short)| scale_to_box(full_size, long as f64, short as f64));
+                let current = if size.0 <= full.0 && size.1 <= full.1 { size } else { full };
+                let next_size = adaptive_size_for_mode(full, current, pacer.rate(), rate.base_delay(), quality_mode);
                 let pace_bias = match quality_mode {
                     crate::remote_control::QualityMode::Quality => pacer.rate() * 1.35,
                     crate::remote_control::QualityMode::Speed => pacer.rate() * 0.75,
@@ -2289,9 +2352,10 @@ async fn host_media(
                 if next_size != size || wanted != bitrate {
                     #[cfg(feature = "qa-session")]
                     eprintln!("QA encoder {}x{} -> {}x{}, bit rate {} -> {} kbit/s (pace {:.0} kB/s, base {} ms)", size.0, size.1, next_size.0, next_size.1, bitrate / 1000, wanted / 1000, pacer.rate() / 1000.0, rate.base_delay().as_millis());
-                    if next_size == size && backend != "OpenH264" && cfg!(any(target_os = "windows", target_os = "macos")) {
-                        // Update hardware encoder bitrate in-place (VideoToolbox / Media Foundation)
-                        // without tearing down the encoder or injecting an IDR spike.
+                    if next_size == size && cfg!(any(target_os = "windows", target_os = "macos", target_os = "linux")) {
+                        // Update the bit rate in place (VideoToolbox, Media Foundation and OpenH264)
+                        // without tearing down the encoder or injecting an IDR spike. A new
+                        // OpenH264 encoder also tried the hardware encoder again on Windows first.
                         pending_bitrate = Some(wanted);
                     } else {
                         encoder = start_encoder(next_size, wanted, high_profile)?;

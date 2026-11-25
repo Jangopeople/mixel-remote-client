@@ -108,6 +108,27 @@ impl ScreenH264Encoder {
         self.needs_keyframe
     }
 
+    /// Changes the target bit rate of the running encoder (no new encoder, no complete picture).
+    /// `false`: the encoder refused it; the caller may start a new encoder instead.
+    #[allow(unsafe_code)] // One audited OpenH264 SetOption call with a stack value.
+    pub fn set_bitrate(&mut self, bitrate: u32) -> bool {
+        if !(1..=24_000_000).contains(&bitrate) {
+            return false;
+        }
+        let mut info = openh264_sys2::SBitrateInfo {
+            iLayer: openh264_sys2::SPATIAL_LAYER_ALL,
+            iBitrate: bitrate as std::os::raw::c_int,
+        };
+        // SAFETY: the encoder is initialized; ENCODER_OPTION_BITRATE reads one SBitrateInfo
+        // that lives for the whole call. Only the target bit rate changes.
+        let result = unsafe {
+            self.encoder
+                .raw_api()
+                .set_option(openh264_sys2::ENCODER_OPTION_BITRATE, std::ptr::from_mut(&mut info).cast())
+        };
+        result == 0
+    }
+
     /// The picture given last was left out by the encoder's rate control (it does that after
     /// large pictures, to get back to its bit rate): what is on the screen has not been sent.
     /// The caller gives the same picture again, changed or not, until one comes out; otherwise
@@ -310,6 +331,52 @@ impl Drop for ScreenH264Encoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bit rate changes in the running encoder: no new encoder and no complete picture, and
+    /// the pictures that follow get smaller (2.2.9 started a new encoder for every step).
+    #[test]
+    fn the_bit_rate_changes_in_place_without_a_complete_picture() {
+        let (width, height) = (320usize, 240usize);
+        // A detailed picture that moves two pixels a frame (a scrolled page): every picture
+        // changes, but none is a new scene (which would make OpenH264 start a complete one).
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let base: Vec<u8> = (0..(width + 400) * height)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                (seed >> 32) as u8
+            })
+            .collect();
+        let moved = |time: u64| {
+            let shift = (time as usize * 2) % 400;
+            let mut pixels = vec![255u8; width * height * 4];
+            for (index, pixel) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let (x, y) = (index % width, index / width);
+                let grey = base[y * (width + 400) + x + shift];
+                pixel[..3].copy_from_slice(&[grey, grey, grey]);
+            }
+            CapturedFrame::bgra(width, height, width * 4, pixels).unwrap()
+        };
+        let mut encoder = ScreenH264Encoder::new(width, height, 30, 4_000_000).unwrap();
+        let sizes = |encoder: &mut ScreenH264Encoder, from: u64| {
+            let mut total = 0usize;
+            for time in from..from + 30 {
+                if let Some(encoded) = encoder.encode(&moved(time), time * 33_333, false).unwrap() {
+                    total += encoded.annex_b.len();
+                }
+            }
+            total
+        };
+        let fast = sizes(&mut encoder, 0);
+        assert!(encoder.set_bitrate(300_000), "OpenH264 accepts a new bit rate");
+        let next = encoder.encode(&moved(30), 30 * 33_333, false).unwrap().expect("a moving picture comes out");
+        assert!(!next.keyframe, "a new bit rate does not start a complete picture");
+        let _settle = sizes(&mut encoder, 31);
+        let slow = sizes(&mut encoder, 60);
+        assert!(slow * 2 < fast, "pictures follow the lower bit rate: {slow} bytes versus {fast}");
+        assert!(!encoder.set_bitrate(0));
+    }
 
     #[test]
     fn padded_bgra_scales_and_decodes_with_repeatable_keyframes() {
