@@ -941,6 +941,10 @@ fn protected_update_copy(downloaded: &std::path::Path, sha256: &str) -> Result<P
         let _ = std::fs::remove_file(&target);
         return Err("The update changed after it was checked".into());
     }
+    if !crate::self_update::is_console_program(&copied) {
+        let _ = std::fs::remove_file(&target);
+        return Err("The update is not the always-on program".into());
+    }
     crate::self_update::verify_windows_signature(&target)?;
     Ok(target)
 }

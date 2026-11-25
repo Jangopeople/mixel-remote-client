@@ -47,8 +47,8 @@ fn nv12_to_bgra(
         let y_row = &y_plane[y * stride..y * stride + width];
         let uv_row = &uv_plane[(y / 2) * stride..(y / 2) * stride + width];
         let dst_row = &mut bgra[y * out_stride..(y + 1) * out_stride];
-        for x in 0..width {
-            let y_val = (i32::from(y_row[x]) - 16).max(0);
+        for (x, &luma) in y_row.iter().enumerate() {
+            let y_val = (i32::from(luma) - 16).max(0);
             let uv_idx = (x & !1).min(width.saturating_sub(2));
             let u = i32::from(uv_row[uv_idx]) - 128;
             let v = i32::from(uv_row[uv_idx + 1]) - 128;

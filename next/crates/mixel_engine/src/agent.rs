@@ -22,7 +22,7 @@ const INVENTORY_SCRIPT: &str = r#"$ErrorActionPreference='SilentlyContinue'
 $o=Get-CimInstance Win32_OperatingSystem; $c=Get-CimInstance Win32_ComputerSystem; $p=Get-CimInstance Win32_Processor | Select-Object -First 1
 $d=Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$($env:SystemDrive)'"
 $r=(Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') -or (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')
-[ordered]@{name=$env:COMPUTERNAME; os="$($o.Caption) $($o.Version)"; model="$($c.Manufacturer) $($c.Model)"; cpu="$($p.Name)".Trim(); ram_gb=[math]::Round($c.TotalPhysicalMemory/1GB); disk_free_gb=[math]::Round($d.FreeSpace/1GB); disk_total_gb=[math]::Round($d.Size/1GB); user=$c.UserName; last_boot=$o.LastBootUpTime.ToString('yyyy-MM-dd HH:mm'); pending_reboot=[bool]$r} | ConvertTo-Json -Compress"#;
+[ordered]@{name=$env:COMPUTERNAME; os="$($o.Caption) $($o.Version)"; model="$($c.Manufacturer) $($c.Model)"; cpu="$($p.Name)".Trim(); ram_gb=[math]::Round($c.TotalPhysicalMemory/1GB); disk_free_gb=[math]::Round($d.FreeSpace/1GB); disk_total_gb=[math]::Round($d.Size/1GB); user="$($c.UserName)"; last_boot=$o.LastBootUpTime.ToString('yyyy-MM-dd HH:mm'); pending_reboot=[bool]$r} | ConvertTo-Json -Compress"#;
 #[cfg(target_os = "linux")]
 const INVENTORY_SCRIPT: &str = r#"esc(){ printf '%s' "$1" | tr -d '"\\' | tr -s ' ' | cut -c1-120; }
 . /etc/os-release 2>/dev/null
