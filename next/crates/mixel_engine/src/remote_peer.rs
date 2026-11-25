@@ -174,6 +174,23 @@ impl Config {
             &self.authorization,
         )
     }
+    /// Why this transport stops, for the app log (no secrets: only which check and seconds left).
+    pub fn stop_reason(&self) -> String {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs());
+        let (lease_left, lease_mono) = self.authorization.lock().map_or((i64::MIN, None), |lease| {
+            (lease.0 as i64 - now as i64, lease.1.checked_duration_since(Instant::now()).map(|left| left.as_secs()))
+        });
+        format!(
+            "retired={} consent_cancel={} account_cancel={} session_cancel={} broker_lease_left_s={lease_left} broker_mono_left_s={lease_mono:?} peer_ticket_left_s={}",
+            self.link.retired(),
+            self.consent_cancel.load(Ordering::Acquire),
+            self.account_cancel.load(Ordering::Acquire),
+            self.session_cancel.load(Ordering::Acquire),
+            self.peer_expires.load(Ordering::Acquire) as i64 - now as i64,
+        )
+    }
     pub fn input_authorization(&self) -> Arc<dyn Fn() -> bool + Send + Sync> {
         let account = self.account_cancel.clone();
         let session = self.session_cancel.clone();
@@ -506,6 +523,15 @@ async fn run(config: &mut Config, parts: Option<WarmParts>) -> Result<(), String
         } else {
             viewer_media(config, &mut consent, &channel, &mut transport, &mut Ctl::with(&mut control), &mut early_track).await
         };
+        crate::app_log::info(
+            "peer",
+            &format!(
+                "session={} media ended ({}): {}",
+                config.session,
+                match &result { Ok(()) => "ok".to_owned(), Err(reason) => reason.clone() },
+                config.stop_reason()
+            ),
+        );
         if !config.link.superseded.load(Ordering::Acquire) && !old_transport_carries_on(config, result.is_err()) {
             config.session_cancel.store(true, Ordering::Release);
         }
