@@ -95,6 +95,28 @@ pub fn target() -> (&'static str, &'static str) {
     }
 }
 
+#[cfg(test)]
+mod program_kind_tests {
+    fn pe(machine: u16, subsystem: u16) -> Vec<u8> {
+        let mut bytes = vec![0u8; 0x200];
+        bytes[..2].copy_from_slice(b"MZ");
+        bytes[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
+        bytes[0x84..0x86].copy_from_slice(&machine.to_le_bytes());
+        bytes[0x80 + 24 + 68..0x80 + 24 + 70].copy_from_slice(&subsystem.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn only_an_x64_console_program_may_replace_the_service_program() {
+        assert!(super::is_console_program(&pe(0x8664, 3)));
+        assert!(!super::is_console_program(&pe(0x8664, 2)), "GUI launcher (the 2.2.9 mistake)");
+        assert!(!super::is_console_program(&pe(0xaa64, 3)), "arm64");
+        assert!(!super::is_console_program(b"MZ"));
+        assert!(!super::is_console_program(b"not a program at all"));
+    }
+}
+
 /// Checks the signature and content of a channel file for this platform.
 #[cfg(test)]
 pub fn verify_envelope(bytes: &[u8], channel: &str, key: &VerifyingKey) -> Result<Manifest, String> {
@@ -239,6 +261,27 @@ fn run(program: &str, args: &[&std::ffi::OsStr]) -> Result<String, String> {
         return Err(format!("{program} failed: {detail}"));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// True for an x64 Windows console program (PE subsystem 3), which is what the always-on service
+/// runs (mixel-remote-helper.exe). 2.2.9 published the app's GUI launcher on the program channel; a
+/// signed, correctly hashed file of the wrong kind must never replace the service program again.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub fn is_console_program(bytes: &[u8]) -> bool {
+    let read_u16 = |at: usize| bytes.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]));
+    let read_u32 =
+        |at: usize| bytes.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    if bytes.get(..2) != Some(b"MZ") {
+        return false;
+    }
+    let Some(pe) = read_u32(0x3c).map(|offset| offset as usize) else {
+        return false;
+    };
+    if bytes.get(pe..pe + 4) != Some(b"PE\0\0") || read_u16(pe + 4) != Some(0x8664) {
+        return false;
+    }
+    // Optional header follows the 20-byte file header; Subsystem sits at offset 68 in PE32 and PE32+.
+    read_u16(pe + 24 + 68) == Some(3)
 }
 
 /// Downloads an update and checks size, SHA-256 and Mixel's code signature (Windows).

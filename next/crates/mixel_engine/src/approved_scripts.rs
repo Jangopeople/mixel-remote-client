@@ -42,12 +42,17 @@ pub struct DeviceHealth {
     pub disk_free_gb: u64,
     #[serde(default)]
     pub disk_total_gb: u64,
-    #[serde(default)]
+    /// Null when nobody is signed in interactively (an unattended PC).
+    #[serde(default, deserialize_with = "null_as_empty")]
     pub user: String,
     #[serde(default)]
     pub last_boot: String,
     #[serde(default)]
     pub pending_reboot: bool,
+}
+
+fn null_as_empty<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Ok(<Option<String> as serde::Deserialize>::deserialize(d)?.unwrap_or_default())
 }
 
 struct ApprovedScript {
@@ -231,7 +236,7 @@ printf '{"name":"%s","os":"%s","model":"%s","cpu":"%s","ram_gb":%s,"disk_free_gb
 $o=Get-CimInstance Win32_OperatingSystem; $c=Get-CimInstance Win32_ComputerSystem; $p=Get-CimInstance Win32_Processor | Select-Object -First 1
 $d=Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$($env:SystemDrive)'"
 $r=(Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') -or (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')
-[ordered]@{name=$env:COMPUTERNAME; os="$($o.Caption) $($o.Version)"; model="$($c.Manufacturer) $($c.Model)"; cpu="$($p.Name)".Trim(); ram_gb=[math]::Round($c.TotalPhysicalMemory/1GB); disk_free_gb=[math]::Round($d.FreeSpace/1GB); disk_total_gb=[math]::Round($d.Size/1GB); user=$c.UserName; last_boot=$o.LastBootUpTime.ToString('yyyy-MM-dd HH:mm'); pending_reboot=[bool]$r} | ConvertTo-Json -Compress"#;
+[ordered]@{name=$env:COMPUTERNAME; os="$($o.Caption) $($o.Version)"; model="$($c.Manufacturer) $($c.Model)"; cpu="$($p.Name)".Trim(); ram_gb=[math]::Round($c.TotalPhysicalMemory/1GB); disk_free_gb=[math]::Round($d.FreeSpace/1GB); disk_total_gb=[math]::Round($d.Size/1GB); user="$($c.UserName)"; last_boot=$o.LastBootUpTime.ToString('yyyy-MM-dd HH:mm'); pending_reboot=[bool]$r} | ConvertTo-Json -Compress"#;
     #[cfg(any(target_os = "ios", target_os = "android"))]
     let script = "exit 1";
 
@@ -244,6 +249,14 @@ $r=(Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based S
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn health_with_no_signed_in_user_parses() {
+        let h: super::DeviceHealth =
+            serde_json::from_str(r#"{"name":"PC","user":null,"ram_gb":8}"#).unwrap();
+        assert_eq!(h.user, "");
+        assert_eq!(h.ram_gb, 8);
+    }
+
     use super::*;
 
     #[test]
