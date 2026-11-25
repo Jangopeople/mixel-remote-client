@@ -45,10 +45,30 @@ use zeroize::Zeroizing;
 
 /// Maximum wall-clock wait for an async hardware MFT to accept input or emit an encoded frame
 /// before falling back seamlessly to OpenH264 (prevents any GPU driver stall or deadlock).
-const MF_EVENT_WAIT_LIMIT: Duration = Duration::from_millis(200);
+/// Intel QuickSync can need a few hundred milliseconds for its first picture after the session's
+/// first frame; 200 ms gave up on working encoders (seen on an HP laptop, 2026-11-25).
+const MF_EVENT_WAIT_LIMIT: Duration = Duration::from_millis(400);
 /// Maximum consecutive input frames an async MFT may buffer without emitting output before
 /// falling back to OpenH264.
-const MAX_EMPTY_ASYNC_FRAMES: u32 = 8;
+const MAX_EMPTY_ASYNC_FRAMES: u32 = 24;
+
+/// The hardware encoder failed in this process: every later encoder (a new size, a renewed
+/// transport) starts with OpenH264 at once. Trying the hardware again each time cost up to a
+/// few seconds without pictures and a complete picture on every restart.
+static HARDWARE_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static HARDWARE_FAILURE: std::sync::Mutex<Option<&'static str>> = std::sync::Mutex::new(None);
+
+fn hardware_failed(reason: &'static str) {
+    HARDWARE_FAILED.store(true, std::sync::atomic::Ordering::Release);
+    if let Ok(mut slot) = HARDWARE_FAILURE.lock() {
+        slot.get_or_insert(reason);
+    }
+}
+
+/// Why this process encodes in software (for the perf log), if it does.
+pub fn hardware_failure() -> Option<&'static str> {
+    HARDWARE_FAILURE.lock().ok().and_then(|slot| *slot)
+}
 
 fn pack_u64(hi: u32, lo: u32) -> u64 {
     (u64::from(hi) << 32) | u64::from(lo)
@@ -631,10 +651,20 @@ impl WindowsScreenH264Encoder {
         high_profile: bool,
     ) -> Result<Self, EncodeError> {
         let timer = HighResTimerGuard::acquire();
-        let disable_hw = std::env::var("MIXEL_NO_HW_ENC").is_ok_and(|v| v == "1");
-        let backend = if !disable_hw
-            && let Ok(hw) = MfHardwareEncoder::try_new(width, height, fps, bitrate, high_profile)
-        {
+        let disable_hw = std::env::var("MIXEL_NO_HW_ENC").is_ok_and(|v| v == "1")
+            || HARDWARE_FAILED.load(std::sync::atomic::Ordering::Acquire);
+        let hardware = if disable_hw {
+            None
+        } else {
+            match MfHardwareEncoder::try_new(width, height, fps, bitrate, high_profile) {
+                Ok(hw) => Some(hw),
+                Err(_) => {
+                    hardware_failed("no hardware encoder could be opened");
+                    None
+                }
+            }
+        };
+        let backend = if let Some(hw) = hardware {
             Backend::Hardware(Box::new(hw))
         } else {
             // Software OpenH264 keeps a 30 FPS bit budget so WAN bitrates don't starve it.
@@ -694,7 +724,7 @@ impl WindowsScreenH264Encoder {
                     false
                 }
             }
-            Backend::Software(_) => false,
+            Backend::Software(sw) => sw.set_bitrate(bitrate),
         }
     }
 
@@ -708,6 +738,7 @@ impl WindowsScreenH264Encoder {
             Backend::Hardware(hw) => match hw.encode(frame, timestamp_us, force) {
                 Ok(out) => Ok(out),
                 Err(_) => {
+                    hardware_failed(if hw.priming { "hardware encoder gave no picture" } else { "hardware encoder failed or timed out" });
                     // Seamless runtime fallback to OpenH264 without dropping the session.
                     let mut sw = SoftwareEncoder::new(
                         self.width,

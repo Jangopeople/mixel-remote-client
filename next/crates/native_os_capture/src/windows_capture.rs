@@ -17,6 +17,51 @@ use windows::{
     core::Interface,
 };
 use zeroize::Zeroizing;
+/// Keep the screen on while the calling thread runs (`on`), or let Windows turn it off again.
+///
+/// Windows turns the display off after its idle timeout (10 minutes on the HP laptop's mains
+/// plan) when nobody touches that computer, and a technician who only watches sends no input.
+/// With the display off the compositor stops and desktop duplication returns no new pictures:
+/// the technician sees the last picture for minutes or hours while the host reports an unchanged
+/// screen. TeamViewer holds the display on for its sessions; this does the same for the capture
+/// owner thread. The request belongs to the thread and ends with it.
+pub fn keep_display_on(on: bool) -> bool {
+    use windows::Win32::System::Power::{
+        ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED, SetThreadExecutionState,
+    };
+    let flags = if on {
+        ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED
+    } else {
+        ES_CONTINUOUS
+    };
+    // SAFETY: a plain flag call without pointers.
+    unsafe { SetThreadExecutionState(flags) }.0 != 0
+}
+
+/// Turn on a display that is already off: a mouse move of zero counts as user input (the pointer
+/// stays where it is). Holding the display on does not switch on one that went dark before.
+pub fn wake_display() -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_MOVE, MOUSEINPUT, SendInput,
+    };
+    let _ = attach_input_desktop();
+    let input = INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dx: 0,
+                dy: 0,
+                mouseData: 0,
+                dwFlags: MOUSEEVENTF_MOVE,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    // SAFETY: one initialized INPUT of the exact SDK layout, copied by Windows during the call.
+    unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) == 1 }
+}
+
 /// Attach the calling thread to the desktop that currently receives input,
 /// so a new duplication follows the user's desktop after a lock or a secure
 /// prompt. Returns false when that desktop is not accessible (still secure).
@@ -193,6 +238,18 @@ impl Drop for Mapped<'_> {
 /// The shortest time between two pictures when only GDI can copy the screen.
 const GDI_ONLY_INTERVAL: Duration = Duration::from_millis(33);
 
+/// How the last picture was copied (for the perf log): 0 none yet, 1 desktop duplication, 2 GDI.
+static LAST_METHOD: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// How the last picture was copied: "dxgi" (desktop duplication), "gdi" (slow full-screen copy).
+pub fn capture_method() -> &'static str {
+    match LAST_METHOD.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => "dxgi",
+        2 => "gdi",
+        _ => "none",
+    }
+}
+
 pub struct WindowsCapture {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
@@ -337,7 +394,7 @@ impl WindowsCapture {
             duplication
                 .AcquireNextFrame(milliseconds, &mut info, &mut resource)
         } {
-            Ok(()) => {}
+            Ok(()) => LAST_METHOD.store(1, std::sync::atomic::Ordering::Relaxed),
             Err(error) if error.code() == DXGI_ERROR_WAIT_TIMEOUT => {
                 if !self.received_visible_frame
                     && self.fallback.is_none()
@@ -485,6 +542,7 @@ impl WindowsCapture {
             .map_err(|error| CaptureError::Native(error.to_string()))
     }
     fn fallback_frame(&mut self) -> Result<CapturedFrame, CaptureError> {
+        LAST_METHOD.store(2, std::sync::atomic::Ordering::Relaxed);
         if !gdi::default_input_desktop() {
             return Err(CaptureError::Target);
         }

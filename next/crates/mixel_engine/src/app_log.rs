@@ -79,13 +79,12 @@ fn prefs_path() -> Option<PathBuf> {
 
 fn ensure_prefs_loaded() {
     PREFS_INIT.get_or_init(|| {
-        if let Some(path) = prefs_path() {
-            if let Ok(raw) = fs::read_to_string(&path) {
-                if let Ok(prefs) = serde_json::from_str::<ConnectionPrefs>(&raw) {
-                    RELAY_ONLY.store(prefs.relay_only, Ordering::Relaxed);
-                    IDLE_TIMEOUT_MINUTES.store(prefs.idle_timeout_minutes.min(480), Ordering::Relaxed);
-                }
-            }
+        if let Some(path) = prefs_path()
+            && let Ok(raw) = fs::read_to_string(&path)
+            && let Ok(prefs) = serde_json::from_str::<ConnectionPrefs>(&raw)
+        {
+            RELAY_ONLY.store(prefs.relay_only, Ordering::Relaxed);
+            IDLE_TIMEOUT_MINUTES.store(prefs.idle_timeout_minutes.min(480), Ordering::Relaxed);
         }
     });
 }

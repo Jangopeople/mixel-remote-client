@@ -3620,7 +3620,7 @@ dependencies = [
 
 [[package]]
 name = "mixel_remote_linux"
-version = "2.2.9"
+version = "2.2.10"
 dependencies = [
  "async-channel",
  "gettext",
@@ -3771,6 +3771,7 @@ dependencies = [
  "objc2-screen-capture-kit",
  "objc2-video-toolbox",
  "openh264",
+ "openh264-sys2",
  "rand_core 0.6.4",
  "thiserror 2.0.21",
  "tokio",

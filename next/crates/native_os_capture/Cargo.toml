@@ -47,6 +47,7 @@ features = ["std", "CFDictionary", "CFNumber", "CFString"]
 
 [dev-dependencies]
 openh264 = "=0.9.9"
+openh264-sys2 = "=0.9.9"
 h264-reader = "=0.9.0"
 core_protocol = { path = "../core_protocol", features = ["native-webrtc"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
@@ -54,7 +55,7 @@ ed25519-dalek = { version = "2.2", features = ["rand_core"] }
 rand_core.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "=0.62.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_StationsAndDesktops", "Win32_System_Threading", "Win32_Graphics_Gdi", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_Media", "Win32_Media_MediaFoundation", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Ole", "Win32_System_Variant"] }
+windows = { version = "=0.62.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_StationsAndDesktops", "Win32_System_Threading", "Win32_System_Power", "Win32_Graphics_Gdi", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_Media", "Win32_Media_MediaFoundation", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Ole", "Win32_System_Variant"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
@@ -69,4 +70,5 @@ libc = "0.2"
 
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "android"))'.dependencies]
 openh264 = "=0.9.9"
+openh264-sys2 = "=0.9.9"
 h264-reader = "=0.9.0"
