@@ -61,4 +61,11 @@ cargo test -p native_os_capture --lib --quiet -- the_bit_rate_changes_in_place_w
 grep -q 'pub fn keep_display_on(' "$NEXT/crates/native_os_capture/src/windows_capture.rs"
 grep -q 'keep_display_on(true)' "$NEXT/crates/mixel_engine/src/capture_worker.rs"
 
+echo "=== Gate 11: 2.2.11 Windows health on unattended PCs, always-on program update guard ==="
+cd "$NEXT"
+cargo test -p mixel_engine --lib --quiet -- health_with_no_signed_in_user_parses
+cargo test -p mixel_engine --lib --quiet -- only_an_x64_console_program_may_replace_the_service_program
+grep -q 'is_console_program(&copied)' "$NEXT/crates/mixel_engine/src/windows_signin_host.rs"
+grep -q 'user="$($c.UserName)"' "$NEXT/crates/mixel_engine/src/approved_scripts.rs"
+
 echo "=== ALL REGRESSION GATE CHECKS PASSED ==="
