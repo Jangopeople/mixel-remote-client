@@ -47,6 +47,7 @@ features = ["std", "CFDictionary", "CFNumber", "CFString"]
 
 [dev-dependencies]
 openh264 = "=0.9.9"
+openh264-sys2 = "=0.9.9"
 h264-reader = "=0.9.0"
 core_protocol = { path = "../core_protocol", features = ["native-webrtc"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
