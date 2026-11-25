@@ -73,6 +73,8 @@ async fn real_udp_ice_dtls_sctp_and_authenticated_encrypted_input_roundtrip() {
         .unwrap();
     tokio::join!(opened(&outbound), opened(&inbound));
     assert_eq!(a.observed_fingerprint().await.unwrap(), bf);
+    assert_eq!(a.relayed().await, Some(false), "a host pair on loopback is direct");
+    assert_eq!(b.relayed().await, Some(false));
     assert_eq!(b.observed_fingerprint().await.unwrap(), af);
     let ai = SigningKey::generate(&mut OsRng);
     let bi = SigningKey::generate(&mut OsRng);

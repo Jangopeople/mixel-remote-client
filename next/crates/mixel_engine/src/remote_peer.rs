@@ -443,6 +443,20 @@ fn relay_only_transport(configured: bool) -> bool {
         || crate::app_log::relay_only_enabled()
 }
 
+/// The path the session's media actually takes, for the session view, the perf log and the renewal
+/// rule (a "direct" session is renewed hourly; a relayed one before its relay credentials expire).
+/// Read from the pair ICE selected: a session that allows direct connections can still run through
+/// the relay. Until 2.2.9 this was taken from the relay-only setting alone, so every relayed session
+/// of a default installation was "direct" and ran past the end of its relay credentials.
+async fn path_label(transport: &NativeTransport, configured_relay_only: bool) -> &'static str {
+    path_name(relay_only_transport(configured_relay_only), transport.relayed().await)
+}
+
+/// No selected pair yet counts as relayed: that keeps the renewal of relay credentials on.
+fn path_name(relay_only: bool, relayed: Option<bool>) -> &'static str {
+    if relay_only || relayed != Some(false) { "relay" } else { "direct" }
+}
+
 async fn run(config: &mut Config, parts: Option<WarmParts>) -> Result<(), String> {
     if config.stopped() {
         return Ok(());
@@ -2237,7 +2251,7 @@ async fn host_media(
                 let secs = perf_logged.elapsed().as_secs_f64().max(0.1);
                 let kbps = (perf_bytes as f64 * 8.0 / secs / 1000.0).round() as u32;
                 let rtt = rate.base_delay().as_millis().min(u32::MAX as u128) as u32;
-                let path_str = if relay_only_transport(config.relay_only) { "relay" } else { "direct" };
+                let path_str = path_label(transport, config.relay_only).await;
                 let proto_str = transport.active_protocol();
                 config.state.change(config.generation, |status| {
                     status.connection_path = Some(path_str.into());
@@ -3045,7 +3059,7 @@ async fn viewer_media(
         if perf_v_at.elapsed() >= Duration::from_secs(1) {
             let secs = perf_v_at.elapsed().as_secs_f64().max(0.1);
             let kbps = (perf_v_bytes as f64 * 8.0 / secs / 1000.0).round() as u32;
-            let path_str = if relay_only_transport(config.relay_only) { "relay" } else { "direct" };
+            let path_str = path_label(transport, config.relay_only).await;
             let proto_str = transport.active_protocol();
             let sid = config.session.to_string();
             let sid8 = &sid[..sid.len().min(8)];
@@ -3165,6 +3179,14 @@ mod display_fit_tests {
         let c = CapturedFrame::bgra(64, 16, 64 * 4, changed).unwrap();
         assert!(!super::frames_effectively_identical(&a, &c));
     }
+    #[test]
+    fn a_session_is_direct_only_when_the_selected_pair_has_no_relay_candidate() {
+        assert_eq!(super::path_name(false, Some(false)), "direct");
+        assert_eq!(super::path_name(false, Some(true)), "relay", "a default installation can still run through the relay");
+        assert_eq!(super::path_name(false, None), "relay", "no pair yet: relay credentials keep being renewed");
+        assert_eq!(super::path_name(true, Some(false)), "relay");
+    }
+
     #[test]
     fn w1_viewer_liveness_never_kills_legacy_host_or_healthy_idle_host() {
         use std::time::Duration;
