@@ -156,6 +156,20 @@ impl Worker {
                 // sign-in desktop while a user may be signed in).
                 #[cfg(target_os = "windows")]
                 native_os_capture::windows_capture::attach_input_desktop();
+                // A viewer-only session injects no input, so Windows would turn the
+                // display off after its idle timeout and desktop duplication would
+                // stop delivering frames (the picture freezes). Keep the display on
+                // for this session, and wake it in case it is already off.
+                #[cfg(target_os = "windows")]
+                {
+                    native_os_capture::windows_capture::keep_display_on(true);
+                    native_os_capture::windows_capture::wake_display();
+                }
+                let started = std::time::Instant::now();
+                let mut last_frame: Option<std::time::Instant> = None;
+                #[cfg(target_os = "windows")]
+                let mut last_wake = started;
+                let mut reported_gap = false;
                 let first = PlatformCapture::open(&display);
                 #[cfg(target_os = "windows")]
                 let first = match first {
@@ -201,8 +215,35 @@ impl Worker {
                         continue;
                     };
                     match active.next_frame(std::time::Duration::from_millis(100)) {
-                        Ok(Some(frame)) => delivery.publish(frame),
-                        Ok(None) => {}
+                        Ok(Some(frame)) => {
+                            if reported_gap {
+                                crate::app_log::info("capture", "display frames resumed");
+                                reported_gap = false;
+                            }
+                            last_frame = Some(std::time::Instant::now());
+                            delivery.publish(frame);
+                        }
+                        Ok(None) => {
+                            // No first picture yet: the display may be off. Nudge it
+                            // every 2 s until frames arrive, and log once after 5 s so
+                            // a stuck picture shows up in field logs.
+                            if last_frame.is_none() {
+                                #[cfg(target_os = "windows")]
+                                if last_wake.elapsed() >= std::time::Duration::from_secs(2) {
+                                    native_os_capture::windows_capture::wake_display();
+                                    last_wake = std::time::Instant::now();
+                                }
+                                if !reported_gap
+                                    && started.elapsed() >= std::time::Duration::from_secs(5)
+                                {
+                                    crate::app_log::info(
+                                        "capture",
+                                        "no display frame within 5 s of start; waking display",
+                                    );
+                                    reported_gap = true;
+                                }
+                            }
+                        }
                         #[cfg(target_os = "windows")]
                         Err(native_os_capture::stream::CaptureError::Target) => {
                             lab_capture_log("desktop lost; waiting for it to return");
@@ -215,6 +256,8 @@ impl Worker {
                         }
                     }
                 }
+                #[cfg(target_os = "windows")]
+                native_os_capture::windows_capture::keep_display_on(false);
                 delivery.close(native_os_capture::stream::CaptureError::Stopped);
                 Ok(())
             })
