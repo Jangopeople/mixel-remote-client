@@ -21,8 +21,17 @@ pub type RemoteTrack = Arc<dyn TrackRemote>;
 /// How often the technician's side asks again for one lost packet (the stack's default is without
 /// limit: on a link that had just dropped a burst it asked for the same packets every 100 ms).
 const NACKS_PER_PACKET: u16 = 3;
-/// Packets the host keeps to send again on request (about two seconds of a moving full-HD screen).
-const REPEAT_BUFFER: u16 = 1024;
+/// Packets the host keeps to send again on request. 1024 was about 0.1 s at LAN pace, less than one
+/// Mac keyframe (about 850 packets), so a request often came too late to be served and the
+/// technician had to ask for a whole new picture. 8192 (about 10 MB) is about a second at LAN pace
+/// and several seconds on a slower line.
+const REPEAT_BUFFER: u16 = 8192;
+/// Packets the technician's side tracks for gaps (the stack's default of 512 lost sight of a gap
+/// within one keyframe burst at LAN pace, so it was never asked for).
+const RECEIVE_LOG: u16 = 8192;
+/// How often the technician's side looks for gaps and asks for them (the stack's default is
+/// 100 ms; with 50 ms a lost packet comes back about 50 ms sooner).
+const NACK_EVERY: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// The media stack's default set of helpers for every stream, with a lost picture packet sent
 /// again when the other side asks (NACK) and asked for at most [`NACKS_PER_PACKET`] times.
@@ -52,7 +61,7 @@ fn interceptors(media_engine: &mut MediaEngine) -> Result<Registry, webrtc::erro
     configure_simulcast_extension_headers(media_engine)?;
     let registry = configure_twcc_receiver_only(Registry::new(), media_engine)?;
     Ok(configure_rtcp_reports(registry)
-        .with(Slot::NackGenerator, NackGeneratorBuilder::new().with_max_nacks_per_packet(NACKS_PER_PACKET).build())
+        .with(Slot::NackGenerator, NackGeneratorBuilder::new().with_size(RECEIVE_LOG).with_interval(NACK_EVERY).with_max_nacks_per_packet(NACKS_PER_PACKET).build())
         .with(Slot::NackResponder, NackResponderBuilder::new().with_size(REPEAT_BUFFER).build()))
 }
 
@@ -419,6 +428,17 @@ impl NativeTransport {
         let sctp = self.peer.sctp().await?;
         let pair = sctp.transport().ice_transport().get_selected_candidate_pair().await.ok()??;
         Some(pair_is_relayed(pair.local().typ, pair.remote().typ))
+    }
+    /// The latest round trip of the connection's nominated pair (ICE consent checks), `None`
+    /// before one was measured. For the technician's perf log; it costs a stats snapshot.
+    pub async fn round_trip(&self) -> Option<Duration> {
+        let report = self.peer.get_stats(std::time::Instant::now(), rtc::statistics::StatsSelector::None).await;
+        report
+            .candidate_pairs()
+            .filter(|pair| pair.nominated && pair.current_round_trip_time > 0.0)
+            .map(|pair| pair.current_round_trip_time)
+            .reduce(f64::min)
+            .map(Duration::from_secs_f64)
     }
     pub fn ice_gathering_complete(&self) -> bool {
         *self.gathered.borrow()

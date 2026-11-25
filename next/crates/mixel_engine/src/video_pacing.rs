@@ -52,6 +52,9 @@ pub const GRACE: Duration = Duration::from_millis(800);
 pub const CONFIRM: Duration = Duration::from_millis(1500);
 /// How long after a loss the pace stays below the rate that lost a picture (5 s for fast recovery).
 pub const PROBE_AFTER: Duration = Duration::from_secs(5);
+/// On a line without queue, a lost complete picture with no other loss this long before it is
+/// taken for chance (one lost packet on Wi-Fi) and does not slow the pace.
+pub const ISOLATED_LOSS: Duration = Duration::from_secs(10);
 
 pub struct Pacer {
     rate: f64,
@@ -74,7 +77,7 @@ pub struct Pacer {
     /// way (random, or a burst), not a line that is too full, and must not cut the ceiling.
     line_clean: bool,
     /// Last time a clean line (`video_rate` active, no queue) climbed `rate` without waiting for
-    /// a periodic keyframe (keyframes are 10 s apart).
+    /// a periodic keyframe (periodic keyframes are 30 s apart).
     last_clean_climb: Instant,
     /// Lab statistics: complete pictures counted as lost.
     pub losses: u32,
@@ -176,12 +179,16 @@ impl Pacer {
         // The one sent did not arrive. It counts once: the next one is judged on its own.
         self.complete_sent = None;
         self.latest_complete = None;
-        self.last_loss = Some(now);
+        let previous_loss = self.last_loss.replace(now);
         self.untroubled = false;
         self.losses += 1;
         if self.line_clean {
-            // No queue: the picture was hit by loss on the way. Step back a little, the ceiling stays.
-            self.rate = (self.rate * 0.7).max(MIN_RATE);
+            // No queue: the picture was hit by loss on the way (Wi-Fi, a lost burst), not by a full
+            // line. A single loss leaves the pace as it is; only losses that repeat within
+            // `ISOLATED_LOSS` step back a little. The ceiling stays either way.
+            if previous_loss.is_some_and(|at| now.saturating_duration_since(at) < ISOLATED_LOSS) {
+                self.rate = (self.rate * 0.7).max(MIN_RATE);
+            }
             return;
         }
         self.ceiling = (self.rate * 0.75).max(MIN_RATE);
@@ -534,6 +541,23 @@ mod tests {
         now += Duration::from_secs(1);
         pacer.complete_picture_requested(now);
         assert!(pacer.own_rate().1 < MAX_RATE, "a loss with a queue still cuts the ceiling");
+    }
+
+    #[test]
+    fn one_lost_picture_on_a_clean_line_keeps_the_pace_but_repeated_ones_step_back() {
+        let mut now = Instant::now();
+        let mut pacer = Pacer::new(now);
+        pacer.set_line_clean(true);
+        send(&mut pacer, &mut now, 120_000, true);
+        now += Duration::from_secs(1);
+        let before = pacer.rate();
+        pacer.complete_picture_requested(now);
+        assert_eq!(pacer.rate(), before, "one loss on a clean line is chance");
+        send(&mut pacer, &mut now, 120_000, true);
+        now += Duration::from_secs(1);
+        let before = pacer.rate();
+        pacer.complete_picture_requested(now);
+        assert!(pacer.rate() < before, "a second loss within {ISOLATED_LOSS:?} steps back");
     }
 
     /// The whole chain on a simulated long line (500 kB/s, 140 ms each way +- 20, 1 % random loss, FIFO

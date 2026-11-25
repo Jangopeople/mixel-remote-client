@@ -263,6 +263,8 @@ pub struct ControlPipe {
     pub last_video_idle: Instant,
     last_controller_activity: Instant,
     last_keyframe_request: Option<Instant>,
+    /// Technician: complete pictures asked for since [`Self::take_keyframe_asks`] (perf log).
+    keyframe_asks: u32,
     force_keyframe: bool,
     /// Technician: the host uses receive reports (`video_rate::FEATURE`).
     report_video: bool,
@@ -461,6 +463,7 @@ impl ControlPipe {
             last_video_idle: Instant::now(),
             last_controller_activity: Instant::now(),
             last_keyframe_request: None,
+            keyframe_asks: 0,
             force_keyframe: false,
             report_video: !config.host && features.iter().any(|name| name == crate::video_rate::FEATURE),
             report_clock: !config.host && vrate2_enabled() && features.iter().any(|name| name == crate::video_rate::FEATURE_CLOCK),
@@ -519,6 +522,7 @@ impl ControlPipe {
             last_video_idle: Instant::now(),
             last_controller_activity: Instant::now(),
             last_keyframe_request: None,
+            keyframe_asks: 0,
             force_keyframe: false,
             report_video: false,
             report_clock: false,
@@ -1012,7 +1016,12 @@ impl ControlPipe {
         .map_err(|_| "Keyframe request timed out")?
         .map_err(|_| "Keyframe request failed")?;
         self.last_keyframe_request = Some(Instant::now());
+        self.keyframe_asks = self.keyframe_asks.saturating_add(1);
         Ok(())
+    }
+    /// Technician: complete pictures asked for since the last call.
+    pub fn take_keyframe_asks(&mut self) -> u32 {
+        std::mem::take(&mut self.keyframe_asks)
     }
     pub async fn poll(
         &mut self,
