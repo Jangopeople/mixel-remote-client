@@ -1812,6 +1812,9 @@ mod bitrate_tests {
 const PERIODIC_KEYFRAME_SECONDS: u64 = 30;
 const TARGET_FPS: u32 = if cfg!(any(target_os = "macos", target_os = "windows")) { 60 } else { 30 };
 
+/// How long the technician's side keeps a transport whose connection is lost before it ends it,
+/// while a renewal rebuilds the connection (normally 10 s of silence ends it).
+const LOST_LINK_PATIENCE: Duration = Duration::from_secs(30);
 /// How long a new encoder waits for an earlier one to finish closing.
 const ENCODER_PERMIT_WAIT: Duration = Duration::from_secs(1);
 /// Stalled encoders replaced in one session before it gives up ("Screen video encoder stalled").
@@ -2523,6 +2526,14 @@ async fn send_picture(
     #[cfg(feature = "qa-session")]
     if std::env::var_os("MIXEL_QA_UNPACED").is_some() {
         sender.send(consent, annex_b, duration).await.map_err(|error| error.to_string())?;
+        return Ok(true);
+    }
+    // The media connection is lost (a network change on either side): the picture is left out
+    // instead of ending the session, so the technician's renewal can build a new connection in
+    // the same session. The technician ends it if that does not happen in time.
+    let lost = !transport.connected();
+    config.link.lost.store(lost, Ordering::Release);
+    if lost {
         return Ok(true);
     }
     let packets = sender.packets(consent, annex_b, duration).await.map_err(|error| error.to_string())?;
@@ -3244,7 +3255,11 @@ async fn viewer_media(
         if qa_turn.elapsed() > Duration::from_millis(300) {
             eprintln!("QA technician loop at clock {}: taking {taken} picture packets (decoding, handing over) took {} ms", crate::remote_control::qa_wall_clock(), qa_turn.elapsed().as_millis());
         }
-        if liveness_state == ViewerLiveness::TimedOut {
+        // A lost media connection is being rebuilt through the connection service (a renewal in
+        // the same session): give it time before this transport gives up on its own.
+        if liveness_state == ViewerLiveness::TimedOut
+            && (!config.link.lost.load(Ordering::Acquire) || liveness >= LOST_LINK_PATIENCE)
+        {
             #[cfg(feature = "qa-session")]
             eprintln!("QA video timed out: {} RTP packets ({} bytes, {} with the end mark), {} pictures assembled, {} decoded, {} keyframe requests; {qa_keys} keyframe slices begun, {qa_gaps} gaps in the numbering ({qa_lost} numbers missing), {qa_late} packets late", qa_rtp.0, qa_rtp.1, qa_rtp.4, qa_rtp.2, received, qa_rtp.3);
             #[cfg(feature = "qa-session")]

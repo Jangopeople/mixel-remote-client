@@ -413,6 +413,9 @@ async fn connection(mut socket: WebSocket, state: AppState) {
                 // request arriving at expiry must never create new consent.
                 if !authorization_live(expires_at, authorized_at, now, unix_now()) { break; }
                 last_activity = now;
+                if let Ok(mut registry) = state.registry.lock() {
+                    registry.touch(id, generation, now);
+                }
                 if now.duration_since(rate_start) >= Duration::from_secs(1) { rate_start = now; rate_count = 0; }
                 rate_count += 1;
                 if rate_count > 60 { break; }
