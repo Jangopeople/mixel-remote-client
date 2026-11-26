@@ -330,6 +330,7 @@ public sealed class AppModel : Observable
         QuickSupportMode = false;
         // Start registration and show devices before fetching administration-only lists.
         await RefreshRemote();
+        if (Remote.Phase == "ready") _ = Host.RestoreUnattended();
         await Company.Load(includePeople: false);
         await Enrollment.Check();
         await Devices.Load();

@@ -507,6 +507,26 @@ public sealed class ViewModelTests
     }
 
     [TestMethod]
+    public async Task Unattended_sharing_waits_for_sign_in_and_restores_when_host_switches_from_quick_support()
+    {
+        var preferences = new MemoryPreferences();
+        var engine = new MockEngine();
+        DemoFixtures.SignedOut(engine);
+        var app = await DemoFixtures.App(engine, preferences);
+        // Quick Support is ready while signed out: must not request unattended access.
+        await app.Host.RestoreUnattended();
+        Assert.AreEqual(0, engine.CallsOf("remote_unattended").Count);
+
+        // Once signed in with a real host ID (even if Phase stayed "ready"), unattended access restores.
+        DemoFixtures.Company(engine);
+        await app.RefreshAccount();
+        await app.Host.RestoreUnattended();
+        var call = engine.CallsOf("remote_unattended")[^1].Object;
+        StringAssert.StartsWith(call["source"]!.GetValue<string>(), "dxgi:");
+        Assert.IsTrue(call["control"]!.GetValue<bool>());
+    }
+
+    [TestMethod]
     public async Task Company_invite_checks_the_address_and_sends_the_language()
     {
         var (engine, app) = await Company();
