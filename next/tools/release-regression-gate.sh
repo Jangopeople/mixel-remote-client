@@ -77,4 +77,10 @@ cargo test -p signaling_server --lib --quiet -- a_device_back_on_a_new_connectio
 cargo test -p mixel_engine --lib --quiet -- a_rotated_refresh_token_is_kept_before_anything_else_can_fail
 cargo test -p mixel_engine --lib --quiet -- a_restore_keeps_trying_after_the_quick_attempts
 
+echo "=== Gate 13: 2.2.13 long-distance sessions (repair packets negotiated only with apps that know them, full-screen software encoding when it keeps up) ==="
+cd "$NEXT"
+cargo test -p core_protocol --lib --quiet -- the_repair_stream_is_negotiated_only_with_apps_that_know_it
+cargo test -p mixel_engine --lib --quiet -- software_full_screen_follows_the_measured_cost
+grep -q 'repair={}' "$NEXT/crates/mixel_engine/src/remote_peer.rs"
+
 echo "=== ALL REGRESSION GATE CHECKS PASSED ==="
