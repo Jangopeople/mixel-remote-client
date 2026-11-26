@@ -79,7 +79,8 @@ cargo test -p mixel_engine --lib --quiet -- a_restore_keeps_trying_after_the_qui
 
 echo "=== Gate 13: 2.2.13 long-distance sessions (repair packets negotiated only with apps that know them, full-screen software encoding when it keeps up) ==="
 cd "$NEXT"
-cargo test -p core_protocol --lib --quiet -- the_repair_stream_is_negotiated_only_with_apps_that_know_it
+# transport.rs only compiles with native-webrtc; without it the filter matches 0 tests.
+cargo test -p core_protocol --features native-webrtc --lib --quiet -- the_repair_stream_is_negotiated_only_with_apps_that_know_it
 cargo test -p mixel_engine --lib --quiet -- software_full_screen_follows_the_measured_cost
 grep -q 'repair={}' "$NEXT/crates/mixel_engine/src/remote_peer.rs"
 
