@@ -93,4 +93,10 @@ grep -q 'duplication_stale = true' "$NEXT/crates/native_os_capture/src/windows_c
 grep -q 'GDI_ONLY_INTERVAL' "$NEXT/crates/native_os_capture/src/windows_capture.rs"
 grep -q 'startup_host = matches!(auth, RegistrationAuth::Startup' "$NEXT/crates/mixel_engine/src/remote_session.rs"
 
+echo "=== Gate 15: 2.2.15 Windows unattended restore after Quick Support sign-in, GDI software encoding stays 720p ==="
+cd "$NEXT"
+cargo test -p mixel_engine --lib --quiet -- gdi_software_encoding_stays_at_720p
+grep -q 'next.Host != previous.Host' "$NEXT/apps/mixel-remote-windows/src/MixelRemote.Core/ViewModels/HostModel.cs"
+grep -q 'Host.RestoreUnattended()' "$NEXT/apps/mixel-remote-windows/src/MixelRemote.Core/ViewModels/AppModel.cs"
+
 echo "=== ALL REGRESSION GATE CHECKS PASSED ==="

@@ -20,7 +20,7 @@ public sealed class HostModel : Observable
     private string error = "";
     private List<CaptureTarget> unattendedSources = [];
     private string unattendedSource = "";
-    private bool unattendedConfirm, unattendedControl;
+    private bool unattendedConfirm, unattendedControl, restoringUnattended;
 
     internal HostModel(AppModel app) => this.app = app;
 
@@ -55,7 +55,11 @@ public sealed class HostModel : Observable
             AllowClipboard = true;
             _ = LoadSources();
         }
-        if (next.Phase == "ready" && previous.Phase != "ready") _ = RestoreUnattended();
+        if (next.Phase == "ready" && app.SignedIn && !next.UnattendedEnabled && next.UnattendedPending is null
+            && (previous.Phase != "ready" || next.Host != previous.Host))
+        {
+            _ = RestoreUnattended();
+        }
     }
 
     public async Task LoadSources()
@@ -159,10 +163,10 @@ public sealed class HostModel : Observable
         return app.Act(() => app.Engine.PerformAsync("remote_unattended", ("source", null), ("control", false)));
     }
 
-    /// <summary>Whenever this computer is ready, unattended sharing comes back as the owner left it.</summary>
+    /// <summary>Whenever this computer is ready and signed in, unattended sharing comes back as the owner left it.</summary>
     internal async Task RestoreUnattended()
     {
-        if (Remote.UnattendedEnabled || Remote.UnattendedPending is not null) return;
+        if (!app.SignedIn || Remote.ControllerOnly || Remote.UnattendedEnabled || Remote.UnattendedPending is not null || restoringUnattended) return;
         var saved = app.Preferences.Get(UnattendedKey);
         if (saved == "off") return;
         string? chosen = null;
@@ -180,12 +184,19 @@ public sealed class HostModel : Observable
                 return;
             }
         }
+        restoringUnattended = true;
         try
         {
-            var targets = await app.Engine.RunAsync<List<CaptureTarget>>("capture_targets");
-            if (Remote.UnattendedEnabled || Remote.UnattendedPending is not null) return;
-            var matched = targets.FirstOrDefault(target => target.Id == chosen && target.FullDisplay)
-                ?? targets.FirstOrDefault(target => target.FullDisplay);
+            CaptureTarget? matched = null;
+            for (var attempt = 0; attempt < 3; attempt++)
+            {
+                var targets = await app.Engine.RunAsync<List<CaptureTarget>>("capture_targets");
+                if (!app.SignedIn || Remote.Phase != "ready" || Remote.UnattendedEnabled || Remote.UnattendedPending is not null) return;
+                matched = targets.FirstOrDefault(target => target.Id == chosen && target.FullDisplay)
+                    ?? targets.FirstOrDefault(target => target.FullDisplay);
+                if (matched is not null) break;
+                if (attempt < 2) await Task.Delay(2000);
+            }
             if (matched is null) return;
             var allowControl = (control || saved is null) && Remote.InputAccess;
             if (saved is null)
@@ -195,6 +206,10 @@ public sealed class HostModel : Observable
             await app.Engine.PerformAsync("remote_unattended", ("source", matched.Id), ("control", allowControl));
         }
         catch (EngineFailure) { }
+        finally
+        {
+            restoringUnattended = false;
+        }
     }
 
     public Task OneTimePassword(bool required) => app.Act(() => app.Engine.PerformAsync("remote_support_code", ("required", required)));

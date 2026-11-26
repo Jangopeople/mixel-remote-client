@@ -1719,6 +1719,18 @@ impl SoftwareFull {
         }
         false
     }
+    /// GDI CPU screen copy + software encoding on a dual-core laptop (e.g. lid-closed HP EliteBook)
+    /// saturates CPU at 1080p and stalls interactive FPS; keep it at 720p while GDI is active.
+    pub fn measured_with_copy(&mut self, pictures: u32, per_picture: Duration, boxed: bool, gdi: bool) -> bool {
+        if gdi {
+            if self.keeps_up {
+                self.keeps_up = false;
+                return true;
+            }
+            return false;
+        }
+        self.measured(pictures, per_picture, boxed)
+    }
 }
 
 /// How the screen was copied, for the perf log ("dxgi" or the slow "gdi" on Windows).
@@ -1845,6 +1857,19 @@ mod bitrate_tests {
         // The box only applies to Windows software encoding, never with Quality, never once it keeps up.
         assert_eq!(software_size_box("OpenH264", crate::remote_control::QualityMode::Auto, true), None);
         assert_eq!(software_size_box("VT", crate::remote_control::QualityMode::Auto, false), None);
+    }
+
+    /// GDI CPU copy + software encoding stays at 720p and drops back to 720p if GDI activates mid-session.
+    #[test]
+    fn gdi_software_encoding_stays_at_720p() {
+        let mut full = SoftwareFull::new();
+        assert!(!full.measured_with_copy(140, Duration::from_millis(15), true, true));
+        assert!(!full.keeps_up);
+        // DXGI promotes to 1080p when fast, then falling back to GDI steps down to 720p immediately.
+        assert!(full.measured_with_copy(140, Duration::from_millis(15), true, false));
+        assert!(full.keeps_up);
+        assert!(full.measured_with_copy(5, Duration::from_millis(15), false, true));
+        assert!(!full.keeps_up);
     }
     #[test]
     fn adaptive_size_scales_down_on_slow_wan_and_recovers_with_hysteresis() {
@@ -2478,8 +2503,8 @@ async fn host_media(
                 if backend == "OpenH264" {
                     let boxed = size.0.max(size.1) <= 1280 && full_size.0.max(full_size.1) > 1280;
                     let per_picture = (perf_capture + perf_encode) / perf_frames.max(1);
-                    if software_full.measured(perf_frames, per_picture, boxed) {
-                        crate::app_log::info("peer", &format!("session={} software encoding {} the full screen ({} ms per picture at {}x{})", config.session, if software_full.keeps_up { "takes" } else { "leaves" }, per_picture.as_millis(), size.0, size.1));
+                    if software_full.measured_with_copy(perf_frames, per_picture, boxed, capture_method() == "gdi") {
+                        crate::app_log::info("peer", &format!("session={} software encoding {} the full screen ({} ms per picture at {}x{}, copy={})", config.session, if software_full.keeps_up { "takes" } else { "leaves" }, per_picture.as_millis(), size.0, size.1, capture_method()));
                         // Decide the size at once, not after the next settle time.
                         bitrate_set = Instant::now().checked_sub(BITRATE_SETTLE).unwrap_or(bitrate_set);
                     }
