@@ -10,7 +10,7 @@ default = []
 external-turn-qa = ["native-webrtc"]
 # LAB builds only (through mixel_engine/qa-session): switches to measure against earlier behaviour.
 qa-session = []
-native-webrtc = ["dep:webrtc", "dep:tokio", "dep:async-trait", "dep:bytes", "dep:rtc", "dep:futures-util", "dep:tokio-rustls", "dep:rustls-native-certs"]
+native-webrtc = ["dep:webrtc", "dep:tokio", "dep:async-trait", "dep:bytes", "dep:rtc", "dep:futures-util", "dep:tokio-rustls", "dep:rustls-native-certs", "dep:webpki-roots"]
 
 [dependencies]
 serde.workspace = true
@@ -32,6 +32,9 @@ bincode = { version = "=2.0.1", features = ["serde"] }
 futures-util = { version = "0.3", optional = true }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"], optional = true }
 rustls-native-certs = { version = "0.8", optional = true }
+# Phones (Android, iOS) offer no system certificate store to this code: the Mozilla roots are
+# the fallback for encrypted relay addresses (turns:), the only relay that passes networks without UDP.
+webpki-roots = { version = "1", optional = true }
 
 [lints]
 workspace = true

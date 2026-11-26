@@ -1053,6 +1053,7 @@ dependencies = [
  "tokio-rustls",
  "turn",
  "web-time",
+ "webpki-roots 1.0.11",
  "webrtc",
  "webrtc-util",
  "x25519-dalek",

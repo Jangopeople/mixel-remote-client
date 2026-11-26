@@ -42,6 +42,7 @@ EXTRA = ['Escape', 'Tab', 'Enter', 'Backspace', 'Delete', 'Arrow up', 'Arrow dow
 
 # English key: (German (Swiss spelling), French, Italian)
 ANDROID = {
+    "Input delivery stalled; the session has been stopped": ("Die Eingaben kamen nicht mehr an; die Sitzung wurde beendet", "Les saisies ne passaient plus ; la session a été arrêtée", "Gli input non arrivavano più; la sessione è stata interrotta"),
     "%@ added to favorites.": ("%@ zu den Favoriten hinzugefügt.", "%@ ajouté aux favoris.", "%@ aggiunto ai preferiti."),
     "%@ removed from favorites.": ("%@ aus den Favoriten entfernt.", "%@ retiré des favoris.", "%@ rimosso dai preferiti."),
     "Saved as %@": ("Gespeichert als %@", "Enregistré sous %@", "Salvato come %@"),

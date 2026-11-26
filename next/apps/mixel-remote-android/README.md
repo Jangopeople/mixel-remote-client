@@ -7,6 +7,8 @@ desktop app and the native Apple apps. App id `ch.mixel.remote` (2.0.0 replaced 
 reports with notes and CSV/PDF export, and the optional note after a session).
 2.0.2 and 2.0.3 change the shared engine only (2.0.3: going online twice is not an error, sessions with a Mac, every
 waiting picture packet per turn).
+2.2.12 takes the version of the desktop apps and their engine: lost picture packets repaired instead of a
+freeze, a session that survives a short network drop (Wi-Fi to mobile data), the sign-in kept across restarts.
 
 | Part | Where | What |
 |---|---|---|
