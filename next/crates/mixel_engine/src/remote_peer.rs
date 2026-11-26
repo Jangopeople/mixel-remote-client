@@ -1594,12 +1594,39 @@ fn perf_log(line: &str) {
     if std::fs::metadata(&path).is_ok_and(|m| m.len() > 64 * 1024) {
         let _ = std::fs::write(&path, b"");
     }
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
-        use std::io::Write;
-        let unix = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
-        let _ = writeln!(file, "{unix} {line}");
+    use std::io::Write;
+    let unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let written = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .and_then(|mut file| writeln!(file, "{unix} {line}"));
+    // Say once per run why there is no perf log (the app log is read first in the field).
+    static FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if let Err(error) = written
+        && !FAILED.swap(true, Ordering::Relaxed)
+    {
+        crate::app_log::info("perf", &format!("cannot write {}: {error}", path.display()));
+    }
+}
+
+/// A host perf line: to the perf log every time, and every 30 s also to the app log. The HP in
+/// Mauritius had no perf log after the 2.2.13 update while its app log was there, so the
+/// numbers that tell a slow screen copy from a slow encoder or a slow line were missing.
+fn host_perf_log(session: impl std::fmt::Display, line: &str) {
+    static LAST: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+    perf_log(line);
+    let due = LAST.lock().map(|mut last| {
+        let due = last.is_none_or(|at| at.elapsed() >= Duration::from_secs(30));
+        if due {
+            *last = Some(Instant::now());
+        }
+        due
+    });
+    if due.unwrap_or(false) {
+        crate::app_log::info("perf", &format!("session={session} {line}"));
     }
 }
 
@@ -2457,7 +2484,7 @@ async fn host_media(
                         bitrate_set = Instant::now().checked_sub(BITRATE_SETTLE).unwrap_or(bitrate_set);
                     }
                 }
-                perf_log(&format!(
+                host_perf_log(config.session, &format!(
                     "host fps={:.1} kbps={:.0} size={}x{} target_kbps={} pace_kBs={:.0} deliv_kBs={:.0} rtt_ms={} queue_ms={} inflight_kB={} enc={} capture_ms={:.1} encode_ms={:.1} send_ms={:.1} backlogged={} copy={} repair={}{}",
                     f64::from(perf_frames) / secs,
                     perf_bytes as f64 * 8.0 / secs / 1000.0,

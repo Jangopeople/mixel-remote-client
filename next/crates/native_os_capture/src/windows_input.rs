@@ -243,13 +243,7 @@ impl Injector for WindowsInjector {
                 };
                 let active = whole
                     .as_ref()
-                    .or_else(|| {
-                        current.iter().find(|screen| {
-                            screen.name == selected.name
-                                && screen.adapter == selected.adapter
-                                && screen.output == selected.output
-                        })
-                    })
+                    .or_else(|| windows_capture::follow(selected, &current))
                     .ok_or_else(|| {
                         InjectionError::Native(
                             "Input display changed; reconnect to select displays again".into(),

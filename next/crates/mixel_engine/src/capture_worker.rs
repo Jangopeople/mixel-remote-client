@@ -142,7 +142,8 @@ pub struct Worker {
 }
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 impl Worker {
-    pub fn start(display: PlatformDisplay) -> Result<Self, String> {
+    #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
+    pub fn start(mut display: PlatformDisplay) -> Result<Self, String> {
         use std::sync::atomic::{AtomicBool, Ordering};
         let stop = Arc::new(AtomicBool::new(false));
         let frames = Arc::new(FrameMailbox::default());
@@ -197,6 +198,15 @@ impl Worker {
                     }
                 };
                 let mut capture = capture;
+                // Field log: when the shown desktop could not be read and why (it used to be in
+                // lab builds only, so a picture that froze after the first one said nothing).
+                #[cfg(target_os = "windows")]
+                let mut lost_since: Option<std::time::Instant> = capture.is_none().then(std::time::Instant::now);
+                #[cfg(target_os = "windows")]
+                let mut lost_logged: Option<std::time::Instant> = None;
+                // Whether pictures come by GDI (desktop duplication refused), logged when it changes.
+                #[cfg(target_os = "windows")]
+                let mut gdi_logged = false;
                 while !cancelled.load(Ordering::Acquire) {
                     let Some(active) = capture.as_mut() else {
                         // Windows replaced the user's desktop (lock screen or a
@@ -208,14 +218,45 @@ impl Worker {
                         match PlatformCapture::open(&display) {
                             Ok(next) => {
                                 lab_capture_log("desktop reattached");
+                                #[cfg(target_os = "windows")]
+                                {
+                                    let waited = lost_since.take().map_or(0, |at| at.elapsed().as_millis());
+                                    crate::app_log::info("capture", &format!("desktop readable again after {waited} ms{}", if next.gdi_only() { format!(", GDI copy only ({})", native_os_capture::windows_capture::last_open_failure()) } else { String::new() }));
+                                    lost_logged = None;
+                                }
                                 capture = Some(next);
                             }
-                            Err(error) => lab_capture_log(&format!("reopen failed: {error}")),
+                            Err(error) => {
+                                lab_capture_log(&format!("reopen failed: {error}"));
+                                // The shared display is gone (TeamViewer's virtual monitor after its
+                                // session): go on with the one display left, if there is just one.
+                                #[cfg(target_os = "windows")]
+                                if let Ok(current) = native_os_capture::windows_capture::displays()
+                                    && display.adapter != native_os_capture::windows_capture::ALL_DISPLAYS
+                                    && let Some(next) = native_os_capture::windows_capture::follow(&display, &current)
+                                    && (next.name.as_str(), next.width, next.height) != (display.name.as_str(), display.width, display.height)
+                                {
+                                    crate::app_log::info("capture", &format!("display {} ({}x{}) is gone; showing {} ({}x{}), the only display left", display.name, display.width, display.height, next.name, next.width, next.height));
+                                    display = next.clone();
+                                    continue;
+                                }
+                                #[cfg(target_os = "windows")]
+                                if lost_logged.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(15)) {
+                                    let since = lost_since.get_or_insert_with(std::time::Instant::now).elapsed().as_secs();
+                                    crate::app_log::info("capture", &format!("desktop not readable for {since} s: {error} ({}; input desktop {})", native_os_capture::windows_capture::last_open_failure(), native_os_capture::windows_capture::input_desktop_name()));
+                                    lost_logged = Some(std::time::Instant::now());
+                                }
+                            }
                         }
                         continue;
                     };
                     match active.next_frame(std::time::Duration::from_millis(100)) {
                         Ok(Some(frame)) => {
+                            #[cfg(target_os = "windows")]
+                            if gdi_logged != active.gdi_only() {
+                                gdi_logged = active.gdi_only();
+                                crate::app_log::info("capture", &format!("screen copy now by {} ({})", if gdi_logged { "GDI" } else { "desktop duplication" }, native_os_capture::windows_capture::last_open_failure()));
+                            }
                             if reported_gap {
                                 crate::app_log::info("capture", "display frames resumed");
                                 reported_gap = false;
@@ -247,6 +288,8 @@ impl Worker {
                         #[cfg(target_os = "windows")]
                         Err(native_os_capture::stream::CaptureError::Target) => {
                             lab_capture_log("desktop lost; waiting for it to return");
+                            crate::app_log::info("capture", &format!("desktop copy lost (input desktop {}); reopening", native_os_capture::windows_capture::input_desktop_name()));
+                            lost_since = Some(std::time::Instant::now());
                             capture = None;
                         }
                         Err(error) => {

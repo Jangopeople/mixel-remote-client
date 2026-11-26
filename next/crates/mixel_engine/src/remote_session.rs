@@ -742,6 +742,10 @@ struct Inner {
     drawing: Option<mpsc::Sender<core_protocol::annotation::Message>>,
     renew_after: Option<std::time::Instant>,
     stopping: bool,
+    /// The registration is Quick Support (no account): the broker never allows unattended
+    /// access for it, so asking would end the registration (2.2.13 HP: "refused unattended
+    /// startup sharing" in a loop, no Connection ID).
+    quick_support: bool,
     /// Technician sessions (up to four at once), each with its own state.
     slots: crate::remote_sessions::Registry,
 }
@@ -784,6 +788,7 @@ impl Default for RemoteSession {
                 drawing: None,
                 renew_after: None,
                 stopping: false,
+                quick_support: false,
                 slots: Default::default(),
             })),
             Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -1210,6 +1215,7 @@ impl RemoteSession {
         } else {
             let mut inner = self.0.lock().await;
             if inner.commands.is_none() && !inner.stopping {
+                inner.quick_support = true;
                 inner.status.host = Some(connection_id);
                 inner.status.phase = "ready".into();
                 inner.status.message = "Share this ID with the person helping you".into();
@@ -1323,6 +1329,7 @@ impl RemoteSession {
         } else {
             None
         };
+        inner.quick_support = quick_host_id.is_some();
         inner.status = Status {
             phase: if quick_host_id.is_some() { "ready" } else { "connecting" }.into(),
             message: if quick_host_id.is_some() {
@@ -1463,6 +1470,9 @@ impl RemoteSession {
         control: bool,
     ) -> Result<(), String> {
         crate::service_config::require_host()?;
+        if source.is_some() && self.0.lock().await.quick_support {
+            return Err("Unattended access needs a signed-in account; Quick Support is attended only".into());
+        }
         #[cfg(target_os = "linux")]
         if source.as_deref() == Some(crate::wayland_portal::SOURCE) {
             return Err("Wayland requires local confirmation for each sharing session".into());
@@ -4374,7 +4384,13 @@ async fn run(
                                     status.message = "Ready for policy-approved unattended access".into();
                                 }
                             }).await;
-                            if own_ticket.unattended_host_only() && !enabled {
+                            // Only the sign-in screen host lives for unattended access. A Quick Support host is
+                            // attended by design: a refusal there leaves it online for attended requests.
+                            #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+                            let startup_host = matches!(auth, RegistrationAuth::Startup { .. });
+                            #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+                            let startup_host = true;
+                            if own_ticket.unattended_host_only() && !enabled && startup_host {
                                 return Err("The broker refused unattended startup sharing".into());
                             }
                         },
@@ -5046,6 +5062,25 @@ mod consent_tests {
                 .contains(error)
         );
         assert!(!remote.status().await.input_access);
+    }
+
+    #[cfg(not(feature = "testflight-controller"))]
+    #[tokio::test]
+    #[cfg_attr(any(target_os = "ios", target_os = "android"), ignore = "host side only: phones are controllers")]
+    async fn quick_support_never_asks_the_broker_for_unattended_access() {
+        // 2.2.13: the Windows app asked for unattended access as soon as a Quick Support host was
+        // ready; the broker refused and the registration ended in a loop, so no Connection ID.
+        let remote = RemoteSession::default();
+        let (commands, mut receiver) = mpsc::channel(2);
+        {
+            let mut inner = remote.0.lock().await;
+            inner.commands = Some(commands);
+            inner.quick_support = true;
+            inner.status.phase = "ready".into();
+        }
+        let refused = remote.configure_unattended(Some("display:1".into()), true).await;
+        assert!(refused.is_err_and(|error| error.contains("Quick Support")));
+        assert!(receiver.try_recv().is_err());
     }
 
     #[cfg(not(feature = "testflight-controller"))]
