@@ -116,7 +116,6 @@ fn register_repair_codec(media_engine: &mut MediaEngine) -> Result<(), webrtc::e
                 rtcp_feedback: vec![],
             },
             payload_type: REPAIR_PAYLOAD_TYPE,
-            ..Default::default()
         },
         RtpCodecKind::Video,
     )?;
