@@ -216,6 +216,20 @@ pub fn displays() -> Result<Vec<Display>, CaptureError> {
     }
     Ok(displays)
 }
+/// The display that now stands for `selected`: the same one when it is still there, otherwise the
+/// only display left. A PC without a monitor of its own (the HP laptop in Mauritius, lid shut)
+/// shows its desktop on TeamViewer's virtual monitor while a TeamViewer session runs
+/// (\\.\DISPLAY23, 1920x1080) and on Windows' own stand-in display otherwise (\\.\DISPLAY1,
+/// 1280x720): when TeamViewer ends, the display that was shared is gone and the picture froze.
+/// With one display left there is only one desktop to show, so the session goes on with it;
+/// with several, nothing is chosen for the person (the session waits, as before).
+pub fn follow<'a>(selected: &Display, current: &'a [Display]) -> Option<&'a Display> {
+    current
+        .iter()
+        .find(|screen| screen.name == selected.name && screen.adapter == selected.adapter && screen.output == selected.output)
+        .or_else(|| current.iter().find(|screen| screen.name == selected.name))
+        .or_else(|| (current.len() == 1).then(|| &current[0]))
+}
 /// Marks the display record that stands for the whole desktop across all monitors.
 pub const ALL_DISPLAYS: u32 = u32::MAX;
 /// The rectangle around all `displays`, as one capture and input target.
@@ -267,6 +281,13 @@ impl Drop for Mapped<'_> {
 }
 /// The shortest time between two pictures when only GDI can copy the screen.
 const GDI_ONLY_INTERVAL: Duration = Duration::from_millis(33);
+/// Without pictures for this long, whether the display is still there is checked (this often).
+const DISPLAY_CHECK: Duration = Duration::from_secs(2);
+/// GDI-only capture asks for desktop duplication again this often.
+const DUPLICATION_RETRY: Duration = Duration::from_secs(2);
+/// Desktop duplication silent for this long: a GDI copy (this often) checks whether the screen
+/// really is unchanged.
+const STALE_PROBE: Duration = Duration::from_secs(1);
 
 /// How the last picture was copied (for the perf log): 0 none yet, 1 desktop duplication, 2 GDI.
 static LAST_METHOD: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
@@ -305,6 +326,22 @@ pub struct WindowsCapture {
     received_visible_frame: bool,
     /// GDI-only capture (no desktop duplication): the last picture, to tell an unchanged screen.
     last_gdi_only: Option<Vec<u8>>,
+    /// GDI-only capture: when the last copy was taken (copies are at most [`GDI_ONLY_INTERVAL`]
+    /// apart) and when desktop duplication was last tried again.
+    gdi_last: Option<std::time::Instant>,
+    duplication_tried: std::time::Instant,
+    /// When desktop duplication last gave a picture, and when it was last checked that the
+    /// display is still there (a removed display gives no error, only no pictures).
+    dxgi_last: std::time::Instant,
+    present_checked: std::time::Instant,
+    /// Desktop duplication silent: the last GDI probe picture and when it was taken. A display
+    /// without a monitor (the HP in Mauritius with its lid closed, once TeamViewer's virtual
+    /// monitor is gone) is granted duplication but never gives a picture, while GDI sees the
+    /// screen change: the session showed one picture and then nothing (26 Nov 2026).
+    stale_probe: Option<Vec<u8>>,
+    stale_probed: std::time::Instant,
+    /// Duplication was found silent on a changing screen: GDI from now on for this display.
+    duplication_stale: bool,
     staging: Option<(u32, u32, ID3D11Texture2D)>,
 }
 impl WindowsCapture {
@@ -383,6 +420,13 @@ impl WindowsCapture {
                 fallback: None,
                 received_visible_frame: false,
                 last_gdi_only: None,
+                gdi_last: None,
+                duplication_tried: std::time::Instant::now(),
+                dxgi_last: std::time::Instant::now(),
+                present_checked: std::time::Instant::now(),
+                stale_probe: None,
+                stale_probed: std::time::Instant::now(),
+                duplication_stale: false,
                 staging: None,
             }),
             Err(error) => {
@@ -399,6 +443,13 @@ impl WindowsCapture {
                         fallback: Some(fallback),
                         received_visible_frame: false,
                         last_gdi_only: None,
+                        gdi_last: None,
+                        duplication_tried: std::time::Instant::now(),
+                        dxgi_last: std::time::Instant::now(),
+                        present_checked: std::time::Instant::now(),
+                        stale_probe: None,
+                        stale_probed: std::time::Instant::now(),
+                        duplication_stale: false,
                         staging: None,
                     });
                 }
@@ -428,12 +479,35 @@ impl WindowsCapture {
                 .frame(&self.display)
                 .map(Some);
         }
+        if self.duplication.is_none() && !self.duplication_stale && self.duplication_tried.elapsed() >= DUPLICATION_RETRY {
+            // Windows refused desktop duplication when the capture opened (the HP in Mauritius
+            // after a TeamViewer session, 26 Nov 2026: every picture of every session was a
+            // GDI copy, 5-6 a second). Ask again now and then: once it is granted the pictures
+            // come from the graphics card again.
+            self.duplication_tried = std::time::Instant::now();
+            if let Ok(duplication) = unsafe { self.output.DuplicateOutput(&self.device) } {
+                self.duplication = Some(duplication);
+                self.fallback = None;
+                self.last_gdi_only = None;
+                self.received_visible_frame = false;
+                open_failed("duplication", "granted again");
+            }
+        }
         let Some(duplication) = self.duplication.clone() else {
             // Windows refused desktop duplication for this display, so every picture is a GDI copy
             // of the whole screen (slow, and done on this thread). At most about 30 a second, and an
             // unchanged screen is no new picture: the snapshot of 2.0.5-2.0.14 copied and encoded the
-            // whole screen every 8 ms whether anything changed or not.
-            std::thread::sleep(timeout.clamp(GDI_ONLY_INTERVAL, Duration::from_millis(100)));
+            // whole screen every 8 ms whether anything changed or not. The wait counts from the last
+            // copy: 2.2.13 slept the caller's whole timeout (100 ms) before every copy, so on top of
+            // the copy itself no more than 5-6 pictures a second left the HP in Mauritius.
+            let next = self.gdi_last.map_or(std::time::Instant::now(), |last| last + GDI_ONLY_INTERVAL);
+            let wait = next.saturating_duration_since(std::time::Instant::now());
+            if wait > timeout {
+                std::thread::sleep(timeout);
+                return Ok(None);
+            }
+            std::thread::sleep(wait);
+            self.gdi_last = Some(std::time::Instant::now());
             let frame = self.fallback_frame()?;
             if self.last_gdi_only.as_deref() == Some(frame.pixels()) {
                 return Ok(None);
@@ -451,8 +525,60 @@ impl WindowsCapture {
             duplication
                 .AcquireNextFrame(milliseconds, &mut info, &mut resource)
         } {
-            Ok(()) => LAST_METHOD.store(1, std::sync::atomic::Ordering::Relaxed),
+            Ok(()) => {
+                LAST_METHOD.store(1, std::sync::atomic::Ordering::Relaxed);
+                self.dxgi_last = std::time::Instant::now();
+                self.stale_probe = None;
+            }
             Err(error) if error.code() == DXGI_ERROR_WAIT_TIMEOUT => {
+                // No picture for a while: a display that was removed (TeamViewer's virtual monitor
+                // when its session ends) says nothing, it only stops giving pictures. Check that
+                // it is still there now and then, and let the owner reopen when it is not.
+                if self.dxgi_last.elapsed() >= DISPLAY_CHECK && self.present_checked.elapsed() >= DISPLAY_CHECK {
+                    self.present_checked = std::time::Instant::now();
+                    let still = displays().is_ok_and(|current| {
+                        current.iter().any(|screen| {
+                            screen.name == self.display.name
+                                && (screen.left, screen.top, screen.width, screen.height)
+                                    == (self.display.left, self.display.top, self.display.width, self.display.height)
+                        })
+                    });
+                    if !still {
+                        open_failed("output", format_args!("display {} is gone or changed", self.display.name));
+                        return Err(CaptureError::Target);
+                    }
+                }
+                if self.received_visible_frame
+                    && self.dxgi_last.elapsed() >= STALE_PROBE
+                    && self.stale_probed.elapsed() >= STALE_PROBE
+                    && gdi::default_input_desktop()
+                {
+                    self.stale_probed = std::time::Instant::now();
+                    if let Ok(probe) = gdi::GdiCapture::open(&self.display) {
+                        self.fallback = Some(probe);
+                        let frame = self.fallback_frame();
+                        let frame = match frame {
+                            Ok(frame) => frame,
+                            Err(error) => {
+                                self.fallback = None;
+                                return Err(error);
+                            }
+                        };
+                        let changed = self.stale_probe.as_deref().is_some_and(|last| last != frame.pixels());
+                        if changed {
+                            open_failed("duplication", "gives no pictures while the screen changes; copying by GDI");
+                            self.duplication = None;
+                            self.duplication_stale = true;
+                            self.stale_probe = None;
+                            self.gdi_last = Some(std::time::Instant::now());
+                            self.last_gdi_only = Some(frame.pixels().to_vec());
+                            return Ok(Some(frame));
+                        }
+                        self.stale_probe = Some(frame.pixels().to_vec());
+                        self.fallback = None;
+                    }
+                    return Ok(None);
+                }
                 if !self.received_visible_frame
                     && self.fallback.is_none()
                     && gdi::default_input_desktop()

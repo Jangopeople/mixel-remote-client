@@ -142,7 +142,8 @@ pub struct Worker {
 }
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 impl Worker {
-    pub fn start(display: PlatformDisplay) -> Result<Self, String> {
+    #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
+    pub fn start(mut display: PlatformDisplay) -> Result<Self, String> {
         use std::sync::atomic::{AtomicBool, Ordering};
         let stop = Arc::new(AtomicBool::new(false));
         let frames = Arc::new(FrameMailbox::default());
@@ -203,12 +204,9 @@ impl Worker {
                 let mut lost_since: Option<std::time::Instant> = capture.is_none().then(std::time::Instant::now);
                 #[cfg(target_os = "windows")]
                 let mut lost_logged: Option<std::time::Instant> = None;
+                // Whether pictures come by GDI (desktop duplication refused), logged when it changes.
                 #[cfg(target_os = "windows")]
-                if let Some(active) = capture.as_ref()
-                    && active.gdi_only()
-                {
-                    crate::app_log::info("capture", &format!("desktop duplication refused ({}); copying the screen by GDI", native_os_capture::windows_capture::last_open_failure()));
-                }
+                let mut gdi_logged = false;
                 while !cancelled.load(Ordering::Acquire) {
                     let Some(active) = capture.as_mut() else {
                         // Windows replaced the user's desktop (lock screen or a
@@ -230,6 +228,18 @@ impl Worker {
                             }
                             Err(error) => {
                                 lab_capture_log(&format!("reopen failed: {error}"));
+                                // The shared display is gone (TeamViewer's virtual monitor after its
+                                // session): go on with the one display left, if there is just one.
+                                #[cfg(target_os = "windows")]
+                                if let Ok(current) = native_os_capture::windows_capture::displays()
+                                    && display.adapter != native_os_capture::windows_capture::ALL_DISPLAYS
+                                    && let Some(next) = native_os_capture::windows_capture::follow(&display, &current)
+                                    && (next.name.as_str(), next.width, next.height) != (display.name.as_str(), display.width, display.height)
+                                {
+                                    crate::app_log::info("capture", &format!("display {} ({}x{}) is gone; showing {} ({}x{}), the only display left", display.name, display.width, display.height, next.name, next.width, next.height));
+                                    display = next.clone();
+                                    continue;
+                                }
                                 #[cfg(target_os = "windows")]
                                 if lost_logged.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(15)) {
                                     let since = lost_since.get_or_insert_with(std::time::Instant::now).elapsed().as_secs();
@@ -242,6 +252,11 @@ impl Worker {
                     };
                     match active.next_frame(std::time::Duration::from_millis(100)) {
                         Ok(Some(frame)) => {
+                            #[cfg(target_os = "windows")]
+                            if gdi_logged != active.gdi_only() {
+                                gdi_logged = active.gdi_only();
+                                crate::app_log::info("capture", &format!("screen copy now by {} ({})", if gdi_logged { "GDI" } else { "desktop duplication" }, native_os_capture::windows_capture::last_open_failure()));
+                            }
                             if reported_gap {
                                 crate::app_log::info("capture", "display frames resumed");
                                 reported_gap = false;
