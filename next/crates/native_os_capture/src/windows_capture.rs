@@ -120,6 +120,36 @@ pub fn attach_input_desktop() -> bool {
         })
     }
 }
+/// The name of the desktop that receives input ("Default", "Winlogon" for the lock or sign-in
+/// screen and secure prompts), or "unreadable" when this process may not open it. For the logs.
+pub fn input_desktop_name() -> String {
+    use windows::Win32::System::StationsAndDesktops::{
+        CloseDesktop, DESKTOP_ACCESS_FLAGS, DESKTOP_CONTROL_FLAGS, GetUserObjectInformationW,
+        OpenInputDesktop, UOI_NAME,
+    };
+    // SAFETY: the handle is closed once; the buffer and length describe writable memory.
+    unsafe {
+        let Ok(desktop) = OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_ACCESS_FLAGS(0x0001)) else {
+            return "unreadable".into();
+        };
+        let mut buffer = [0u16; 128];
+        let mut needed = 0u32;
+        let named = GetUserObjectInformationW(
+            windows::Win32::Foundation::HANDLE(desktop.0),
+            UOI_NAME,
+            Some(buffer.as_mut_ptr().cast()),
+            (buffer.len() * 2) as u32,
+            Some(&mut needed),
+        )
+        .is_ok();
+        let _ = CloseDesktop(desktop);
+        if !named {
+            return "unnamed".into();
+        }
+        let length = buffer.iter().position(|&unit| unit == 0).unwrap_or(buffer.len());
+        String::from_utf16_lossy(&buffer[..length])
+    }
+}
 fn native(error: windows::core::Error) -> CaptureError {
     // Desktop switches (lock screen, secure prompts) can surface from any
     // duplication call, not only AcquireNextFrame. Report them as a target
@@ -241,6 +271,21 @@ const GDI_ONLY_INTERVAL: Duration = Duration::from_millis(33);
 /// How the last picture was copied (for the perf log): 0 none yet, 1 desktop duplication, 2 GDI.
 static LAST_METHOD: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
+/// Why the screen copy could not be opened last time (for the app log): which step refused and
+/// with what code. A session that only ever waits for the desktop to come back (after a
+/// TeamViewer session the HP sent one picture and then nothing, 26 Nov 2026) said nothing in the
+/// field logs before.
+static OPEN_FAILURE: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+fn open_failed(step: &str, detail: impl std::fmt::Display) {
+    if let Ok(mut last) = OPEN_FAILURE.lock() {
+        *last = format!("{step}: {detail}");
+    }
+}
+/// What refused the last open of the screen copy ("" when none did).
+pub fn last_open_failure() -> String {
+    OPEN_FAILURE.lock().map(|last| last.clone()).unwrap_or_default()
+}
+
 /// How the last picture was copied: "dxgi" (desktop duplication), "gdi" (slow full-screen copy).
 pub fn capture_method() -> &'static str {
     match LAST_METHOD.load(std::sync::atomic::Ordering::Relaxed) {
@@ -280,11 +325,16 @@ impl WindowsCapture {
             capture.received_visible_frame = true;
             return Ok(capture);
         }
-        let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.map_err(native)?;
-        let adapter = unsafe { factory.EnumAdapters1(display.adapter) }.map_err(native)?;
-        let output = unsafe { adapter.EnumOutputs(display.output) }.map_err(native)?;
-        let description = unsafe { output.GetDesc() }.map_err(native)?;
+        let noted = |step: &'static str| move |error: windows::core::Error| {
+            open_failed(step, error.code());
+            native(error)
+        };
+        let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.map_err(noted("factory"))?;
+        let adapter = unsafe { factory.EnumAdapters1(display.adapter) }.map_err(noted("adapter"))?;
+        let output = unsafe { adapter.EnumOutputs(display.output) }.map_err(noted("output"))?;
+        let description = unsafe { output.GetDesc() }.map_err(noted("output description"))?;
         if !description.AttachedToDesktop.as_bool() {
+            open_failed("output", "not attached to the desktop");
             return Err(CaptureError::Target);
         }
         // Re-resolve the selected display. A topology change must require a new
@@ -294,7 +344,9 @@ impl WindowsCapture {
             .iter()
             .position(|unit| *unit == 0)
             .unwrap_or(description.DeviceName.len());
-        if String::from_utf16_lossy(&description.DeviceName[..end]) != display.name {
+        let shown_name = String::from_utf16_lossy(&description.DeviceName[..end]);
+        if shown_name != display.name {
+            open_failed("output", format_args!("is now {shown_name}, was {}", display.name));
             return Err(CaptureError::Target);
         }
         let adapter: IDXGIAdapter = adapter.cast().map_err(native)?;
@@ -315,7 +367,7 @@ impl WindowsCapture {
                 Some(&mut context),
             )
         }
-        .map_err(native)?;
+        .map_err(noted("device"))?;
         let device =
             device.ok_or_else(|| CaptureError::Native("Windows returned no D3D device".into()))?;
         let context = context
@@ -334,6 +386,7 @@ impl WindowsCapture {
                 staging: None,
             }),
             Err(error) => {
+                open_failed("duplication", error.code());
                 if gdi::default_input_desktop()
                     && let Ok(fallback) = gdi::GdiCapture::open(display)
                 {
@@ -352,6 +405,10 @@ impl WindowsCapture {
                 Err(native(error))
             }
         }
+    }
+    /// Windows refused desktop duplication: every picture is a slow GDI copy of the screen.
+    pub fn gdi_only(&self) -> bool {
+        self.duplication.is_none() && self.display.adapter != ALL_DISPLAYS
     }
     /// A timeout is a normal unchanged-screen result. Desktop switches, lock
     /// screens and display removal fail closed; the caller must reselect/reopen.
