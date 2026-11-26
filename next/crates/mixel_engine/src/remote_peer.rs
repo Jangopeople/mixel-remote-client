@@ -1643,9 +1643,55 @@ const BITRATE_SETTLE: Duration = Duration::from_millis(4000);
 
 /// The largest stream (long side, short side) a software encoder is given on Windows, unless the
 /// technician chose `Quality`; `None`: no limit (hardware encoders, other systems).
-pub(crate) fn software_size_box(backend: &str, mode: crate::remote_control::QualityMode) -> Option<(usize, usize)> {
-    (cfg!(target_os = "windows") && backend == "OpenH264" && mode != crate::remote_control::QualityMode::Quality)
+pub(crate) fn software_size_box(backend: &str, mode: crate::remote_control::QualityMode, keeps_up: bool) -> Option<(usize, usize)> {
+    (cfg!(target_os = "windows") && backend == "OpenH264" && mode != crate::remote_control::QualityMode::Quality && !keeps_up)
         .then_some((1280, 720))
+}
+
+/// Software encoding of the full screen, decided from what this computer measured (screen copy
+/// plus encoding per picture, over [`SOFTWARE_SAMPLE`] pictures or more).
+///
+/// Why. The 720p limit for software encoding (2.2.10) came from an HP laptop that sent 2-3
+/// pictures a second at 1080p; that was the encoder being torn down and the hardware one tried
+/// again on every bit rate step (fixed in the same release), not the encoding itself. The same
+/// laptop then copied and encoded a 720p picture in 17-20 ms (perf log, 26 Nov 2026), so about
+/// 40 ms at 1080p: still 25 pictures a second. At 720p a 1920x1080 screen loses a third of its
+/// lines and small text turns to mush on the technician's side, which is what the technician in
+/// Mauritius saw as "bad quality". So: a computer that keeps up at 720p with room to spare gets
+/// the full screen; one that then cannot keep up at full size goes back to 720p for the rest of
+/// the session.
+pub(crate) struct SoftwareFull {
+    pub keeps_up: bool,
+    gave_up: bool,
+}
+/// Pictures a decision needs (a still screen sends few, and says little about the cost).
+const SOFTWARE_SAMPLE: u32 = 20;
+/// At 720p: at most this per picture (copy + encode) to try the full screen (about 2.25 times the
+/// pixels, so about 50 ms there).
+const SOFTWARE_UP: Duration = Duration::from_millis(22);
+/// At full size: more than this per picture (below 20 pictures a second) goes back to 720p.
+const SOFTWARE_DOWN: Duration = Duration::from_millis(50);
+impl SoftwareFull {
+    pub fn new() -> Self {
+        Self { keeps_up: false, gave_up: false }
+    }
+    /// The cost per picture measured over `pictures` pictures at `size` (`boxed`: limited to 720p
+    /// at the moment). Returns whether the decision changed.
+    pub fn measured(&mut self, pictures: u32, per_picture: Duration, boxed: bool) -> bool {
+        if pictures < SOFTWARE_SAMPLE || self.gave_up {
+            return false;
+        }
+        if boxed && !self.keeps_up && per_picture <= SOFTWARE_UP {
+            self.keeps_up = true;
+            return true;
+        }
+        if !boxed && self.keeps_up && per_picture > SOFTWARE_DOWN {
+            self.keeps_up = false;
+            self.gave_up = true;
+            return true;
+        }
+        false
+    }
 }
 
 /// How the screen was copied, for the perf log ("dxgi" or the slow "gdi" on Windows).
@@ -1745,6 +1791,34 @@ pub(crate) fn adaptive_size_for_mode(
 #[cfg(test)]
 mod bitrate_tests {
     use super::*;
+
+    /// Software encoding takes the full screen only when 720p left room to spare, and goes back
+    /// to 720p for good when the full screen turns out too slow.
+    #[test]
+    fn software_full_screen_follows_the_measured_cost() {
+        let mut full = SoftwareFull::new();
+        // A still screen (few pictures) decides nothing.
+        assert!(!full.measured(5, Duration::from_millis(5), true));
+        assert!(!full.keeps_up);
+        // The HP laptop at 720p (26 Nov 2026): 17-20 ms per picture.
+        assert!(full.measured(140, Duration::from_millis(19), true));
+        assert!(full.keeps_up);
+        // Full screen at 35 ms: stays.
+        assert!(!full.measured(120, Duration::from_millis(35), false));
+        assert!(full.keeps_up);
+        // Full screen too slow: back to 720p, and not again in this session.
+        assert!(full.measured(80, Duration::from_millis(70), false));
+        assert!(!full.keeps_up);
+        assert!(!full.measured(140, Duration::from_millis(10), true));
+        assert!(!full.keeps_up);
+        // A slow computer never tries.
+        let mut slow = SoftwareFull::new();
+        assert!(!slow.measured(140, Duration::from_millis(30), true));
+        assert!(!slow.keeps_up);
+        // The box only applies to Windows software encoding, never with Quality, never once it keeps up.
+        assert_eq!(software_size_box("OpenH264", crate::remote_control::QualityMode::Auto, true), None);
+        assert_eq!(software_size_box("VT", crate::remote_control::QualityMode::Auto, false), None);
+    }
     #[test]
     fn adaptive_size_scales_down_on_slow_wan_and_recovers_with_hysteresis() {
         let full = (1920, 1080);
@@ -2068,6 +2142,10 @@ async fn host_media(
         let mut sound_failed = false;
         let mut pacer = crate::video_pacing::Pacer::new(Instant::now());
         let mut rate = crate::video_rate::RateControl::new(Instant::now());
+        // Repair packets go with the pictures (`transport::REPAIR_BLOCK`) when both sides list them,
+        // but the technician reports picture bytes only: keep their share of the line free.
+        let mut software_full = SoftwareFull::new();
+        let picture_share = if transport.repair_stream().await { core_protocol::transport::picture_share() } else { 1.0 };
         let mut perf_logged = Instant::now();
         let (mut perf_frames, mut perf_bytes) = (0u32, 0usize);
         // Where the time of the sent pictures went (capture, encode, send) and how often the loop
@@ -2179,7 +2257,7 @@ async fn host_media(
                 rate.report(Instant::now(), report);
             }
             rate.tick(Instant::now());
-            pacer.set_cap(rate.limit());
+            pacer.set_cap(rate.limit() * picture_share);
             pacer.set_line_clean(rate.clocked() && rate.queue_delay() < crate::video_rate::QUEUE_LOW);
             #[cfg(feature = "qa-session")]
             if qa_rate_logged.elapsed() >= Duration::from_secs(5) {
@@ -2370,8 +2448,17 @@ async fn host_media(
                 }).await;
                 let pictures = f64::from(perf_frames.max(1));
                 let average = |total: Duration| total.as_secs_f64() * 1000.0 / pictures;
+                if backend == "OpenH264" {
+                    let boxed = size.0.max(size.1) <= 1280 && full_size.0.max(full_size.1) > 1280;
+                    let per_picture = (perf_capture + perf_encode) / perf_frames.max(1);
+                    if software_full.measured(perf_frames, per_picture, boxed) {
+                        crate::app_log::info("peer", &format!("session={} software encoding {} the full screen ({} ms per picture at {}x{})", config.session, if software_full.keeps_up { "takes" } else { "leaves" }, per_picture.as_millis(), size.0, size.1));
+                        // Decide the size at once, not after the next settle time.
+                        bitrate_set = Instant::now().checked_sub(BITRATE_SETTLE).unwrap_or(bitrate_set);
+                    }
+                }
                 perf_log(&format!(
-                    "host fps={:.1} kbps={:.0} size={}x{} target_kbps={} pace_kBs={:.0} deliv_kBs={:.0} rtt_ms={} queue_ms={} inflight_kB={} enc={} capture_ms={:.1} encode_ms={:.1} send_ms={:.1} backlogged={} copy={}{}",
+                    "host fps={:.1} kbps={:.0} size={}x{} target_kbps={} pace_kBs={:.0} deliv_kBs={:.0} rtt_ms={} queue_ms={} inflight_kB={} enc={} capture_ms={:.1} encode_ms={:.1} send_ms={:.1} backlogged={} copy={} repair={}{}",
                     f64::from(perf_frames) / secs,
                     perf_bytes as f64 * 8.0 / secs / 1000.0,
                     size.0,
@@ -2388,6 +2475,7 @@ async fn host_media(
                     average(perf_send),
                     perf_backlogged,
                     capture_method(),
+                    u8::from(picture_share < 1.0),
                     software_reason(backend),
                 ));
                 perf_frames = 0;
@@ -2410,7 +2498,7 @@ async fn host_media(
             let mode_changed = control.quality_mode() != quality_mode;
             // Software encoding (no hardware encoder on this computer) keeps up with 720p, not with
             // a moving full-HD screen: an HP laptop sent 2-3 pictures a second at 1080p.
-            let software_box = software_size_box(backend, control.quality_mode());
+            let software_box = software_size_box(backend, control.quality_mode(), software_full.keeps_up);
             let over_box = software_box.is_some_and(|(long, short)| size.0.max(size.1) > long || size.0.min(size.1) > short);
             if mode_changed || over_box || bitrate_set.elapsed() >= BITRATE_SETTLE {
                 quality_mode = control.quality_mode();

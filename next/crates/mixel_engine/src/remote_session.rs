@@ -5767,6 +5767,10 @@ mod consent_tests {
 #[path = "remote_session_native_test.rs"]
 mod remote_session_native_test;
 
+#[cfg(all(test, target_os = "linux"))]
+#[path = "remote_session_longhaul_test.rs"]
+mod remote_session_longhaul_test;
+
 /// What an unattended request (the connection service said so: an allowed controller or a correct
 /// support password) is accepted with, without asking: the source the owner chose, else the main
 /// display; nothing when neither unattended access nor a support password is on here.

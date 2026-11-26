@@ -6,7 +6,7 @@ use rtc::{
     media::Sample,
     media_stream::MediaStreamTrack,
     rtp_transceiver::rtp_sender::{
-        RTCRtpCodec, RTCRtpCodingParameters, RTCRtpEncodingParameters, RtpCodecKind,
+        RTCRtpCodec, RTCRtpCodingParameters, RTCRtpEncodingParameters, RTCRtpFecParameters, RtpCodecKind,
     },
 };
 use std::{
@@ -63,6 +63,12 @@ impl H264VideoSender {
                 break n;
             }
         };
+        let repair_ssrc = loop {
+            let n = OsRng.next_u32();
+            if n != 0 && n != ssrc {
+                break n;
+            }
+        };
         let codec = RTCRtpCodec {
             mime_type: "video/H264".into(),
             clock_rate: 90000,
@@ -81,6 +87,9 @@ impl H264VideoSender {
                 vec![RTCRtpEncodingParameters {
                     rtp_coding_parameters: RTCRtpCodingParameters {
                         ssrc: Some(ssrc),
+                        // The repair stream (`transport::REPAIR_BLOCK`): only sent when the
+                        // technician's description lists it.
+                        fec: Some(RTCRtpFecParameters { ssrc: repair_ssrc }),
                         ..Default::default()
                     },
                     codec,
