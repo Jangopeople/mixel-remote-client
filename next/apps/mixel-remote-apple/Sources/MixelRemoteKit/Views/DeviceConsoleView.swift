@@ -999,8 +999,6 @@ struct SessionsPage: View {
         .background(Theme.page)
     }
 }
-#endif
-
 
 /// "Add this computer": the enrolment card in a sheet that closes itself once this computer is registered.
 struct AddThisComputerSheet: View {
@@ -1028,3 +1026,4 @@ struct AddThisComputerSheet: View {
         }
     }
 }
+#endif

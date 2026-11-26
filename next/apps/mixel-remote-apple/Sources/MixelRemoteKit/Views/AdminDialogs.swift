@@ -280,8 +280,6 @@ struct SaveConnectedDeviceDialog: View {
         }
     }
 }
-#endif
-
 /// "Unattended access, Who may connect…": the company's technicians with a switch each (owners and administrators only).
 struct UnattendedWhoDialog: View {
     @ObservedObject var model: DevicesModel
@@ -330,3 +328,4 @@ struct UnattendedWhoDialog: View {
         }
     }
 }
+#endif
