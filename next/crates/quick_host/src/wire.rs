@@ -15,6 +15,9 @@ pub enum Out {
     Signal { session: Uuid, payload: Signal },
     Close { session: Uuid },
     Ice { session: Uuid },
+    /// Continue the running session after this device's link to the service dropped (the service
+    /// keeps it 60 s for the same device).
+    Resume { session: Uuid },
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -67,6 +70,7 @@ pub enum In {
     Ice { session: Uuid, lease: IceLease },
     Signal { session: Uuid, payload: Signal },
     Closed { session: Uuid },
+    Resumed { session: Uuid },
     Error {},
     /// Anything a Quick Support host has no use for.
     #[serde(other)]

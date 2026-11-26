@@ -67,14 +67,13 @@ impl Peer {
     }
 
     pub async fn run(mut self) -> Result<(), String> {
-        // Encrypted relay addresses (turns:) need the system certificate store, which phones do
-        // not offer to this code; the plain relay addresses carry the same end-to-end encrypted media.
+        // Every relay address the service offers, the encrypted one (turns:, TLS over TCP) too: on a
+        // network that blocks UDP it is the only way through. Until 2.2.12 phones dropped it (no
+        // system certificate store); the transport now falls back to built-in roots.
         let servers: Vec<NativeIceServer> = std::mem::take(&mut self.servers)
             .into_iter()
-            .filter_map(|server| {
-                let urls: Vec<String> = server.urls.into_iter().filter(|url| !url.starts_with("turns:")).collect();
-                (!urls.is_empty()).then_some(NativeIceServer { urls, username: server.username, credential: server.credential })
-            })
+            .filter(|server| !server.urls.is_empty())
+            .map(|server| NativeIceServer { urls: server.urls, username: server.username, credential: server.credential })
             .collect();
         let transport = if self.relay_only {
             NativeTransport::relay_only("0.0.0.0:0".into(), servers).await
@@ -236,6 +235,7 @@ impl Peer {
         let mut last_idle = Instant::now();
         let mut last_keyframe = Instant::now() - Duration::from_secs(2);
         let mut sent = 0u64;
+        let mut lost = false;
         let mut tick = tokio::time::interval(Duration::from_millis(100));
         loop {
             if self.stopped() {
@@ -250,6 +250,18 @@ impl Peer {
                     let frame = frame.ok_or("The screen picture stopped")?;
                     let duration = last.elapsed().clamp(Duration::from_micros(1), Duration::from_secs(2));
                     last = Instant::now();
+                    if !transport.connected() {
+                        // The media connection is lost (Wi-Fi to mobile data, a short drop): the
+                        // picture is left out instead of ending the session, so the technician's
+                        // renewal can build a new connection in the same session. A complete
+                        // picture follows once it is back.
+                        lost = true;
+                        continue;
+                    }
+                    if lost {
+                        lost = false;
+                        (self.events)(Event::KeyframeWanted);
+                    }
                     sender.send(consent, &frame, duration).await.map_err(|error| error.to_string())?;
                     sent += 1;
                 }
@@ -297,7 +309,7 @@ impl Peer {
                 },
                 _ = tick.tick() => {
                     // A still screen sends no pictures; tell the viewer the session is alive.
-                    if sent > 0 && last.elapsed() >= Duration::from_secs(2) && last_idle.elapsed() >= Duration::from_secs(2) {
+                    if sent > 0 && !lost && last.elapsed() >= Duration::from_secs(2) && last_idle.elapsed() >= Duration::from_secs(2) {
                         last_idle = Instant::now();
                         self.send(channel, control, IDLE).await?;
                     }

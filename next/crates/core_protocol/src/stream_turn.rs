@@ -224,12 +224,19 @@ impl fmt::Debug for StreamRuntime {
             .finish()
     }
 }
+/// The platform's trusted roots, or, where the platform offers none to this code (Android and
+/// iOS: no store `rustls-native-certs` can read), the Mozilla roots built in. Until 2.2.12 the
+/// phones had to drop every `turns:` address because of this, so Quick Support could not connect
+/// at all on a network that blocks UDP.
 fn system_tls() -> io::Result<Arc<ClientConfig>> {
     let certificates = rustls_native_certs::load_native_certs();
     let mut roots = RootCertStore::empty();
     let (accepted, _) = roots.add_parsable_certificates(certificates.certs);
     if accepted == 0 {
-        return Err(io::Error::other("No trusted system TLS roots available"));
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    }
+    if roots.is_empty() {
+        return Err(io::Error::other("No trusted TLS roots available"));
     }
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let config = ClientConfig::builder_with_provider(provider)

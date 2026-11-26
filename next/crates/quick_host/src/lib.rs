@@ -25,7 +25,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
@@ -319,7 +319,13 @@ struct Running {
     stop: Arc<AtomicBool>,
     peer_expiry: Arc<AtomicU64>,
     task: Option<tokio::task::JoinHandle<Result<(), String>>>,
+    /// When this device's link to the connection service dropped while the session ran.
+    left: Option<Instant>,
 }
+
+/// How long a running session waits for this device to be back with the connection service and
+/// resume it (the service keeps it 60 s, `DROP_RESUME_WINDOW`).
+const RESUME_PATIENCE: Duration = Duration::from_secs(55);
 
 impl Inner {
     fn status(&self, phase: Phase, message: &str) {
@@ -418,13 +424,39 @@ impl Inner {
 
     async fn online(self: Arc<Self>, enrollment: Enrollment, size: (usize, usize), control: bool, mut commands: mpsc::UnboundedReceiver<Command>) {
         let mut wait = 1u64;
+        // A running session outlives a dropped link to the connection service (Wi-Fi to mobile
+        // data, a short outage): the picture keeps its own connection, and the session is resumed
+        // once this device is back. Until 2.2.12 every drop ended the session.
+        let mut running: Option<Running> = None;
+        let (from_peer, mut peer_signals) = mpsc::channel::<wire::Signal>(64);
         loop {
-            self.status(Phase::Connecting, "");
-            match self.clone().connected(&enrollment, size, control, &mut commands).await {
+            if running.is_none() {
+                self.status(Phase::Connecting, "");
+            }
+            match self.clone().connected(&enrollment, size, control, &mut commands, &mut running, &from_peer, &mut peer_signals).await {
                 Ok(()) => return, // stopped on purpose
                 Err(error) => {
-                    self.streaming.store(false, Ordering::Release);
-                    self.status(Phase::Connecting, &error);
+                    trace(&format!("connection service link ended: {error}"));
+                    let gone = running.as_mut().map(|run| *run.left.get_or_insert_with(Instant::now));
+                    if gone.is_some_and(|left| left.elapsed() >= RESUME_PATIENCE)
+                        || running.as_ref().is_some_and(|run| run.task.as_ref().is_none_or(tokio::task::JoinHandle::is_finished))
+                    {
+                        // Not back in time, or the session itself ended meanwhile.
+                        if let Some(mut run) = running.take() {
+                            run.stop.store(true, Ordering::Release);
+                            if let Some(task) = run.task.take() {
+                                finish(task).await;
+                            }
+                            (self.events)(Event::SessionEnded("The connection was lost".into()));
+                        }
+                    }
+                    if running.is_none() {
+                        self.streaming.store(false, Ordering::Release);
+                        self.status(Phase::Connecting, &error);
+                    } else {
+                        // Back quickly while a session waits to be resumed.
+                        wait = 1;
+                    }
                 }
             }
             // Try again after 1, 2, 4 … 30 seconds, unless the app stops the host meanwhile.
@@ -433,14 +465,32 @@ impl Inner {
             loop {
                 tokio::select! {
                     _ = &mut pause => break,
-                    command = commands.recv() => if command.is_none() { return },
+                    command = commands.recv() => if command.is_none() {
+                        if let Some(mut run) = running.take() {
+                            run.stop.store(true, Ordering::Release);
+                            if let Some(task) = run.task.take() {
+                                finish(task).await;
+                            }
+                        }
+                        return;
+                    },
                 }
             }
-            wait = (wait * 2).min(30);
+            wait = if running.is_some() { 1 } else { (wait * 2).min(30) };
         }
     }
 
-    async fn connected(self: Arc<Self>, enrollment: &Enrollment, size: (usize, usize), control: bool, commands: &mut mpsc::UnboundedReceiver<Command>) -> Result<(), String> {
+    #[allow(clippy::too_many_arguments)]
+    async fn connected(
+        self: Arc<Self>,
+        enrollment: &Enrollment,
+        size: (usize, usize),
+        control: bool,
+        commands: &mut mpsc::UnboundedReceiver<Command>,
+        running: &mut Option<Running>,
+        from_peer: &mpsc::Sender<wire::Signal>,
+        peer_signals: &mut mpsc::Receiver<wire::Signal>,
+    ) -> Result<(), String> {
         let mut ticket = self.ticket(enrollment).await?;
         let (socket, _) = tokio::time::timeout(Duration::from_secs(15), tokio_tungstenite::connect_async(self.config.signaling_url.as_str()))
             .await
@@ -487,14 +537,23 @@ impl Inner {
             wire::In::SupportHostStatus { enabled: true } => {}
             _ => return Err("The connection service does not offer Quick Support for this device".into()),
         }
-        self.status(Phase::Ready, "");
+        // A session that ran when the link dropped: ask the service to continue it.
+        let mut resuming: Option<Instant> = None;
+        if let Some(run) = running.as_ref() {
+            say!(wire::Out::Resume { session: run.session });
+            resuming = Some(Instant::now());
+            trace("asked to resume the running session");
+        } else {
+            self.status(Phase::Ready, "");
+        }
 
-        let (from_peer, mut peer_signals) = mpsc::channel::<wire::Signal>(64);
         let mut asked: Option<Asked> = None;
-        let mut running: Option<Running> = None;
         let mut renew = tokio::time::interval_at(tokio::time::Instant::now() + Duration::from_secs(31), Duration::from_secs(31));
         let mut ping = tokio::time::interval_at(tokio::time::Instant::now() + Duration::from_secs(20), Duration::from_secs(20));
         loop {
+            if resuming.is_some_and(|asked| asked.elapsed() >= Duration::from_secs(10)) {
+                return Err("The connection service did not continue the session".into());
+            }
             // A finished session task (ended by either side, or failed) closes the session.
             if let Some(run) = running.as_mut()
                 && run.task.as_ref().is_some_and(tokio::task::JoinHandle::is_finished)
@@ -505,7 +564,7 @@ impl Inner {
                 };
                 trace(&format!("session task finished: {outcome:?}"));
                 say!(wire::Out::Close { session: run.session });
-                running = None;
+                *running = None;
                 self.streaming.store(false, Ordering::Release);
                 (self.events)(Event::SessionEnded(outcome.err().unwrap_or_default()));
                 self.status(Phase::Ready, "");
@@ -546,7 +605,7 @@ impl Inner {
                             let binding = self.binding(session, nonce, controller_identity.as_ref(), host_identity.as_ref(), &ticket, pending.controller, enrollment);
                             match binding {
                                 Ok(binding) => {
-                                    running = Some(Running { session, controller: pending.controller, to_peer: None, buffered: Vec::new(), binding, stop: Arc::new(AtomicBool::new(false)), peer_expiry: Arc::new(AtomicU64::new(pending.expires_at)), task: None });
+                                    *running = Some(Running { session, controller: pending.controller, to_peer: None, buffered: Vec::new(), binding, stop: Arc::new(AtomicBool::new(false)), peer_expiry: Arc::new(AtomicU64::new(pending.expires_at)), task: None, left: None });
                                     self.status(Phase::Negotiating, "");
                                     say!(wire::Out::Ice { session });
                                 }
@@ -562,7 +621,7 @@ impl Inner {
                             let now = unix();
                             if lease.expires_at <= now || lease.expires_at > now + 3600 || lease.servers.len() > 8 || lease.servers.iter().any(|server| server.urls.len() > 8) {
                                 say!(wire::Out::Close { session });
-                                running = None;
+                                *running = None;
                                 (self.events)(Event::SessionEnded("The relay offer was not valid".into()));
                                 self.status(Phase::Ready, "");
                                 continue;
@@ -623,7 +682,7 @@ impl Inner {
                             }
                             match self.binding(session, nonce, Some(&controller_identity), Some(&host_identity), &ticket, run.controller, enrollment) {
                                 Ok(binding) => {
-                                    running = Some(Running { session, controller: run.controller, to_peer: None, buffered: Vec::new(), binding, stop: Arc::new(AtomicBool::new(false)), peer_expiry: Arc::new(AtomicU64::new(controller_identity.expires_at)), task: None });
+                                    *running = Some(Running { session, controller: run.controller, to_peer: None, buffered: Vec::new(), binding, stop: Arc::new(AtomicBool::new(false)), peer_expiry: Arc::new(AtomicU64::new(controller_identity.expires_at)), task: None, left: None });
                                     say!(wire::Out::Ice { session });
                                 }
                                 Err(error) => {
@@ -631,6 +690,13 @@ impl Inner {
                                     (self.events)(Event::SessionEnded(error));
                                     self.status(Phase::Ready, "");
                                 }
+                            }
+                        }
+                        wire::In::Resumed { session } => {
+                            if let Some(run) = running.as_mut().filter(|run| run.session == session) {
+                                resuming = None;
+                                run.left = None;
+                                trace("running session resumed");
                             }
                         }
                         wire::In::Closed { session, .. } => {
@@ -653,17 +719,31 @@ impl Inner {
                                 return Err("The connection service confirmed another identity".into());
                             }
                         }
+                        wire::In::Error { .. } if resuming.is_some() => {
+                            // The service no longer holds the session (it waited too long, or the other side left).
+                            if let Some(mut run) = running.take() {
+                                run.stop.store(true, Ordering::Release);
+                                if let Some(task) = run.task.take() {
+                                    finish(task).await;
+                                }
+                                self.streaming.store(false, Ordering::Release);
+                                (self.events)(Event::SessionEnded("The connection was lost".into()));
+                            }
+                            resuming = None;
+                            self.status(Phase::Ready, "");
+                        }
                         wire::In::Error { .. } => {
                             if let Some(run) = running.as_ref().filter(|run| run.task.is_none()) {
                                 say!(wire::Out::Close { session: run.session });
-                                running = None;
+                                *running = None;
                                 self.status(Phase::Ready, "");
                             }
                         }
                         _ => {}
                     }
                 }
-                signal = peer_signals.recv() => {
+                // Nothing passes for a session the service holds until it is resumed.
+                signal = peer_signals.recv(), if resuming.is_none() => {
                     if let (Some(signal), Some(run)) = (signal, running.as_ref()) {
                         say!(wire::Out::Signal { session: run.session, payload: signal });
                     }
