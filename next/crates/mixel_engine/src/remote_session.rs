@@ -1470,6 +1470,9 @@ impl RemoteSession {
         control: bool,
     ) -> Result<(), String> {
         crate::service_config::require_host()?;
+        if source.is_some() && self.0.lock().await.quick_support {
+            return Err("Unattended access needs a signed-in account; Quick Support is attended only".into());
+        }
         #[cfg(target_os = "linux")]
         if source.as_deref() == Some(crate::wayland_portal::SOURCE) {
             return Err("Wayland requires local confirmation for each sharing session".into());
@@ -1496,9 +1499,6 @@ impl RemoteSession {
 
         let mut inner = self.0.lock().await;
         if let Some(config) = source {
-            if inner.quick_support {
-                return Err("Unattended access needs a signed-in account; Quick Support is attended only".into());
-            }
             if inner.status.phase != "ready" {
                 return Err("Make this computer available before enabling unattended sharing".into());
             }
@@ -5062,6 +5062,25 @@ mod consent_tests {
                 .contains(error)
         );
         assert!(!remote.status().await.input_access);
+    }
+
+    #[cfg(not(feature = "testflight-controller"))]
+    #[tokio::test]
+    #[cfg_attr(any(target_os = "ios", target_os = "android"), ignore = "host side only: phones are controllers")]
+    async fn quick_support_never_asks_the_broker_for_unattended_access() {
+        // 2.2.13: the Windows app asked for unattended access as soon as a Quick Support host was
+        // ready; the broker refused and the registration ended in a loop, so no Connection ID.
+        let remote = RemoteSession::default();
+        let (commands, mut receiver) = mpsc::channel(2);
+        {
+            let mut inner = remote.0.lock().await;
+            inner.commands = Some(commands);
+            inner.quick_support = true;
+            inner.status.phase = "ready".into();
+        }
+        let refused = remote.configure_unattended(Some("display:1".into()), true).await;
+        assert!(refused.is_err_and(|error| error.contains("Quick Support")));
+        assert!(receiver.try_recv().is_err());
     }
 
     #[cfg(not(feature = "testflight-controller"))]

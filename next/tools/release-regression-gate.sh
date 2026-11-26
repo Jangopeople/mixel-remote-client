@@ -84,4 +84,13 @@ cargo test -p core_protocol --features native-webrtc --lib --quiet -- the_repair
 cargo test -p mixel_engine --lib --quiet -- software_full_screen_follows_the_measured_cost
 grep -q 'repair={}' "$NEXT/crates/mixel_engine/src/remote_peer.rs"
 
+echo "=== Gate 14: 2.2.14 Windows host after TeamViewer (follows the display left, silent desktop duplication falls back to GDI, no 100 ms sleep per GDI copy), Quick Support without unattended ==="
+cd "$NEXT"
+cargo test -p mixel_engine --lib --quiet -- quick_support_never_asks_the_broker_for_unattended_access
+grep -q 'pub fn follow<' "$NEXT/crates/native_os_capture/src/windows_capture.rs"
+grep -q 'windows_capture::follow(&display, &current)' "$NEXT/crates/mixel_engine/src/capture_worker.rs"
+grep -q 'duplication_stale = true' "$NEXT/crates/native_os_capture/src/windows_capture.rs"
+grep -q 'GDI_ONLY_INTERVAL' "$NEXT/crates/native_os_capture/src/windows_capture.rs"
+grep -q 'startup_host = matches!(auth, RegistrationAuth::Startup' "$NEXT/crates/mixel_engine/src/remote_session.rs"
+
 echo "=== ALL REGRESSION GATE CHECKS PASSED ==="
