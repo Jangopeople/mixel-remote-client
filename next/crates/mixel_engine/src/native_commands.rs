@@ -1519,13 +1519,25 @@ async fn signin_screen_enable(context: &Context, args: &Args) -> Result<String, 
     if name.is_empty() || name.chars().count() > 60 || name.chars().any(char::is_control) {
         return Err("Enter a computer name of up to 60 characters".into());
     }
-    // Step 1 (administrator): the computer-wide key.
-    tokio::task::spawn_blocking(|| signin::run_elevated("--signin-provision"))
-        .await
-        .map_err(|_| "Administrator step failed")??;
-    let key = signin::provisioned_public_key()?;
     let ism = &credential.ism;
     let token = &credential.token;
+    // Step 1 (administrator): the computer-wide key. If a previous key on disk is no longer
+    // actively enrolled (e.g. revoked from the console), rotate it in the same admin step so
+    // `remote_enroll_device` never rejects the old revoked key.
+    let existing_enrolled = match signin::provisioned_public_key() {
+        Ok(existing) => Some(
+            ism.enrollment_of_key(token, &existing)
+                .await
+                .map_err(|_| "The enrolment status is unavailable")?
+                .is_some(),
+        ),
+        Err(_) => None,
+    };
+    let provision_step = crate::device_identity::signin_provision_command(existing_enrolled);
+    tokio::task::spawn_blocking(move || signin::run_elevated(provision_step))
+        .await
+        .map_err(|_| "Administrator step failed")??;
+    let mut key = signin::provisioned_public_key()?;
     let device = match ism.enrollment_of_key(token, &key).await.map_err(|_| "The enrolment status is unavailable")? {
         Some(current) => current.device,
         None => {
@@ -1533,9 +1545,19 @@ async fn signin_screen_enable(context: &Context, args: &Args) -> Result<String, 
                 .add_device(token, company, &format!("{name} (sign-in screen)"), "windows")
                 .await
                 .map_err(|_| "The sign-in screen record could not be added for this company")?;
-            ism.enroll(token, device, key, &cancelled)
-                .await
-                .map_err(|_| "The sign-in screen could not be enrolled")?;
+            if ism.enroll(token, device, key, &cancelled).await.is_err() {
+                if provision_step == "--signin-provision" {
+                    tokio::task::spawn_blocking(|| signin::run_elevated("--signin-reprovision"))
+                        .await
+                        .map_err(|_| "Administrator step failed")??;
+                    key = signin::provisioned_public_key()?;
+                    ism.enroll(token, device, key, &cancelled)
+                        .await
+                        .map_err(|_| "The sign-in screen could not be enrolled")?;
+                } else {
+                    return Err("The sign-in screen could not be enrolled".into());
+                }
+            }
             device
         }
     };

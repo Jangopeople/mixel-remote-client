@@ -256,8 +256,12 @@ pub fn admin(command: &str, argument: Option<&str>) -> Result<(), String> {
     }
     secure_folder()?;
     match command {
-        "--signin-provision" => {
-            let identity = IdentityState::machine(true)?;
+        "--signin-provision" | "--signin-reprovision" => {
+            let identity = if command == "--signin-reprovision" {
+                IdentityState::rotate_machine()?
+            } else {
+                IdentityState::machine(true)?
+            };
             let hex: String = identity.public_key()?.as_bytes().iter().map(|byte| format!("{byte:02x}")).collect();
             write_mode(&public_key_path(), hex.as_bytes(), 0o644)
         }
