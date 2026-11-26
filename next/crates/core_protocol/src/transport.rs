@@ -49,7 +49,7 @@ const NACK_EVERY: std::time::Duration = std::time::Duration::from_millis(50);
 /// feedback and the reports. (The stack's `NoopInterceptor` is no stand-in for a left-out part:
 /// despite its name it ends the inbound control traffic for everything behind it.)
 fn interceptors(media_engine: &mut MediaEngine) -> Result<Registry, webrtc::error::Error> {
-    use rtc::interceptor::{NackGeneratorBuilder, NackResponderBuilder, Slot};
+    use rtc::interceptor::{FlexFec03ReceiveBuilder, FlexFec03SendBuilder, NackGeneratorBuilder, NackResponderBuilder, Slot};
     use rtc::peer_connection::configuration::interceptor_registry::{
         configure_rtcp_reports, configure_simulcast_extension_headers, configure_twcc_receiver_only,
     };
@@ -59,10 +59,67 @@ fn interceptors(media_engine: &mut MediaEngine) -> Result<Registry, webrtc::erro
         return webrtc::peer_connection::register_default_interceptors(Registry::new(), media_engine);
     }
     configure_simulcast_extension_headers(media_engine)?;
+    register_repair_codec(media_engine)?;
+    let (media, repair) = repair_block();
     let registry = configure_twcc_receiver_only(Registry::new(), media_engine)?;
     Ok(configure_rtcp_reports(registry)
         .with(Slot::NackGenerator, NackGeneratorBuilder::new().with_size(RECEIVE_LOG).with_interval(NACK_EVERY).with_max_nacks_per_packet(NACKS_PER_PACKET).build())
-        .with(Slot::NackResponder, NackResponderBuilder::new().with_size(REPEAT_BUFFER).build()))
+        .with(Slot::NackResponder, NackResponderBuilder::new().with_size(REPEAT_BUFFER).build())
+        .with(Slot::FecEncoder, FlexFec03SendBuilder::new().with_num_media_packets(media).with_num_fec_packets(repair).build())
+        .with(Slot::FecDecoder, FlexFec03ReceiveBuilder::new().build()))
+}
+
+/// Payload type of the picture repair stream (FlexFEC-03). Not used by any codec the stack
+/// registers by default.
+pub const REPAIR_PAYLOAD_TYPE: u8 = 49;
+/// Picture packets protected together, and repair packets sent for each such block.
+///
+/// Why. A lost picture packet used to be fixed only by asking for it again (NACK): that costs a
+/// full round trip, and the technician's side has to hold every later picture until it is back
+/// (they depend on it). On the line to Mauritius (about 210 ms) one lost packet in a hundred kept
+/// the picture waiting most of the time: in the lab (210 ms, 20 Mbit/s, 1 % loss) the picture was
+/// 327 ms late instead of 167 ms and stood still for 13 s of every 45 s. A repair packet after
+/// every 8 picture packets rebuilds one lost packet of the block on the spot, without the round
+/// trip; the request for it again stays for what the repair cannot cover (two losses in a block).
+/// It costs one packet in nine (11 %).
+///
+/// Apps without it (released before 2.2.13) do not announce the repair stream in their session
+/// description, so nothing changes for them: the host only sends repair packets to a technician
+/// whose description has them, and an older host simply sends none.
+const REPAIR_BLOCK: (u32, u32) = (8, 1);
+/// The share of what leaves that is pictures while repair packets go with them: the technician
+/// reports picture bytes only, so the host keeps this much of the line for pictures.
+pub fn picture_share() -> f64 {
+    let (media, repair) = repair_block();
+    f64::from(media) / f64::from(media + repair)
+}
+fn repair_block() -> (u32, u32) {
+    #[cfg(feature = "qa-session")]
+    if let Some((media, repair)) = std::env::var("MIXEL_QA_FEC").ok().and_then(|value| {
+        let (media, repair) = value.split_once(':')?;
+        Some((media.parse().ok()?, repair.parse().ok()?))
+    }) {
+        return (media, repair);
+    }
+    REPAIR_BLOCK
+}
+/// The repair stream is a codec of its own in the session description; both sides must list it.
+fn register_repair_codec(media_engine: &mut MediaEngine) -> Result<(), webrtc::error::Error> {
+    use rtc::rtp_transceiver::rtp_sender::{RTCRtpCodec, RTCRtpCodecParameters, RtpCodecKind};
+    media_engine.register_codec(
+        RTCRtpCodecParameters {
+            rtp_codec: RTCRtpCodec {
+                mime_type: rtc::peer_connection::configuration::media_engine::MIME_TYPE_FLEX_FEC03.to_owned(),
+                clock_rate: 90000,
+                channels: 0,
+                sdp_fmtp_line: "repair-window=10000000".to_owned(),
+                rtcp_feedback: vec![],
+            },
+            payload_type: REPAIR_PAYLOAD_TYPE,
+        },
+        RtpCodecKind::Video,
+    )?;
+    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -153,6 +210,12 @@ pub const RELAY_ONLY_ACCEPTANCE_WAIT: Duration = Duration::ZERO;
 pub const RELAY_ONLY_CHECK_INTERVAL: Duration = Duration::from_millis(40);
 
 impl NativeTransport {
+    /// Both descriptions list the picture repair stream ([`REPAIR_BLOCK`]), so repair packets
+    /// travel with the pictures.
+    pub async fn repair_stream(&self) -> bool {
+        let listed = |description: Option<RTCSessionDescription>| description.is_some_and(|d| d.sdp.contains("flexfec-03"));
+        listed(self.peer.local_description().await) && listed(self.peer.remote_description().await)
+    }
     pub async fn receive_video(&self) -> Result<(), TransportError> {
         self.peer
             .add_transceiver_from_kind(
@@ -583,7 +646,42 @@ mod repeat_tests {
         assert_eq!(default, ["NackResponderInterceptor", "NackGeneratorInterceptor", "TwccReceiverInterceptor", "ReceiverReportInterceptor", "SenderReportInterceptor"]);
         let mut media_engine = MediaEngine::default();
         let ours = names(interceptors(&mut media_engine).unwrap());
-        assert_eq!(ours, default, "the default set, including the part that resends");
+        // The default set, including the part that resends, plus the picture repair stream.
+        let mut expected: Vec<String> = default.clone();
+        for (name, after) in [("FlexFec03SendInterceptor", "NackResponderInterceptor"), ("FlexFec03ReceiveInterceptor", "FlexFec03SendInterceptor")] {
+            let at = expected.iter().position(|n| n == after).unwrap() + 1;
+            expected.insert(at, name.to_owned());
+        }
+        assert_eq!(ours, expected);
+    }
+
+    /// Repair packets are listed only where both sides know them: a technician app from before
+    /// 2.2.13 (no repair stream in its description) gets the pictures exactly as before.
+    #[tokio::test]
+    async fn the_repair_stream_is_negotiated_only_with_apps_that_know_it() {
+        let host = NativeTransport::new("127.0.0.1:0".into(), vec![]).await.unwrap();
+        let _pictures = crate::media::H264VideoSender::new(&host, 640, 420, 30).await.unwrap();
+        let offer = host.peer.create_offer(None).await.unwrap();
+        assert!(offer.sdp.contains("flexfec-03"), "{}", offer.sdp);
+        // An app before 2.2.13: the stack's own codecs, no repair stream.
+        let mut old_engine = MediaEngine::default();
+        old_engine.register_default_codecs().unwrap();
+        struct Quiet;
+        #[async_trait::async_trait]
+        impl PeerConnectionEventHandler for Quiet {}
+        let old = webrtc::peer_connection::PeerConnectionBuilder::new().with_media_engine(old_engine).with_handler(Arc::new(Quiet)).with_udp_addrs(vec!["127.0.0.1:0".to_owned()]).build().await.unwrap();
+        old.add_transceiver_from_kind(rtc::rtp_transceiver::rtp_sender::RtpCodecKind::Video, Some(webrtc::rtp_transceiver::RTCRtpTransceiverInit { direction: webrtc::rtp_transceiver::RTCRtpTransceiverDirection::Recvonly, ..Default::default() })).await.unwrap();
+        old.set_remote_description(offer.clone()).await.unwrap();
+        let answer = old.create_answer(None).await.unwrap();
+        assert!(answer.sdp.contains("H264/90000") && !answer.sdp.contains("flexfec-03"), "{}", answer.sdp);
+        // A current technician lists it too.
+        let technician = NativeTransport::new("127.0.0.1:0".into(), vec![]).await.unwrap();
+        technician.receive_video().await.unwrap();
+        technician.peer.set_remote_description(offer).await.unwrap();
+        assert!(technician.peer.create_answer(None).await.unwrap().sdp.contains("flexfec-03"));
+        host.close().await.unwrap();
+        technician.close().await.unwrap();
+        let _ = old.close().await;
     }
 
     /// The session description is the one the published apps offer and answer (the list of
