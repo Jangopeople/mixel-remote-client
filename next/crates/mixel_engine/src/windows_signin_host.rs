@@ -299,12 +299,16 @@ fn sc(arguments: &[&str]) -> bool {
         .is_ok_and(|output| output.status.success())
 }
 
-/// Elevated: `--signin-provision`, `--signin-install <hex json>`, `--signin-remove`.
+/// Elevated: `--signin-provision`, `--signin-reprovision`, `--signin-install <hex json>`, `--signin-remove`.
 pub fn admin(command: &str, argument: Option<&str>) -> Result<(), String> {
     secure_folder()?;
     match command {
-        "--signin-provision" => {
-            let identity = IdentityState::machine(true)?;
+        "--signin-provision" | "--signin-reprovision" => {
+            let identity = if command == "--signin-reprovision" {
+                IdentityState::rotate_machine()?
+            } else {
+                IdentityState::machine(true)?
+            };
             let key = identity.public_key()?;
             let hex: String = key
                 .as_bytes()

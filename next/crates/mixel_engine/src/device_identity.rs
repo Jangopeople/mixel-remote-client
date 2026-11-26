@@ -181,17 +181,23 @@ impl IdentityState {
         let key = match std::fs::read(&path) {
             Ok(sealed) => decode(&windows_machine_unprotect(&sealed)?)?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound && create => {
-                let key = SigningKey::generate(&mut rand_core::OsRng);
-                let seed = Zeroizing::new(key.to_bytes());
-                let mut record = Zeroizing::new(Vec::with_capacity(MAGIC.len() + seed.len()));
-                record.extend_from_slice(MAGIC);
-                record.extend_from_slice(seed.as_ref());
-                let sealed = windows_machine_protect(&record)?;
-                crate::windows_signin_host::write_private(&path, &sealed)?;
-                key
+                return Self::rotate_machine();
             }
             Err(_) => return Err("The sign-in screen identity is not installed".into()),
         };
+        Ok(Self(Mutex::new(Some(key))))
+    }
+
+    /// Generates and persists a fresh computer-wide identity, replacing any previous revoked key.
+    pub fn rotate_machine() -> Result<Self, String> {
+        let path = crate::windows_signin_host::machine_identity_path();
+        let key = SigningKey::generate(&mut rand_core::OsRng);
+        let seed = Zeroizing::new(key.to_bytes());
+        let mut record = Zeroizing::new(Vec::with_capacity(MAGIC.len() + seed.len()));
+        record.extend_from_slice(MAGIC);
+        record.extend_from_slice(seed.as_ref());
+        let sealed = windows_machine_protect(&record)?;
+        crate::windows_signin_host::write_private(&path, &sealed)?;
         Ok(Self(Mutex::new(Some(key))))
     }
 }
@@ -281,7 +287,7 @@ fn load_or_create(create: bool) -> Result<SigningKey, String> {
 impl IdentityState {
     /// The computer-wide identity of the Linux sign-in screen host: a file only root can read.
     pub fn machine(create: bool) -> Result<Self, String> {
-        use std::io::{Read, Write};
+        use std::io::Read;
         use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
         let path = crate::linux_signin_host::machine_identity_path();
         let key = match std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(&path) {
@@ -295,23 +301,23 @@ impl IdentityState {
                 decode(&record)?
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound && create => {
-                let key = SigningKey::generate(&mut rand_core::OsRng);
-                let seed = Zeroizing::new(key.to_bytes());
-                let mut record = Zeroizing::new(Vec::with_capacity(MAGIC.len() + seed.len()));
-                record.extend_from_slice(MAGIC);
-                record.extend_from_slice(seed.as_ref());
-                let mut file = std::fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .mode(0o600)
-                    .custom_flags(libc::O_NOFOLLOW)
-                    .open(&path)
-                    .map_err(|_| "Cannot create the sign-in screen identity")?;
-                file.write_all(&record).and_then(|()| file.sync_all()).map_err(|_| "Cannot create the sign-in screen identity")?;
-                key
+                return Self::rotate_machine();
             }
             Err(_) => return Err("The sign-in screen identity is not installed".into()),
         };
+        Ok(Self(Mutex::new(Some(key))))
+    }
+
+    /// Generates and atomically persists a fresh computer-wide identity, replacing any previous revoked key.
+    pub fn rotate_machine() -> Result<Self, String> {
+        let path = crate::linux_signin_host::machine_identity_path();
+        let key = SigningKey::generate(&mut rand_core::OsRng);
+        let seed = Zeroizing::new(key.to_bytes());
+        let mut record = Zeroizing::new(Vec::with_capacity(MAGIC.len() + seed.len()));
+        record.extend_from_slice(MAGIC);
+        record.extend_from_slice(seed.as_ref());
+        crate::linux_signin_host::write_private(&path, &record)
+            .map_err(|_| "Cannot create the sign-in screen identity")?;
         Ok(Self(Mutex::new(Some(key))))
     }
 }
@@ -516,9 +522,27 @@ impl IdentityState {
     }
 }
 
+/// Chooses whether sign-in screen setup should reuse or rotate the machine identity.
+/// - `None`: no public key on disk yet → `--signin-provision`
+/// - `Some(true)`: existing key is actively enrolled → `--signin-provision`
+/// - `Some(false)`: existing key on disk is not actively enrolled (e.g. revoked) → `--signin-reprovision`
+pub fn signin_provision_command(existing_key_enrolled: Option<bool>) -> &'static str {
+    match existing_key_enrolled {
+        Some(false) => "--signin-reprovision",
+        None | Some(true) => "--signin-provision",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signin_provision_rotates_only_unattached_or_revoked_machine_key() {
+        assert_eq!(signin_provision_command(None), "--signin-provision");
+        assert_eq!(signin_provision_command(Some(true)), "--signin-provision");
+        assert_eq!(signin_provision_command(Some(false)), "--signin-reprovision");
+    }
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     fn assert_profile_keys_persist(first: uuid::Uuid, second: uuid::Uuid) {

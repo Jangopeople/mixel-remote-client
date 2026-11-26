@@ -666,13 +666,26 @@ async fn signin_screen_enable(
         if name.is_empty() || name.chars().count() > 60 || name.chars().any(char::is_control) {
             return Err("Enter a computer name of up to 60 characters".into());
         }
-        // Step 1 (administrator): create the computer-wide key.
+        let ism = &credential.ism;
+        let token = &credential.token;
+        // Step 1 (administrator): create the computer-wide key. If a previous key on disk is no
+        // longer actively enrolled (e.g. revoked), rotate it in the same admin step.
         #[cfg(any(target_os = "windows", target_os = "linux"))]
-        let key = {
-            tauri::async_runtime::spawn_blocking(|| signin_platform::run_elevated("--signin-provision"))
+        let (mut key, provision_step) = {
+            let existing_enrolled = match signin_platform::provisioned_public_key() {
+                Ok(existing) => Some(
+                    ism.enrollment_of_key(token, &existing)
+                        .await
+                        .map_err(|_| "The enrolment status is unavailable")?
+                        .is_some(),
+                ),
+                Err(_) => None,
+            };
+            let provision_step = device_identity::signin_provision_command(existing_enrolled);
+            tauri::async_runtime::spawn_blocking(move || signin_platform::run_elevated(provision_step))
                 .await
                 .map_err(|_| "Administrator step failed")??;
-            signin_platform::provisioned_public_key()?
+            (signin_platform::provisioned_public_key()?, provision_step)
         };
         // macOS: install the login host bundle root-owned and create its System Keychain key.
         #[cfg(target_os = "macos")]
@@ -683,8 +696,6 @@ async fn signin_screen_enable(
                 .map_err(|_| "Administrator step failed")??;
             macos_prelogin_install::parse_key(&output)?
         };
-        let ism = &credential.ism;
-        let token = &credential.token;
         let device = match ism.enrollment_of_key(token, &key).await.map_err(|_| "The enrolment status is unavailable")? {
             Some(current) => current.device,
             None => {
@@ -692,9 +703,22 @@ async fn signin_screen_enable(
                     .add_device(token, company, &format!("{name} (sign-in screen)"), std::env::consts::OS)
                     .await
                     .map_err(|_| "The sign-in screen record could not be added for this company")?;
-                ism.enroll(token, device, key, &cancelled)
-                    .await
-                    .map_err(|_| "The sign-in screen could not be enrolled")?;
+                if ism.enroll(token, device, key, &cancelled).await.is_err() {
+                    #[cfg(any(target_os = "windows", target_os = "linux"))]
+                    if provision_step == "--signin-provision" {
+                        tauri::async_runtime::spawn_blocking(|| signin_platform::run_elevated("--signin-reprovision"))
+                            .await
+                            .map_err(|_| "Administrator step failed")??;
+                        key = signin_platform::provisioned_public_key()?;
+                        ism.enroll(token, device, key, &cancelled)
+                            .await
+                            .map_err(|_| "The sign-in screen could not be enrolled")?;
+                    } else {
+                        return Err("The sign-in screen could not be enrolled".into());
+                    }
+                    #[cfg(target_os = "macos")]
+                    return Err("The sign-in screen could not be enrolled".into());
+                }
                 device
             }
         };
