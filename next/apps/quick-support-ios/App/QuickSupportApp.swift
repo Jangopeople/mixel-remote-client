@@ -1,6 +1,7 @@
 import QuickHost
 import ReplayKit
 import SwiftUI
+import UIKit
 
 @main
 struct QuickSupportApp: App {
@@ -14,6 +15,9 @@ struct QuickSupportApp: App {
 final class Registration: ObservableObject {
     @Published var remoteId: String = ""
     @Published var problem = ""
+    @Published var isLoading = false
+
+    private var retryWorkItem: DispatchWorkItem?
 
     init() { load() }
 
@@ -26,7 +30,12 @@ final class Registration: ObservableObject {
 
     /// Gets (or creates) this device's key and asks Mixel for its ID. Retries until it has one.
     func load() {
-        DispatchQueue.global(qos: .userInitiated).async {
+        guard !isLoading else { return }
+        retryWorkItem?.cancel()
+        retryWorkItem = nil
+        isLoading = true
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var outcome = ""
             var id = ""
             let seed = Shared.data("seed")
@@ -48,9 +57,15 @@ final class Registration: ObservableObject {
                 mqs_destroy(host)
             } else { outcome = Texts.of("failed") }
             DispatchQueue.main.async {
+                guard let self else { return }
+                self.isLoading = false
                 if !id.isEmpty { self.remoteId = id }
                 self.problem = id.isEmpty ? outcome : ""
-                if id.isEmpty { DispatchQueue.main.asyncAfter(deadline: .now() + 4) { self.load() } }
+                if id.isEmpty {
+                    let work = DispatchWorkItem { [weak self] in self?.load() }
+                    self.retryWorkItem = work
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: work)
+                }
             }
         }
     }
@@ -62,7 +77,6 @@ struct BroadcastButton: UIViewRepresentable {
         let picker = RPSystemBroadcastPickerView(frame: CGRect(x: 0, y: 0, width: 280, height: 52))
         picker.preferredExtension = "ch.mixel.quicksupport.broadcast"
         picker.showsMicrophoneButton = false
-        // Make Apple's small round button fill the whole area, so the label below it is the button.
         for case let button as UIButton in picker.subviews {
             button.frame = picker.bounds
             button.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -71,39 +85,136 @@ struct BroadcastButton: UIViewRepresentable {
             button.titleLabel?.font = .systemFont(ofSize: 17, weight: .semibold)
             button.setTitleColor(.white, for: .normal)
             button.backgroundColor = UIColor(red: 0.70, green: 0.086, blue: 0.184, alpha: 1)
-            button.layer.cornerRadius = 10
+            button.layer.cornerRadius = 12
         }
         return picker
     }
-    func updateUIView(_ view: RPSystemBroadcastPickerView, context: Context) {}
+    func updateUIView(_ view: RPSystemBroadcastPickerView, context: Context) {
+        for case let button as UIButton in view.subviews {
+            button.frame = view.bounds
+        }
+    }
+}
+
+struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+    func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
 }
 
 struct MainView: View {
     @StateObject private var registration = Registration()
     @Environment(\.scenePhase) private var scenePhase
+    @State private var copied = false
+    @State private var sharingId = false
+    @State private var isScreenCaptured = UIScreen.main.isCaptured
+
+    private let accent = Color(red: 0.70, green: 0.086, blue: 0.184)
     private let errorColor = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 1.0, green: 0.42, blue: 0.47, alpha: 1) : UIColor(red: 0.70, green: 0.086, blue: 0.184, alpha: 1) })
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text("Mixel Quick Support").font(.title.bold())
+                HStack(alignment: .center) {
+                    Text("Mixel Quick Support").font(.title.bold())
+                    Spacer()
+                    if isScreenCaptured {
+                        HStack(spacing: 6) {
+                            Circle().fill(Color.red).frame(width: 8, height: 8)
+                            Text(Texts.of("sharing_active"))
+                                .font(.caption.weight(.semibold))
+                                .foregroundColor(.red)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color.red.opacity(0.14), in: Capsule())
+                    }
+                }
+
                 card {
                     Text(Texts.of("your_id")).font(.headline).foregroundColor(.secondary)
-                    Text(registration.remoteId.isEmpty ? Texts.of("getting_id") : registration.remoteId)
-                        .font(.system(size: registration.remoteId.isEmpty ? 20 : 46, weight: .bold).monospacedDigit())
-                        .kerning(registration.remoteId.isEmpty ? 0 : 2)
-                        .textSelection(.enabled)
+                    if registration.remoteId.isEmpty {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                            Text(Texts.of("getting_id"))
+                                .font(.title3.weight(.semibold))
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.vertical, 8)
+                    } else {
+                        Text(registration.remoteId)
+                            .font(.system(size: 44, weight: .bold).monospacedDigit())
+                            .kerning(2)
+                            .textSelection(.enabled)
+                        HStack(spacing: 10) {
+                            Button {
+                                UIPasteboard.general.string = registration.remoteId.replacingOccurrences(of: " ", with: "")
+                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                copied = true
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+                            } label: {
+                                Label(copied ? Texts.of("copied") : Texts.of("copy_id"), systemImage: copied ? "checkmark" : "doc.on.doc")
+                                    .font(.subheadline.weight(.semibold))
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(copied ? .green : accent)
+
+                            Button {
+                                sharingId = true
+                            } label: {
+                                Label(Texts.of("share_id"), systemImage: "square.and.arrow.up")
+                                    .font(.subheadline.weight(.semibold))
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(accent)
+                        }
+                    }
+
                     Text(Texts.of("tell_id")).foregroundColor(.secondary)
-                    BroadcastButton().frame(height: 52)
+                    BroadcastButton()
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 52)
+                        .opacity(registration.remoteId.isEmpty ? 0.55 : 1.0)
+                        .allowsHitTesting(!registration.remoteId.isEmpty)
                     Text(Texts.of("share_hint")).font(.footnote).foregroundColor(.secondary)
                 }
-                if !registration.problem.isEmpty { Text(registration.problem).foregroundColor(errorColor) }
+
+                if !registration.problem.isEmpty {
+                    card {
+                        HStack(spacing: 10) {
+                            Image(systemName: "exclamationmark.triangle.fill").foregroundColor(errorColor)
+                            Text(registration.problem).foregroundColor(errorColor).font(.subheadline)
+                        }
+                        Button {
+                            registration.load()
+                        } label: {
+                            Label(Texts.of("retry"), systemImage: "arrow.clockwise")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(accent)
+                    }
+                }
+
                 Text(Texts.of("privacy")).font(.footnote).foregroundColor(.secondary)
             }
             .padding(16)
         }
         .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
-        .onChange(of: scenePhase) { phase in if phase == .active, registration.remoteId.isEmpty { registration.load() } }
+        .sheet(isPresented: $sharingId) {
+            ShareSheet(items: ["Mixel Quick Support ID: \(registration.remoteId)"])
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIScreen.capturedDidChangeNotification)) { _ in
+            isScreenCaptured = UIScreen.main.isCaptured
+        }
+        .onChange(of: scenePhase) { phase in
+            isScreenCaptured = UIScreen.main.isCaptured
+            if phase == .active, registration.remoteId.isEmpty { registration.load() }
+        }
     }
 
     private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
