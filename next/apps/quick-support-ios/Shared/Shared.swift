@@ -71,6 +71,11 @@ enum Texts {
         "no_code": ["Open Mixel Quick Support first, then start sharing again.", "Öffnen Sie zuerst Mixel Quick Support und starten Sie die Freigabe erneut.", "Ouvrez d’abord Mixel Quick Support, puis relancez le partage.", "Apri prima Mixel Quick Support, poi avvia di nuovo la condivisione."],
         "ended": ["The support session has ended.", "Die Support-Sitzung wurde beendet.", "La session d’assistance est terminée.", "La sessione di assistenza è terminata."],
         "offline": ["The connection to Mixel was lost. Start sharing again.", "Die Verbindung zu Mixel wurde unterbrochen. Starten Sie die Freigabe erneut.", "La connexion à Mixel a été perdue. Relancez le partage.", "La connessione a Mixel è stata interrotta. Avvia di nuovo la condivisione."],
+        "copy_id": ["Copy ID", "ID kopieren", "Copier l’ID", "Copia ID"],
+        "copied": ["Copied", "Kopiert", "Copié", "Copiato"],
+        "share_id": ["Share ID", "ID teilen", "Partager l’ID", "Condividi ID"],
+        "sharing_active": ["Screen sharing active", "Bildschirmfreigabe aktiv", "Partage d’écran actif", "Condivisione schermo attiva"],
+        "retry": ["Try again", "Erneut versuchen", "Réessayer", "Riprova"],
     ]
     static func of(_ key: String) -> String {
         let language = Locale.preferredLanguages.first.map { String($0.prefix(2)) } ?? "en"
