@@ -381,6 +381,7 @@ public final class AppModel: ObservableObject {
     /// Quick Support it claims the phone and waits until it is online, so one click is enough.
     public func connect(to id: UInt32, password: String? = nil, unattended: Bool = false, checkPhone: Bool = true) {
         guard !busy else { progress = L("Please wait a moment, the previous step is still running."); return }
+        devices.recordConnection(id)
         busy = true
         error = ""
         Task {

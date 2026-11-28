@@ -210,7 +210,9 @@ public struct DeviceConsoleView: View {
 
     private func connectToId(_ id: UInt32) {
         let known = model.allDevices.first { $0.connectionId == id }
-        workspace.connect(peer: id, name: known?.name, os: known?.os ?? "", unattended: known != nil, checkPhone: known == nil)
+        let unattended = known.map { model.prefersUnattended($0) } ?? false
+        let checkPhone = known.map { model.shouldCheckPhone($0) } ?? true
+        workspace.connect(peer: id, name: known?.name, os: known?.os ?? "", unattended: unattended, checkPhone: checkPhone)
     }
 
     // MARK: Notices
@@ -512,7 +514,7 @@ struct DeviceTableRow: View {
     }
 
     @ViewBuilder private var star: some View {
-        if model.tenant != nil || model.adminAvailable {
+        if !device.isAdHocRecent, model.tenant != nil || model.adminAvailable {
             let on = model.isFavorite(device)
             Button { model.toggleFavorite(device) } label: {
                 Image(systemName: on ? "star.fill" : "star").foregroundStyle(on ? Color(light: 0xD99A00, dark: 0xF5C24A) : .secondary)
@@ -535,6 +537,7 @@ struct DeviceTableRow: View {
     }
 
     private func subline(_ presence: DevicesModel.Presence) -> String {
+        if device.isAdHocRecent { return L("Not saved") }
         var parts = [Format.os(device.os)]
         if model.listView == .all || model.listView == .online || model.listView == .favorites || model.listView == .recent, let group = device.groupName ?? model.adminRow(device)?.groupName, !group.isEmpty {
             parts.append(group)
@@ -618,7 +621,7 @@ struct DeviceTableRow: View {
                 let blocked = model.connectBlocked(device)
                 let connecting = state == "connecting"
                 Button(connecting ? L("Connecting…") : L("Connect")) {
-                    workspace.connect(peer: device.connectionId, name: device.name, os: device.os, unattended: true, checkPhone: false)
+                    workspace.connect(peer: device.connectionId, name: device.name, os: device.os, unattended: model.prefersUnattended(device), checkPhone: model.shouldCheckPhone(device))
                 }
                 .disabled(!blocked.isEmpty || connecting || workspace.attempt?.failure.isEmpty == true)
                 .help(blocked.isEmpty ? L("Connect to %@", device.name) : blocked)
@@ -634,45 +637,57 @@ struct DeviceTableRow: View {
 
     @ViewBuilder private func menuItems(_ presence: DevicesModel.Presence) -> some View {
         let blocked = model.connectBlocked(device)
-        Button(L("Connect without confirmation (unattended access)")) {
-            workspace.connect(peer: device.connectionId, name: device.name, os: device.os, unattended: true, checkPhone: false)
-        }.disabled(!blocked.isEmpty)
-        Button(L("Connect and ask the person to accept")) {
-            workspace.connect(peer: device.connectionId, name: device.name, os: device.os, unattended: false, checkPhone: false)
-        }.disabled(!blocked.isEmpty)
-        Button(L("Connect in new window")) {
-            workspace.connect(peer: device.connectionId, name: device.name, os: device.os, unattended: true, checkPhone: false)
-            workspace.openAttemptInWindow()
-        }.disabled(!blocked.isEmpty)
-        Button(L("Send files…")) { workspace.sendFiles(to: device.connectionId, name: device.name, os: device.os) }
-            .disabled(workspace.tab(device.connectionId).map { $0.state != "ready" && $0.state != "starting" } ?? !blocked.isEmpty)
-        if presence == .offline, !model.knownMacs(device).isEmpty {
-            Button(L("Wake")) { model.wake(device) }
-        }
-        Button(L("Copy ID")) { Pasteboard.copy(String(device.connectionId)) }
-        if model.tenant != nil || model.adminAvailable {
-            Button(model.isFavorite(device) ? L("Remove from favorites") : L("Add to favorites")) { model.toggleFavorite(device) }
-        }
-        if (model.manages || model.canAdmin(device)), model.canAdmin(device) {
-            Divider()
-            Button(L("Rename…")) { rename(device) }.disabled(!model.writable)
-            if model.groupsOn { Button(L("Move to group…")) { move(device) }.disabled(!model.writable) }
-            if model.adminAvailable {
-                Button(L("Notes…")) { notes(device) }.disabled(!model.writable)
-                Toggle(isOn: Binding(get: { model.adminRow(device)?.unattendedOn ?? false }, set: { on in Task { _ = await model.setUnattended(device, on: on) } })) {
-                    Text(verbatim: L("Unattended access"))
-                }.disabled(!model.writable)
-                if model.deploys { Button(L("Who may connect…")) { who(device) } }
+        if device.isAdHocRecent {
+            Button(L("Connect")) {
+                workspace.connect(peer: device.connectionId, name: device.name, os: device.os, unattended: false, checkPhone: true)
+            }.disabled(!blocked.isEmpty)
+            Button(L("Connect in new window")) {
+                workspace.connect(peer: device.connectionId, name: device.name, os: device.os, unattended: false, checkPhone: true)
+                workspace.openAttemptInWindow()
+            }.disabled(!blocked.isEmpty)
+            Button(L("Save device…")) { model.savePromptFor = device.connectionId }
+            Button(L("Copy ID")) { Pasteboard.copy(String(device.connectionId)) }
+        } else {
+            Button(L("Connect without confirmation (unattended access)")) {
+                workspace.connect(peer: device.connectionId, name: device.name, os: device.os, unattended: true, checkPhone: false)
+            }.disabled(!blocked.isEmpty)
+            Button(L("Connect and ask the person to accept")) {
+                workspace.connect(peer: device.connectionId, name: device.name, os: device.os, unattended: false, checkPhone: false)
+            }.disabled(!blocked.isEmpty)
+            Button(L("Connect in new window")) {
+                workspace.connect(peer: device.connectionId, name: device.name, os: device.os, unattended: true, checkPhone: false)
+                workspace.openAttemptInWindow()
+            }.disabled(!blocked.isEmpty)
+            Button(L("Send files…")) { workspace.sendFiles(to: device.connectionId, name: device.name, os: device.os) }
+                .disabled(workspace.tab(device.connectionId).map { $0.state != "ready" && $0.state != "starting" } ?? !blocked.isEmpty)
+            if presence == .offline, !model.knownMacs(device).isEmpty {
+                Button(L("Wake")) { model.wake(device) }
             }
-            if model.managesIsmDevices, ["macos", "windows", "linux"].contains(device.os) {
+            Button(L("Copy ID")) { Pasteboard.copy(String(device.connectionId)) }
+            if model.tenant != nil || model.adminAvailable {
+                Button(model.isFavorite(device) ? L("Remove from favorites") : L("Add to favorites")) { model.toggleFavorite(device) }
+            }
+            if (model.manages || model.canAdmin(device)), model.canAdmin(device) {
+                Divider()
+                Button(L("Rename…")) { rename(device) }.disabled(!model.writable)
+                if model.groupsOn { Button(L("Move to group…")) { move(device) }.disabled(!model.writable) }
+                if model.adminAvailable {
+                    Button(L("Notes…")) { notes(device) }.disabled(!model.writable)
+                    Toggle(isOn: Binding(get: { model.adminRow(device)?.unattendedOn ?? false }, set: { on in Task { _ = await model.setUnattended(device, on: on) } })) {
+                        Text(verbatim: L("Unattended access"))
+                    }.disabled(!model.writable)
+                    if model.deploys { Button(L("Who may connect…")) { who(device) } }
+                }
+                if model.managesIsmDevices, ["macos", "windows", "linux"].contains(device.os) {
+                    Button(L("Edit device")) { edit(device) }
+                }
+                Divider()
+                Button(L("Remove…"), role: .destructive) { remove(device) }
+            } else if model.managesIsmDevices, ["macos", "windows", "linux"].contains(device.os) {
+                Divider()
                 Button(L("Edit device")) { edit(device) }
+                Button(L("Remove…"), role: .destructive) { remove(device) }
             }
-            Divider()
-            Button(L("Remove…"), role: .destructive) { remove(device) }
-        } else if model.managesIsmDevices, ["macos", "windows", "linux"].contains(device.os) {
-            Divider()
-            Button(L("Edit device")) { edit(device) }
-            Button(L("Remove…"), role: .destructive) { remove(device) }
         }
     }
 }
@@ -971,7 +986,9 @@ struct SessionsPage: View {
                                 }
                                 Button(L("Connect")) {
                                     freezeRecentBriefly(seconds: 4)
-                                    workspace.connect(peer: connId, name: known?.name, os: known?.os ?? "", unattended: known != nil, checkPhone: known == nil)
+                                    let unattended = known.map { app.devices.prefersUnattended($0) } ?? false
+                                    let checkPhone = known.map { app.devices.shouldCheckPhone($0) } ?? true
+                                    workspace.connect(peer: connId, name: known?.name, os: known?.os ?? "", unattended: unattended, checkPhone: checkPhone)
                                 }
                                 .buttonStyle(PrimaryButtonStyle())
                             }

@@ -98,5 +98,79 @@ final class Audit226RegressionTests: XCTestCase {
             )
         }
     }
+
+    /// Attempting to connect to a 9-digit ID must keep that ID in Recent (and UserDefaults)
+    /// even when the connection fails, and expose it as a clickable ad-hoc entry in Views → Recent.
+    func testFailedConnectAttemptPersistsIdInRecent() async {
+        let key = DevicesModel.recentConnectionsKey
+        let previous = UserDefaults.standard.object(forKey: key)
+        UserDefaults.standard.removeObject(forKey: key)
+        defer {
+            if let previous { UserDefaults.standard.set(previous, forKey: key) }
+            else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+
+        let engine = MockEngine()
+        Fixtures.company(engine)
+        engine.reply("remote_status", RemoteStatus(phase: "ready", host: 111_222_333))
+        engine.fail("remote_request", "Device is unreachable")
+
+        let app = await Fixtures.app(engine)
+        defer { app.stop() }
+
+        let targetId: UInt32 = 218_749_839
+        app.connect(to: targetId, unattended: false, checkPhone: false)
+
+        // Immediately recorded before the async connection settles.
+        XCTAssertEqual(app.devices.recentConnectionIds.first, targetId)
+
+        // Wait for the failing connect attempt to finish.
+        for _ in 0..<40 where app.busy {
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        XCTAssertFalse(app.error.isEmpty, "Precondition: connect attempt should have failed")
+
+        // ID remains in Recent and persisted in UserDefaults.
+        XCTAssertEqual(app.devices.recentConnectionIds.first, targetId)
+        let stored = (UserDefaults.standard.array(forKey: key) as? [NSNumber] ?? []).map(\.uint32Value)
+        XCTAssertEqual(stored.first, targetId)
+
+        // Unregistered ID appears in Views → Recent and is NOT blocked from retrying.
+        app.devices.listView = .recent
+        let recentEntries = app.devices.devices(in: .recent)
+        guard let adHoc = recentEntries.first(where: { $0.connectionId == targetId }) else {
+            return XCTFail("Expected attempted ID \(targetId) to appear in DevicesModel.devices(in: .recent)")
+        }
+        XCTAssertTrue(adHoc.isAdHocRecent)
+        XCTAssertEqual(adHoc.name, "218 749 839")
+        XCTAssertEqual(app.devices.connectBlocked(adHoc), "")
+
+        // Newest-first order is preserved in rowGroups for .recent.
+        let secondId: UInt32 = 445_882_109
+        app.devices.recordConnection(secondId)
+        let orderedIds = app.devices.rowGroups.flatMap(\.devices).map(\.connectionId)
+        XCTAssertEqual(Array(orderedIds.prefix(2)), [secondId, targetId])
+    }
+
+    /// Saved phones (ios/android/other/unknown OS) must never default to unattended access and
+    /// must run Quick Support phone claim so connecting to an iPhone does not fail with
+    /// "did not accept an unattended connection".
+    func testSavedPhoneUsesAttendedModeAndPhoneClaim() async {
+        let engine = MockEngine()
+        Fixtures.company(engine)
+        let app = await Fixtures.app(engine)
+        defer { app.stop() }
+
+        let iphone = Device(device: "dev-iphone-1", connectionId: 648_493_658, name: "iPhone", os: "ios")
+        let unknownOs = Device(device: "dev-unknown-1", connectionId: 648_493_659, name: "iPhone", os: "")
+        let mac = Device(device: "dev-mac-1", connectionId: 648_493_660, name: "Office Mac", os: "macos")
+
+        XCTAssertFalse(app.devices.prefersUnattended(iphone))
+        XCTAssertTrue(app.devices.shouldCheckPhone(iphone))
+        XCTAssertFalse(app.devices.prefersUnattended(unknownOs))
+        XCTAssertTrue(app.devices.shouldCheckPhone(unknownOs))
+        XCTAssertTrue(app.devices.prefersUnattended(mac))
+        XCTAssertFalse(app.devices.shouldCheckPhone(mac))
+    }
 }
 #endif

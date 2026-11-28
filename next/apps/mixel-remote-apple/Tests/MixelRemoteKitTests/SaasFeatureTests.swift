@@ -61,6 +61,13 @@ final class SaasFeatureTests: XCTestCase {
     }
 
     func testFavoritesAndRecentDevicesComeFirstAndToggle() async throws {
+        let key = DevicesModel.recentConnectionsKey
+        let previousRecent = UserDefaults.standard.object(forKey: key)
+        UserDefaults.standard.removeObject(forKey: key)
+        defer {
+            if let previousRecent { UserDefaults.standard.set(previousRecent, forKey: key) }
+            else { UserDefaults.standard.removeObject(forKey: key) }
+        }
         let engine = MockEngine()
         Fixtures.company(engine)
         engine.reply("saas_favorites", json: #"[{"device_id":"d1000000-0000-4000-8000-000000000003","created_at":"2026-11-13T08:00:00Z"}]"#)
