@@ -168,10 +168,71 @@ struct Claims {
     role: String,
     exp: u64,
     aal: Option<String>,
+    #[serde(default)]
+    app_metadata: Option<AppMetadata>,
+    #[serde(default)]
+    amr: Vec<AmrEntry>,
+}
+#[derive(Deserialize, Default)]
+struct AppMetadata {
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    providers: Vec<String>,
+}
+#[derive(Deserialize)]
+struct AmrEntry {
+    #[serde(default)]
+    method: Option<String>,
 }
 #[derive(Deserialize)]
 struct User {
     id: Uuid,
+    #[serde(default)]
+    identities: Vec<UserIdentity>,
+}
+#[derive(Deserialize)]
+struct UserIdentity {
+    #[serde(default)]
+    provider: String,
+    #[serde(default)]
+    identity_data: Option<IdentityData>,
+}
+#[derive(Deserialize)]
+struct IdentityData {
+    #[serde(default)]
+    iss: Option<String>,
+    #[serde(default)]
+    email_verified: Option<bool>,
+}
+
+fn authentik_mfa_verified(claims: &Claims, user: &User) -> bool {
+    if claims.aal.as_deref() == Some("aal2") {
+        return true;
+    }
+    let has_keycloak_provider = claims.app_metadata.as_ref().is_some_and(|meta| {
+        meta.provider.as_deref() == Some("keycloak")
+            || meta.providers.iter().any(|p| p == "keycloak")
+    });
+    let has_oauth_amr = claims
+        .amr
+        .iter()
+        .any(|entry| entry.method.as_deref() == Some("oauth"));
+    if !has_keycloak_provider || !has_oauth_amr {
+        return false;
+    }
+    user.identities.iter().any(|identity| {
+        identity.provider == "keycloak"
+            && identity.identity_data.as_ref().is_some_and(|data| {
+                matches!(
+                    data.iss.as_deref(),
+                    Some(
+                        "https://auth.mixel.ch/application/o/mixel-ism-user"
+                            | "https://auth.mixel.ch/application/o/mixel-ism-user/"
+                    )
+                ) && data.email_verified == Some(true)
+            })
+    })
 }
 #[derive(Deserialize)]
 struct Profile {
@@ -967,6 +1028,33 @@ impl IsmAuth {
         }
         Ok(row.device_id)
     }
+    /// Resolve the organization UUID of an enrolled company device (used to save
+    /// the always-on startup-host binding when a staff member registers a device).
+    pub async fn device_organization(&self, token: &str, device: Uuid) -> Result<Uuid, AuthError> {
+        #[derive(Deserialize)]
+        struct DeviceOrgRow {
+            clients: Option<ClientOrgRow>,
+        }
+        #[derive(Deserialize)]
+        struct ClientOrgRow {
+            organization_id: Option<Uuid>,
+        }
+        let rows: Vec<DeviceOrgRow> = self
+            .get(
+                &format!("/rest/v1/devices?id=eq.{device}&select=clients(organization_id)&limit=2"),
+                token,
+            )
+            .await?;
+        let [row] = rows.as_slice() else {
+            return Err(AuthError);
+        };
+        row.clients
+            .as_ref()
+            .and_then(|client| client.organization_id)
+            .filter(|org| !org.is_nil())
+            .ok_or(AuthError)
+    }
+
     /// Resolve the peer's enrolled identity independently of signaling-supplied
     /// Hello messages. The verified caller's bearer remains subject to RLS.
     pub async fn peer_key(
@@ -1228,7 +1316,7 @@ impl IsmAuth {
         if profile.organization_id.is_none() && !staff {
             return Err(AuthError);
         }
-        if staff && claims.aal.as_deref() != Some("aal2") {
+        if staff && !authentik_mfa_verified(&claims, &user) {
             return Err(AuthError);
         }
         if let Some(tenant) = profile.organization_id {
@@ -1449,6 +1537,69 @@ mod tests {
         let paths = paths.lock().unwrap().clone();
         (result, paths)
     }
+    #[test]
+    fn authentik_oidc_staff_login_is_accepted_as_mfa_verified() {
+        let verified_user = User {
+            id: Uuid::parse_str(AUTH).unwrap(),
+            identities: vec![UserIdentity {
+                provider: "keycloak".into(),
+                identity_data: Some(IdentityData {
+                    iss: Some("https://auth.mixel.ch/application/o/mixel-ism-user".into()),
+                    email_verified: Some(true),
+                }),
+            }],
+        };
+        let oidc_claims = Claims {
+            sub: Uuid::parse_str(AUTH).unwrap(),
+            role: "authenticated".into(),
+            exp: u64::MAX,
+            aal: Some("aal1".into()),
+            app_metadata: Some(AppMetadata {
+                provider: Some("keycloak".into()),
+                providers: vec!["keycloak".into()],
+            }),
+            amr: vec![AmrEntry {
+                method: Some("oauth".into()),
+            }],
+        };
+        assert!(authentik_mfa_verified(&oidc_claims, &verified_user));
+
+        // Without oauth AMR, aal1 must still be rejected.
+        let password_claims = Claims {
+            amr: vec![AmrEntry {
+                method: Some("password".into()),
+            }],
+            ..oidc_claims
+        };
+        assert!(!authentik_mfa_verified(&password_claims, &verified_user));
+
+        // With wrong issuer, aal1 must be rejected.
+        let wrong_iss_user = User {
+            id: Uuid::parse_str(AUTH).unwrap(),
+            identities: vec![UserIdentity {
+                provider: "keycloak".into(),
+                identity_data: Some(IdentityData {
+                    iss: Some("https://evil.example/application/o/mixel-ism-user".into()),
+                    email_verified: Some(true),
+                }),
+            }],
+        };
+        let oidc_claims_again = Claims {
+            sub: Uuid::parse_str(AUTH).unwrap(),
+            role: "authenticated".into(),
+            exp: u64::MAX,
+            aal: Some("aal1".into()),
+            app_metadata: Some(AppMetadata {
+                provider: Some("keycloak".into()),
+                providers: vec!["keycloak".into()],
+            }),
+            amr: vec![AmrEntry {
+                method: Some("oauth".into()),
+            }],
+        };
+        assert!(!authentik_mfa_verified(&oidc_claims_again, &wrong_iss_user));
+    }
+
     #[tokio::test]
     async fn ism_adapter_uses_verified_subject_active_profile_and_active_organization() {
         let (result, paths) = fixture("valid", "aal1").await;

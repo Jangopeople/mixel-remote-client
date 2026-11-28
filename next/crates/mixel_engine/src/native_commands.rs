@@ -160,7 +160,16 @@ pub async fn dispatch(context: &Context, command: &str, raw: &str) -> Result<Str
         // ---- Account ----
         "account_status" => {
             auth.restore().await;
-            out(auth.status().await)
+            let status = auth.status().await;
+            #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+            if status.phase == "signed_out" && !context.pending_removal().exists() {
+                let remote = remote.clone();
+                let identity = context.identity.clone();
+                tokio::spawn(async move {
+                    let _ = remote.try_connect_saved_startup(identity).await;
+                });
+            }
+            out(status)
         }
         "startup_settings" => {
             #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
