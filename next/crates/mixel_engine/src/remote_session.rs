@@ -409,11 +409,35 @@ impl RegistrationAuth {
                     "This computer is not registered for the current account"
                 }
             })?;
-        credential
+        let enrolled = credential
             .ism
             .authenticate_device(&credential.token, device)
             .await
-            .map_err(|_| "This device is not enrolled for the current account".into())
+            .map_err(|_| "This device is not enrolled for the current account".to_string())?;
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+        if !enrolled.principal.is_personal() && !crate::service_config::controller_only() {
+            let tenant = match enrolled.principal.tenant {
+                Some(tenant) => Some(tenant),
+                None => credential
+                    .ism
+                    .device_organization(&credential.token, enrolled.device)
+                    .await
+                    .ok(),
+            };
+            if let Some(tenant) = tenant {
+                startup_binding::save(&startup_binding::StartupBinding {
+                    version: 1,
+                    device: enrolled.device,
+                    profile: enrolled.principal.user,
+                    tenant,
+                    connection_id: enrolled.connection_id,
+                    generation: enrolled.generation,
+                    share_main_display: true,
+                    control: true,
+                });
+            }
+        }
+        Ok(enrolled)
     }
 }
 
@@ -746,6 +770,9 @@ struct Inner {
     /// access for it, so asking would end the registration (2.2.13 HP: "refused unattended
     /// startup sharing" in a loop, no Connection ID).
     quick_support: bool,
+    /// The registration is the signed-out unattended host fallback (no interactive account).
+    /// An interactive sign-in replaces it cleanly so the user can also connect out.
+    startup_host: bool,
     /// Technician sessions (up to four at once), each with its own state.
     slots: crate::remote_sessions::Registry,
 }
@@ -754,7 +781,7 @@ impl Inner {
     /// disconnected). The headless hosts (always-on, sign-in screen) register once and keep the
     /// refusal, so a second host process is still reported.
     fn already_online(&self, interactive: bool) -> bool {
-        interactive && self.commands.is_some() && !self.stopping
+        interactive && !self.startup_host && self.commands.is_some() && !self.stopping
     }
 }
 /// Lab builds only: transport renewals of this process (the session keeps its ID through them).
@@ -789,6 +816,7 @@ impl Default for RemoteSession {
                 renew_after: None,
                 stopping: false,
                 quick_support: false,
+                startup_host: false,
                 slots: Default::default(),
             })),
             Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -1140,8 +1168,78 @@ impl RemoteSession {
         status
     }
     pub async fn connect(&self, auth: AccountAuth, identity: Arc<IdentityState>) -> Result<(), String> {
+        let upgrading_from_startup = {
+            let inner = self.0.lock().await;
+            inner.startup_host && inner.commands.is_some() && !inner.stopping
+        };
+        if upgrading_from_startup {
+            let _ = self.stop().await;
+        }
         self.connect_registration(RegistrationAuth::Interactive(auth), identity)
             .await
+    }
+
+    /// Keep an enrolled company computer online as an unattended host even when no user
+    /// account is signed in (or after the user's session expires).
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    pub async fn try_connect_saved_startup(&self, identity: Arc<IdentityState>) -> bool {
+        if crate::service_config::controller_only() || unattended_choice::turned_off() {
+            return false;
+        }
+        {
+            let inner = self.0.lock().await;
+            if inner.commands.is_some() || inner.stopping {
+                return false;
+            }
+        }
+        let Some(binding) = startup_binding::load() else {
+            return false;
+        };
+        let saved = identity.clone();
+        let opened = tokio::task::spawn_blocking(move || {
+            saved.open(false)?;
+            saved.public_key()
+        })
+        .await;
+        let Ok(Ok(public_key)) = opened else {
+            return false;
+        };
+        #[cfg(target_os = "macos")]
+        let display = {
+            let display = native_os_capture::macos::main_display();
+            if display == 0 {
+                return false;
+            }
+            display
+        };
+        #[cfg(not(target_os = "macos"))]
+        let display: u32 = 0;
+        let enrolled = EnrolledPrincipal {
+            principal: Principal {
+                user: binding.profile,
+                tenant: Some(binding.tenant),
+                staff: false,
+                expires_at: 0,
+            },
+            device: binding.device,
+            connection_id: binding.connection_id,
+            generation: binding.generation,
+            public_key,
+            identity_ticket: None,
+        };
+        match self
+            .connect_startup(enrolled, display, binding.control, identity)
+            .await
+        {
+            Ok(()) => {
+                crate::app_log::info(
+                    "signaling",
+                    "signed-out computer stayed online via unattended host fallback",
+                );
+                true
+            }
+            Err(_) => false,
+        }
     }
 
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -1329,7 +1427,12 @@ impl RemoteSession {
         } else {
             None
         };
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+        let is_startup = matches!(&auth, RegistrationAuth::Startup { .. });
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        let is_startup = false;
         inner.quick_support = quick_host_id.is_some();
+        inner.startup_host = is_startup;
         inner.status = Status {
             phase: if quick_host_id.is_some() { "ready" } else { "connecting" }.into(),
             message: if quick_host_id.is_some() {
@@ -5928,6 +6031,140 @@ mod unattended_choice {
             super::remember_in(&folder, false);
             assert!(!super::turned_off_in(&folder), "on again");
             let _ = std::fs::remove_dir_all(&folder);
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+mod startup_binding {
+    use serde::{Deserialize, Serialize};
+    use std::path::{Path, PathBuf};
+    use uuid::Uuid;
+
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    pub(super) struct StartupBinding {
+        pub version: u16,
+        pub device: Uuid,
+        pub profile: Uuid,
+        pub tenant: Uuid,
+        pub connection_id: u32,
+        pub generation: u64,
+        pub share_main_display: bool,
+        pub control: bool,
+    }
+
+    impl StartupBinding {
+        fn valid(&self) -> bool {
+            self.version == 1
+                && !self.device.is_nil()
+                && !self.profile.is_nil()
+                && !self.tenant.is_nil()
+                && (100_000_000..=999_999_999).contains(&self.connection_id)
+                && (1..=i64::MAX as u64).contains(&self.generation)
+                && self.share_main_display
+        }
+    }
+
+    fn path_in(folder: &Path) -> PathBuf {
+        folder.join("startup-host-binding.json")
+    }
+
+    pub(super) fn save(binding: &StartupBinding) {
+        if !binding.valid() {
+            return;
+        }
+        let Some(folder) = super::unattended_choice::folder() else {
+            return;
+        };
+        save_in(&folder, binding);
+    }
+
+    pub(super) fn save_in(folder: &Path, binding: &StartupBinding) {
+        if !binding.valid() {
+            return;
+        }
+        let Ok(bytes) = serde_json::to_vec(binding) else {
+            return;
+        };
+        let _ = std::fs::create_dir_all(folder);
+        let target = path_in(folder);
+        let temp = folder.join("startup-host-binding.json.new");
+        let _ = std::fs::remove_file(&temp);
+        #[cfg(unix)]
+        {
+            use std::{io::Write, os::unix::fs::OpenOptionsExt};
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&temp)
+                && file.write_all(&bytes).is_ok()
+                && file.sync_all().is_ok()
+            {
+                let _ = std::fs::rename(&temp, &target);
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            if std::fs::write(&temp, &bytes).is_ok() {
+                let _ = std::fs::rename(&temp, &target);
+            }
+        }
+    }
+
+    pub(super) fn load() -> Option<StartupBinding> {
+        let folder = super::unattended_choice::folder()?;
+        if let Some(binding) = load_from(&path_in(&folder)) {
+            return Some(binding);
+        }
+        #[cfg(all(not(test), target_os = "macos"))]
+        if let Some(bundle) = native_os_capture::macos_bundle::identifier()
+            && let Some(home) = std::env::var_os("HOME")
+        {
+            let rollout_path = crate::macos_rollout::settings_path(Path::new(&home), &bundle);
+            if let Some(binding) = load_from(&rollout_path) {
+                return Some(binding);
+            }
+        }
+        None
+    }
+
+    pub(super) fn load_from(path: &Path) -> Option<StartupBinding> {
+        let bytes = std::fs::read(path).ok()?;
+        if bytes.len() > 2048 {
+            return None;
+        }
+        let binding: StartupBinding = serde_json::from_slice(&bytes).ok()?;
+        binding.valid().then_some(binding)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn startup_binding_saves_and_loads_valid_records_only() {
+            let dir = tempfile::tempdir().unwrap();
+            let binding = StartupBinding {
+                version: 1,
+                device: Uuid::from_u128(1),
+                profile: Uuid::from_u128(2),
+                tenant: Uuid::from_u128(3),
+                connection_id: 927701737,
+                generation: 1,
+                share_main_display: true,
+                control: true,
+            };
+            save_in(dir.path(), &binding);
+            assert_eq!(load_from(&path_in(dir.path())), Some(binding.clone()));
+
+            let invalid = StartupBinding {
+                connection_id: 42,
+                ..binding
+            };
+            let dir2 = tempfile::tempdir().unwrap();
+            save_in(dir2.path(), &invalid);
+            assert_eq!(load_from(&path_in(dir2.path())), None);
         }
     }
 }
