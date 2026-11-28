@@ -526,6 +526,7 @@ public sealed class AppModel : Observable
             Progress = L("Please wait a moment, the previous step is still running.");
             return Task.CompletedTask;
         }
+        Devices.RecordConnection(id);
         Busy = true;
         Error = "";
         LastAction = Run();

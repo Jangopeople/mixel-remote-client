@@ -317,8 +317,12 @@ public final class DevicesModel: ObservableObject {
             var seen = Set<UInt32>()
             var result: [Device] = []
             for connId in recentConnectionIds {
-                if let match = all.first(where: { $0.connectionId == connId }), seen.insert(match.connectionId).inserted {
-                    result.append(match)
+                if seen.insert(connId).inserted {
+                    if let match = all.first(where: { $0.connectionId == connId }) {
+                        result.append(match)
+                    } else {
+                        result.append(Device.adHocRecent(connectionId: connId))
+                    }
                 }
             }
             for devId in recent {
@@ -368,8 +372,13 @@ public final class DevicesModel: ObservableObject {
     }
 
     /// The table: grouped by group (no group last), each sorted by status, then name.
+    /// In the Recent view, keep newest-first recency order so just-attempted IDs stay at the top.
     public var rowGroups: [RowGroup] {
         let rows = filtered
+        if listView == .recent {
+            guard !rows.isEmpty else { return [] }
+            return [RowGroup(id: "recent", name: L("Recent"), devices: rows, online: rows.filter(isOnline).count)]
+        }
         let byGroup = Dictionary(grouping: rows) { $0.groupName ?? adminRow($0)?.groupName ?? "" }
         let names = byGroup.keys.sorted { a, b in
             if a.isEmpty != b.isEmpty { return !a.isEmpty }
@@ -592,16 +601,35 @@ public final class DevicesModel: ObservableObject {
             // An older engine runs one session; a 2.1 engine several (it refuses a request over the limit itself).
             return L("End the current session first.")
         }
-        if presence(of: device) == .offline { return L("This device is offline.") }
+        if !device.isAdHocRecent, !shouldCheckPhone(device), presence(of: device) == .offline { return L("This device is offline.") }
         if app.busy { return L("Please wait…") }
         if !app.signedIn { return L("Sign in first.") }
         return ""
     }
 
+    /// Whether clicking Connect on `device` should request unattended access.
+    /// Phones/tablets, ad-hoc recent IDs, devices with unknown OS, or devices with unattended
+    /// access turned off must ask the person to accept instead of failing with unattended-denied.
+    public func prefersUnattended(_ device: Device) -> Bool {
+        if device.isAdHocRecent { return false }
+        let os = device.os.lowercased()
+        guard os == "macos" || os == "windows" || os == "linux" else { return false }
+        if let admin = adminRow(device), admin.unattendedOn == false { return false }
+        return true
+    }
+
+    /// Whether connecting to `device` should run Quick Support phone claim first.
+    public func shouldCheckPhone(_ device: Device) -> Bool {
+        if device.isAdHocRecent { return true }
+        let os = device.os.lowercased()
+        return os != "macos" && os != "windows" && os != "linux"
+    }
+
     public func connect(_ device: Device, unattended: Bool = false) {
         guard connectBlocked(device).isEmpty else { return }
         message = L("Connecting to %@…", device.name)
-        app.connect(to: device.connectionId, unattended: unattended, checkPhone: false)
+        let useUnattended = prefersUnattended(device) ? unattended : false
+        app.connect(to: device.connectionId, unattended: useUnattended, checkPhone: shouldCheckPhone(device))
     }
 
     // MARK: Manage (company devices)

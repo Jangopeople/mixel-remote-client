@@ -598,6 +598,13 @@ public struct Device: Codable, Equatable, Sendable, Identifiable, Hashable {
     public var groupName: String?
     public var generation: UInt64?
     public var id: String { device }
+    public static let adHocRecentPrefix = "recent:"
+    /// True when this row represents a 9-digit Connection ID remembered from a connect attempt that
+    /// is not yet saved in the account's device directory.
+    public var isAdHocRecent: Bool { device.hasPrefix(Self.adHocRecentPrefix) }
+    public static func adHocRecent(connectionId: UInt32) -> Device {
+        Device(device: "\(adHocRecentPrefix)\(connectionId)", connectionId: connectionId, name: Format.remoteId(connectionId), os: "")
+    }
     public init(device: String, connectionId: UInt32, name: String, os: String, groupId: String? = nil, groupName: String? = nil, generation: UInt64? = nil) {
         self.device = device
         self.connectionId = connectionId

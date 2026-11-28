@@ -834,6 +834,7 @@ impl App {
             self.edit(|state| state.progress = t("Please wait a moment, the previous step is still running."));
             return;
         }
+        self.remember_connection(id);
         self.edit(|state| {
             state.busy = true;
             state.error.clear();
